@@ -166,7 +166,6 @@ RegMeta::ResolveTypeRef(
     TypeRefRec * pTypeRefRec;
     WCHAR        wzNameSpace[_MAX_PATH];
     CMiniMdRW *  pMiniMd = NULL;
-    WCHAR rcModule[_MAX_PATH];
 
     LOG((LOGMD, "{%08x} RegMeta::ResolveTypeRef(0x%08x, 0x%08x, 0x%08x, 0x%08x)\n", 
         this, tr, riid, ppIScope, ptd));
@@ -253,10 +252,6 @@ ErrExit:
 // Thus Release() is in a satellite lib.
 ULONG RegMeta::Release()
 {
-    // This is called during cleanup.  We can not fail this call by probing.
-    // As long as we make sure the cleanup does not use too much space through 
-    // BEGIN_CLEANUP_ENTRYPOINT, we are OK.
-    CONTRACT_VIOLATION (SOToleranceViolation);
     BEGIN_CLEANUP_ENTRYPOINT;
 
 #if defined(FEATURE_METADATA_IN_VM)

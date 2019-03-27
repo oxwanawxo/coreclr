@@ -5,7 +5,7 @@
 /*XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 XX                                                                           XX
-XX                           Lowering for AMD64                              XX
+XX                           Lowering for AMD64, x86                         XX
 XX                                                                           XX
 XX  This encapsulates all the logic for lowering trees for the AMD64         XX
 XX  architecture.  For a more detailed view of what is lowering, please      XX
@@ -21,9 +21,7 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 #pragma hdrstop
 #endif
 
-#ifndef LEGACY_BACKEND // This file is ONLY used for the RyuJIT backend that uses the linear scan register allocator
-
-#ifdef _TARGET_XARCH_
+#ifdef _TARGET_XARCH_ // This file is only used for xarch
 
 #include "jit.h"
 #include "sideeffects.h"
@@ -95,6 +93,11 @@ void Lowering::LowerStoreLoc(GenTreeLclVarCommon* storeLoc)
                 con->SetIconValue(ival);
             }
         }
+    }
+    if (storeLoc->OperIs(GT_STORE_LCL_FLD))
+    {
+        // We should only encounter this for lclVars that are lvDoNotEnregister.
+        verifyLclFldDoNotEnregister(storeLoc->gtLclNum);
     }
     ContainCheckStoreLoc(storeLoc);
 }
@@ -388,7 +391,7 @@ void Lowering::LowerBlockStore(GenTreeBlk* blkNode)
                 addr->ClearContained();
             }
         }
-        else if (!source->IsMultiRegCall() && !source->OperIsSIMD() && !source->OperIsSimdHWIntrinsic())
+        else if (!source->IsMultiRegCall() && !source->OperIsSimdOrHWintrinsic())
         {
             assert(source->IsLocal());
             MakeSrcContained(blkNode, source);
@@ -777,6 +780,49 @@ void Lowering::LowerSIMD(GenTreeSIMD* simdNode)
         simdNode->gtType = TYP_SIMD16;
     }
 
+    if (simdNode->gtSIMDIntrinsicID == SIMDIntrinsicInitN)
+    {
+        assert(simdNode->gtSIMDBaseType == TYP_FLOAT);
+
+        int   argCount      = 0;
+        int   constArgCount = 0;
+        float constArgValues[4]{0, 0, 0, 0};
+
+        for (GenTreeArgList* list = simdNode->gtGetOp1()->AsArgList(); list != nullptr; list = list->Rest())
+        {
+            GenTree* arg = list->Current();
+
+            assert(arg->TypeGet() == simdNode->gtSIMDBaseType);
+            assert(argCount < _countof(constArgValues));
+
+            if (arg->IsCnsFltOrDbl())
+            {
+                constArgValues[constArgCount] = static_cast<float>(arg->AsDblCon()->gtDconVal);
+                constArgCount++;
+            }
+
+            argCount++;
+        }
+
+        if (constArgCount == argCount)
+        {
+            for (GenTreeArgList* list = simdNode->gtGetOp1()->AsArgList(); list != nullptr; list = list->Rest())
+            {
+                BlockRange().Remove(list->Current());
+            }
+
+            CORINFO_FIELD_HANDLE hnd =
+                comp->getEmitter()->emitAnyConst(constArgValues, sizeof(constArgValues), emitDataAlignment::Required);
+            GenTree* clsVarAddr = new (comp, GT_CLS_VAR_ADDR) GenTreeClsVar(GT_CLS_VAR_ADDR, TYP_I_IMPL, hnd, nullptr);
+            BlockRange().InsertBefore(simdNode, clsVarAddr);
+            simdNode->ChangeOper(GT_IND);
+            simdNode->gtOp1 = clsVarAddr;
+            ContainCheckIndir(simdNode->AsIndir());
+
+            return;
+        }
+    }
+
 #ifdef _TARGET_XARCH_
     if ((simdNode->gtSIMDIntrinsicID == SIMDIntrinsicGetItem) && (simdNode->gtGetOp1()->OperGet() == GT_IND))
     {
@@ -833,7 +879,7 @@ void Lowering::LowerSIMD(GenTreeSIMD* simdNode)
                         jtrue->ChangeOper(GT_JCC);
                         GenTreeCC* jcc = jtrue->AsCC();
                         jcc->gtFlags |= GTF_USE_FLAGS;
-                        jcc->gtCondition = (relopOp2Value == 0) ? GT_NE : GT_EQ;
+                        jcc->gtCondition = (relopOp2Value == 0) ? GenCondition::NE : GenCondition::EQ;
 
                         BlockRange().Remove(simdUser->gtGetOp2());
                         BlockRange().Remove(simdUser);
@@ -851,8 +897,9 @@ void Lowering::LowerSIMD(GenTreeSIMD* simdNode)
                 // to have to handle 2 cases (set flags/set destination register).
                 //
 
-                genTreeOps condition = (simdNode->gtSIMDIntrinsicID == SIMDIntrinsicOpEquality) ? GT_EQ : GT_NE;
-                GenTreeCC* setcc     = new (comp, GT_SETCC) GenTreeCC(GT_SETCC, condition, simdNode->TypeGet());
+                GenCondition condition =
+                    (simdNode->gtSIMDIntrinsicID == SIMDIntrinsicOpEquality) ? GenCondition::EQ : GenCondition::NE;
+                GenTreeCC* setcc = new (comp, GT_SETCC) GenTreeCC(GT_SETCC, condition, simdNode->TypeGet());
                 setcc->gtFlags |= GTF_USE_FLAGS;
                 BlockRange().InsertAfter(simdNode, setcc);
                 simdUse.ReplaceWith(comp, setcc);
@@ -1335,7 +1382,7 @@ GenTree* Lowering::PreferredRegOptionalOperand(GenTree* tree)
             // weight as reg optional.
             // If either is not tracked, it may be that it was introduced after liveness
             // was run, in which case we will always prefer op1 (should we use raw refcnt??).
-            if (v1->lvTracked && v2->lvTracked && (v1->lvRefCntWtd >= v2->lvRefCntWtd))
+            if (v1->lvTracked && v2->lvTracked && (v1->lvRefCntWtd() >= v2->lvRefCntWtd()))
             {
                 preferredOp = op2;
             }
@@ -1547,31 +1594,19 @@ void Lowering::ContainCheckMul(GenTreeOp* node)
 #else
     assert(node->OperIs(GT_MUL, GT_MULHI));
 #endif
-    GenTree* op1 = node->gtOp.gtOp1;
-    GenTree* op2 = node->gtOp.gtOp2;
 
     // Case of float/double mul.
     if (varTypeIsFloating(node->TypeGet()))
     {
-        assert(node->OperGet() == GT_MUL);
-
-        if (IsContainableMemoryOp(op2) || op2->IsCnsNonZeroFltOrDbl())
-        {
-            MakeSrcContained(node, op2);
-        }
-        else if (op1->IsCnsNonZeroFltOrDbl() || (IsContainableMemoryOp(op1) && IsSafeToContainMem(node, op1)))
-        {
-            // Since  GT_MUL is commutative, we will try to re-order operands if it is safe to
-            // generate more efficient code sequence for the case of GT_MUL(op1=memOp, op2=non-memOp)
-            MakeSrcContained(node, op1);
-        }
-        else
-        {
-            // If there are no containable operands, we can make an operand reg optional.
-            SetRegOptionalForBinOp(node);
-        }
+        ContainCheckFloatBinary(node);
         return;
     }
+
+    GenTree* op1 = node->gtOp.gtOp1;
+    GenTree* op2 = node->gtOp.gtOp2;
+
+    bool isSafeToContainOp1 = true;
+    bool isSafeToContainOp2 = true;
 
     bool     isUnsignedMultiply    = ((node->gtFlags & GTF_UNSIGNED) != 0);
     bool     requiresOverflowCheck = node->gtOverflowEx();
@@ -1636,19 +1671,40 @@ void Lowering::ContainCheckMul(GenTreeOp* node)
     //
     if (memOp == nullptr)
     {
-        if (IsContainableMemoryOp(op2) && (op2->TypeGet() == node->TypeGet()) && IsSafeToContainMem(node, op2))
+        if ((op2->TypeGet() == node->TypeGet()) && IsContainableMemoryOp(op2))
         {
-            memOp = op2;
+            isSafeToContainOp2 = IsSafeToContainMem(node, op2);
+            if (isSafeToContainOp2)
+            {
+                memOp = op2;
+            }
         }
-        else if (IsContainableMemoryOp(op1) && (op1->TypeGet() == node->TypeGet()) && IsSafeToContainMem(node, op1))
+
+        if ((memOp == nullptr) && (op1->TypeGet() == node->TypeGet()) && IsContainableMemoryOp(op1))
         {
-            memOp = op1;
+            isSafeToContainOp1 = IsSafeToContainMem(node, op1);
+            if (isSafeToContainOp1)
+            {
+                memOp = op1;
+            }
         }
     }
     else
     {
-        if ((memOp->TypeGet() != node->TypeGet()) || !IsSafeToContainMem(node, memOp))
+        if ((memOp->TypeGet() != node->TypeGet()))
         {
+            memOp = nullptr;
+        }
+        else if (!IsSafeToContainMem(node, memOp))
+        {
+            if (memOp == op1)
+            {
+                isSafeToContainOp1 = false;
+            }
+            else
+            {
+                isSafeToContainOp2 = false;
+            }
             memOp = nullptr;
         }
     }
@@ -1661,24 +1717,76 @@ void Lowering::ContainCheckMul(GenTreeOp* node)
         {
             MakeSrcContained(node, memOp);
         }
-        else if (imm != nullptr)
-        {
-            // Has a contained immediate operand.
-            // Only 'other' operand can be marked as reg optional.
-            assert(other != nullptr);
-            other->SetRegOptional();
-        }
-        else if (hasImpliedFirstOperand)
-        {
-            // Only op2 can be marke as reg optional.
-            op2->SetRegOptional();
-        }
         else
         {
-            // If there are no containable operands, we can make either of op1 or op2
-            // as reg optional.
-            SetRegOptionalForBinOp(node);
+            // IsSafeToContainMem is expensive so we call it at most once for each operand
+            // in this method. If we already called IsSafeToContainMem, it must have returned false;
+            // otherwise, memOp would be set to the corresponding operand (op1 or op2).
+            if (imm != nullptr)
+            {
+                // Has a contained immediate operand.
+                // Only 'other' operand can be marked as reg optional.
+                assert(other != nullptr);
+
+                isSafeToContainOp1 = ((other == op1) && isSafeToContainOp1 && IsSafeToContainMem(node, op1));
+                isSafeToContainOp2 = ((other == op2) && isSafeToContainOp2 && IsSafeToContainMem(node, op2));
+            }
+            else if (hasImpliedFirstOperand)
+            {
+                // Only op2 can be marked as reg optional.
+                isSafeToContainOp1 = false;
+                isSafeToContainOp2 = isSafeToContainOp2 && IsSafeToContainMem(node, op2);
+            }
+            else
+            {
+                // If there are no containable operands, we can make either of op1 or op2
+                // as reg optional.
+                isSafeToContainOp1 = isSafeToContainOp1 && IsSafeToContainMem(node, op1);
+                isSafeToContainOp2 = isSafeToContainOp2 && IsSafeToContainMem(node, op2);
+            }
+            SetRegOptionalForBinOp(node, isSafeToContainOp1, isSafeToContainOp2);
         }
+    }
+}
+
+//------------------------------------------------------------------------
+// ContainCheckDivOrMod: determine which operands of a div/mod should be contained.
+//
+// Arguments:
+//    node - pointer to the node
+//
+void Lowering::ContainCheckDivOrMod(GenTreeOp* node)
+{
+    assert(node->OperIs(GT_DIV, GT_MOD, GT_UDIV, GT_UMOD));
+
+    if (varTypeIsFloating(node->TypeGet()))
+    {
+        ContainCheckFloatBinary(node);
+        return;
+    }
+
+    GenTree* dividend = node->gtGetOp1();
+    GenTree* divisor  = node->gtGetOp2();
+
+    bool divisorCanBeRegOptional = true;
+#ifdef _TARGET_X86_
+    if (dividend->OperGet() == GT_LONG)
+    {
+        divisorCanBeRegOptional = false;
+        MakeSrcContained(node, dividend);
+    }
+#endif
+
+    // divisor can be an r/m, but the memory indirection must be of the same size as the divide
+    if (IsContainableMemoryOp(divisor) && (divisor->TypeGet() == node->TypeGet()))
+    {
+        MakeSrcContained(node, divisor);
+    }
+    else if (divisorCanBeRegOptional)
+    {
+        // If there are no containable operands, we can make an operand reg optional.
+        // Div instruction allows only divisor to be a memory op.
+        divisor->SetRegOptional();
     }
 }
 
@@ -1690,18 +1798,15 @@ void Lowering::ContainCheckMul(GenTreeOp* node)
 //
 void Lowering::ContainCheckShiftRotate(GenTreeOp* node)
 {
+    assert(node->OperIsShiftOrRotate());
 #ifdef _TARGET_X86_
     GenTree* source = node->gtOp1;
-    if (node->OperIs(GT_LSH_HI, GT_RSH_LO))
+    if (node->OperIsShiftLong())
     {
         assert(source->OperGet() == GT_LONG);
         MakeSrcContained(node, source);
     }
-    else
 #endif // !_TARGET_X86_
-    {
-        assert(node->OperIsShiftOrRotate());
-    }
 
     GenTree* shiftBy = node->gtOp2;
     if (IsContainableImmed(node, shiftBy) && (shiftBy->gtIntConCommon.IconValue() <= 255) &&
@@ -1831,19 +1936,8 @@ void Lowering::ContainCheckCompare(GenTreeOp* cmp)
         // The type of the operands has to be the same and no implicit conversions at this stage.
         assert(op1Type == op2Type);
 
-        bool reverseOps;
-        if ((cmp->gtFlags & GTF_RELOP_NAN_UN) != 0)
-        {
-            // Unordered comparison case
-            reverseOps = cmp->OperIs(GT_GT, GT_GE);
-        }
-        else
-        {
-            reverseOps = cmp->OperIs(GT_LT, GT_LE);
-        }
-
         GenTree* otherOp;
-        if (reverseOps)
+        if (GenCondition::FromFloatRelop(cmp).PreferSwap())
         {
             otherOp = op1;
         }
@@ -1853,18 +1947,27 @@ void Lowering::ContainCheckCompare(GenTreeOp* cmp)
         }
 
         assert(otherOp != nullptr);
+        bool isSafeToContainOtherOp = true;
         if (otherOp->IsCnsNonZeroFltOrDbl())
         {
             MakeSrcContained(cmp, otherOp);
         }
-        else if (IsContainableMemoryOp(otherOp) && ((otherOp == op2) || IsSafeToContainMem(cmp, otherOp)))
+        else if (IsContainableMemoryOp(otherOp))
         {
-            MakeSrcContained(cmp, otherOp);
+            isSafeToContainOtherOp = IsSafeToContainMem(cmp, otherOp);
+            if (isSafeToContainOtherOp)
+            {
+                MakeSrcContained(cmp, otherOp);
+            }
         }
-        else
+
+        if (!otherOp->isContained() && isSafeToContainOtherOp && IsSafeToContainMem(cmp, otherOp))
         {
             // SSE2 allows only otherOp to be a memory-op. Since otherOp is not
             // contained, we can mark it reg-optional.
+            // IsSafeToContainMem is expensive so we call it at most once for otherOp.
+            // If we already called IsSafeToContainMem, it must have returned false;
+            // otherwise, otherOp would be contained.
             otherOp->SetRegOptional();
         }
 
@@ -1895,24 +1998,44 @@ void Lowering::ContainCheckCompare(GenTreeOp* cmp)
         // Note that TEST does not have a r,rm encoding like CMP has but we can still
         // contain the second operand because the emitter maps both r,rm and rm,r to
         // the same instruction code. This avoids the need to special case TEST here.
+
+        bool isSafeToContainOp1 = true;
+        bool isSafeToContainOp2 = true;
+
         if (IsContainableMemoryOp(op2))
         {
-            MakeSrcContained(cmp, op2);
+            isSafeToContainOp2 = IsSafeToContainMem(cmp, op2);
+            if (isSafeToContainOp2)
+            {
+                MakeSrcContained(cmp, op2);
+            }
         }
-        else if (IsContainableMemoryOp(op1) && IsSafeToContainMem(cmp, op1))
+
+        if (!op2->isContained() && IsContainableMemoryOp(op1))
         {
-            MakeSrcContained(cmp, op1);
+            isSafeToContainOp1 = IsSafeToContainMem(cmp, op1);
+            if (isSafeToContainOp1)
+            {
+                MakeSrcContained(cmp, op1);
+            }
         }
-        else if (op1->IsCnsIntOrI())
-        {
-            op2->SetRegOptional();
-        }
-        else
+
+        if (!op1->isContained() && !op2->isContained())
         {
             // One of op1 or op2 could be marked as reg optional
             // to indicate that codegen can still generate code
             // if one of them is on stack.
-            PreferredRegOptionalOperand(cmp)->SetRegOptional();
+            GenTree* regOptionalCandidate = op1->IsCnsIntOrI() ? op2 : PreferredRegOptionalOperand(cmp);
+
+            // IsSafeToContainMem is expensive so we call it at most once for each operand
+            // in this method. If we already called IsSafeToContainMem, it must have returned false;
+            // otherwise, the corresponding operand (op1 or op2) would be contained.
+            bool setRegOptional = (regOptionalCandidate == op1) ? isSafeToContainOp1 && IsSafeToContainMem(cmp, op1)
+                                                                : isSafeToContainOp2 && IsSafeToContainMem(cmp, op2);
+            if (setRegOptional)
+            {
+                regOptionalCandidate->SetRegOptional();
+            }
         }
     }
 }
@@ -2056,11 +2179,6 @@ void Lowering::ContainCheckBinary(GenTreeOp* node)
         return;
     }
 
-    // We're not marking a constant hanging on the left of an add
-    // as containable so we assign it to a register having CQ impact.
-    // TODO-XArch-CQ: Detect this case and support both generating a single instruction
-    // for GT_ADD(Constant, SomeTree)
-
     GenTree* op1 = node->gtOp1;
     GenTree* op2 = node->gtOp2;
 
@@ -2068,9 +2186,11 @@ void Lowering::ContainCheckBinary(GenTreeOp* node)
     // In case of memory-op, we can encode it directly provided its type matches with 'tree' type.
     // This is because during codegen, type of 'tree' is used to determine emit Type size. If the types
     // do not match, they get normalized (i.e. sign/zero extended) on load into a register.
-    bool     directlyEncodable = false;
-    bool     binOpInRMW        = false;
-    GenTree* operand           = nullptr;
+    bool     directlyEncodable  = false;
+    bool     binOpInRMW         = false;
+    GenTree* operand            = nullptr;
+    bool     isSafeToContainOp1 = true;
+    bool     isSafeToContainOp2 = true;
 
     if (IsContainableImmed(node, op2))
     {
@@ -2083,21 +2203,33 @@ void Lowering::ContainCheckBinary(GenTreeOp* node)
         if (!binOpInRMW)
         {
             const unsigned operatorSize = genTypeSize(node->TypeGet());
-            if (IsContainableMemoryOp(op2) && (genTypeSize(op2->TypeGet()) == operatorSize))
+            if ((genTypeSize(op2->TypeGet()) == operatorSize) && IsContainableMemoryOp(op2))
             {
-                directlyEncodable = true;
-                operand           = op2;
-            }
-            else if (node->OperIsCommutative())
-            {
-                if (IsContainableImmed(node, op1) ||
-                    (IsContainableMemoryOp(op1) && (genTypeSize(op1->TypeGet()) == operatorSize) &&
-                     IsSafeToContainMem(node, op1)))
+                isSafeToContainOp2 = IsSafeToContainMem(node, op2);
+                if (isSafeToContainOp2)
                 {
-                    // If it is safe, we can reverse the order of operands of commutative operations for efficient
-                    // codegen
+                    directlyEncodable = true;
+                    operand           = op2;
+                }
+            }
+
+            if ((operand == nullptr) && node->OperIsCommutative())
+            {
+                // If it is safe, we can reverse the order of operands of commutative operations for efficient
+                // codegen
+                if (IsContainableImmed(node, op1))
+                {
                     directlyEncodable = true;
                     operand           = op1;
+                }
+                else if ((genTypeSize(op1->TypeGet()) == operatorSize) && IsContainableMemoryOp(op1))
+                {
+                    isSafeToContainOp1 = IsSafeToContainMem(node, op1);
+                    if (isSafeToContainOp1)
+                    {
+                        directlyEncodable = true;
+                        operand           = op1;
+                    }
                 }
             }
         }
@@ -2113,7 +2245,14 @@ void Lowering::ContainCheckBinary(GenTreeOp* node)
         // If this binary op neither has contained operands, nor is a
         // Read-Modify-Write (RMW) operation, we can mark its operands
         // as reg optional.
-        SetRegOptionalForBinOp(node);
+
+        // IsSafeToContainMem is expensive so we call it at most once for each operand
+        // in this method. If we already called IsSafeToContainMem, it must have returned false;
+        // otherwise, directlyEncodable would be true.
+        isSafeToContainOp1 = isSafeToContainOp1 && IsSafeToContainMem(node, op1);
+        isSafeToContainOp2 = isSafeToContainOp2 && IsSafeToContainMem(node, op2);
+
+        SetRegOptionalForBinOp(node, isSafeToContainOp1, isSafeToContainOp2);
     }
 }
 
@@ -2302,58 +2441,379 @@ void Lowering::ContainCheckSIMD(GenTreeSIMD* simdNode)
 //  Arguments:
 //     containingNode - The hardware intrinsic node which contains 'node'
 //     node - The node to check
+//     [Out] supportsRegOptional - On return, this will be true if 'containingNode' supports regOptional operands;
+//     otherwise, false.
 //
 // Return Value:
 //    true if 'node' is a containable hardware intrinsic node; otherwise, false.
 //
-bool Lowering::IsContainableHWIntrinsicOp(GenTreeHWIntrinsic* containingNode, GenTree* node)
+bool Lowering::IsContainableHWIntrinsicOp(GenTreeHWIntrinsic* containingNode, GenTree* node, bool* supportsRegOptional)
 {
-    if (!node->OperIsHWIntrinsic())
+    NamedIntrinsic      containingIntrinsicId = containingNode->gtHWIntrinsicId;
+    HWIntrinsicCategory category              = HWIntrinsicInfo::lookupCategory(containingIntrinsicId);
+
+    // We shouldn't have called in here if containingNode doesn't support containment
+    assert(HWIntrinsicInfo::SupportsContainment(containingIntrinsicId));
+
+    // containingNode supports nodes that read from an aligned memory address
+    //
+    // This will generally be an explicit LoadAligned instruction and is generally
+    // false for machines with VEX support. This is because there is currently no way
+    // to guarantee that the address read from will always be aligned and we could silently
+    // change the behavior of the program in the case where an Access Violation would have
+    // otherwise occurred.
+    bool supportsAlignedSIMDLoads = false;
+
+    // containingNode supports nodes that read from general memory
+    //
+    // We currently have to assume all "general" loads are unaligned. As such, this is
+    // generally used to determine if we can mark the node as `regOptional` in the case
+    // where `node` is not containable. However, this can also be used to determine whether
+    // we can mark other types of reads as contained (such as when directly reading a local).
+    bool supportsGeneralLoads = false;
+
+    // containingNode supports nodes that read from a scalar memory address
+    //
+    // This will generally be an explicit LoadScalar instruction but is also used to determine
+    // whether we can read an address of type T (we don't support this when the load would
+    // read more than sizeof(T) bytes).
+    bool supportsSIMDScalarLoads = false;
+
+    // containingNode supports nodes that read from an unaligned memory address
+    //
+    // This will generally be an explicit Load instruction and is generally false for machines
+    // without VEX support. This is because older hardware required that the SIMD operand always
+    // be aligned to the 'natural alignment' of the type.
+    bool supportsUnalignedSIMDLoads = false;
+
+    switch (category)
     {
-        // non-HWIntrinsic nodes are assumed to be unaligned loads, which are only
-        // supported by the VEX encoding.
-        return comp->canUseVexEncoding() && IsContainableMemoryOp(node);
+        case HW_Category_MemoryLoad:
+            supportsGeneralLoads = (!node->OperIsHWIntrinsic());
+            break;
+
+        case HW_Category_SimpleSIMD:
+        {
+            // These intrinsics only expect 16 or 32-byte nodes for containment
+            assert((genTypeSize(node->TypeGet()) == 16) || (genTypeSize(node->TypeGet()) == 32));
+            assert(supportsSIMDScalarLoads == false);
+
+            supportsAlignedSIMDLoads =
+                !comp->canUseVexEncoding() && (containingIntrinsicId != NI_SSE2_ConvertToVector128Double);
+            supportsUnalignedSIMDLoads = !supportsAlignedSIMDLoads;
+            supportsGeneralLoads       = supportsUnalignedSIMDLoads;
+
+            break;
+        }
+
+        case HW_Category_IMM:
+        {
+            switch (containingIntrinsicId)
+            {
+                case NI_SSE_Shuffle:
+                case NI_SSE2_CompareLessThan:
+                case NI_SSE2_ShiftLeftLogical:
+                case NI_SSE2_ShiftRightArithmetic:
+                case NI_SSE2_ShiftRightLogical:
+                case NI_SSE2_Shuffle:
+                case NI_SSE2_ShuffleHigh:
+                case NI_SSE2_ShuffleLow:
+                case NI_SSSE3_AlignRight:
+                case NI_SSE41_Blend:
+                case NI_SSE41_DotProduct:
+                case NI_SSE41_MultipleSumAbsoluteDifferences:
+                case NI_AES_KeygenAssist:
+                case NI_PCLMULQDQ_CarrylessMultiply:
+                case NI_AVX_Blend:
+                case NI_AVX_Compare:
+                case NI_AVX_DotProduct:
+                case NI_AVX_InsertVector128:
+                case NI_AVX_Permute:
+                case NI_AVX_Permute2x128:
+                case NI_AVX2_Blend:
+                case NI_AVX2_InsertVector128:
+                case NI_AVX2_MultipleSumAbsoluteDifferences:
+                case NI_AVX2_Permute2x128:
+                case NI_AVX2_Permute4x64:
+                case NI_AVX2_ShiftLeftLogical:
+                case NI_AVX2_ShiftRightArithmetic:
+                case NI_AVX2_ShiftRightLogical:
+                case NI_AVX2_ShuffleHigh:
+                case NI_AVX2_ShuffleLow:
+                {
+                    // These intrinsics only expect 16 or 32-byte nodes for containment
+                    assert((genTypeSize(node->TypeGet()) == 16) || (genTypeSize(node->TypeGet()) == 32));
+                    assert(supportsSIMDScalarLoads == false);
+
+                    supportsAlignedSIMDLoads   = !comp->canUseVexEncoding();
+                    supportsUnalignedSIMDLoads = !supportsAlignedSIMDLoads;
+                    supportsGeneralLoads       = supportsUnalignedSIMDLoads;
+
+                    break;
+                }
+
+                case NI_SSE2_Insert:
+                case NI_SSE41_Insert:
+                case NI_SSE41_X64_Insert:
+                {
+                    if (containingNode->gtSIMDBaseType == TYP_FLOAT)
+                    {
+                        assert(containingIntrinsicId == NI_SSE41_Insert);
+                        assert(genTypeSize(node->TypeGet()) == 16);
+
+                        // Sse41.Insert(V128<float>, V128<float>, byte) is a bit special
+                        // in that it has different behavior depending on whether the
+                        // second operand is coming from a register or memory. When coming
+                        // from a register, all 4 elements of the vector can be used and it
+                        // is effectively a regular `SimpleSIMD` operation; but when loading
+                        // from memory, it only works with the lowest element and is effectively
+                        // a `SIMDScalar`.
+
+                        assert(supportsAlignedSIMDLoads == false);
+                        assert(supportsUnalignedSIMDLoads == false);
+                        assert(supportsGeneralLoads == false);
+                        assert(supportsSIMDScalarLoads == false);
+
+                        GenTree* op1 = containingNode->gtGetOp1();
+                        GenTree* op2 = nullptr;
+                        GenTree* op3 = nullptr;
+
+                        assert(op1->OperIsList());
+                        assert(containingNode->gtGetOp2() == nullptr);
+
+                        GenTreeArgList* argList = op1->AsArgList();
+
+                        op1     = argList->Current();
+                        argList = argList->Rest();
+
+                        op2     = argList->Current();
+                        argList = argList->Rest();
+
+                        assert(node == op2);
+
+                        op3 = argList->Current();
+
+                        // The upper two bits of the immediate value are ignored if
+                        // op2 comes from memory. In order to support using the upper
+                        // bits, we need to disable containment support if op3 is not
+                        // constant or if the constant is greater than 0x3F (which means
+                        // at least one of the upper two bits is set).
+
+                        if (op3->IsCnsIntOrI())
+                        {
+                            ssize_t ival = op3->AsIntCon()->IconValue();
+                            assert((ival >= 0) && (ival <= 255));
+
+                            supportsSIMDScalarLoads = (ival <= 0x3F);
+                            supportsGeneralLoads    = supportsSIMDScalarLoads;
+                        }
+                        break;
+                    }
+
+                    // We should only get here for integral nodes.
+                    assert(varTypeIsIntegral(node->TypeGet()));
+
+                    assert(supportsAlignedSIMDLoads == false);
+                    assert(supportsUnalignedSIMDLoads == false);
+                    assert(supportsSIMDScalarLoads == false);
+
+                    const unsigned expectedSize = genTypeSize(containingNode->gtSIMDBaseType);
+                    const unsigned operandSize  = genTypeSize(node->TypeGet());
+
+                    supportsGeneralLoads = (operandSize >= expectedSize);
+                    break;
+                }
+
+                case NI_AVX_CompareScalar:
+                {
+                    // These intrinsics only expect 16 or 32-byte nodes for containment
+                    assert((genTypeSize(node->TypeGet()) == 16) || (genTypeSize(node->TypeGet()) == 32));
+
+                    assert(supportsAlignedSIMDLoads == false);
+                    assert(supportsUnalignedSIMDLoads == false);
+
+                    supportsSIMDScalarLoads = true;
+                    supportsGeneralLoads    = supportsSIMDScalarLoads;
+                    break;
+                }
+
+                default:
+                {
+                    assert(supportsAlignedSIMDLoads == false);
+                    assert(supportsGeneralLoads == false);
+                    assert(supportsSIMDScalarLoads == false);
+                    assert(supportsUnalignedSIMDLoads == false);
+                    break;
+                }
+            }
+            break;
+        }
+
+        case HW_Category_SIMDScalar:
+        {
+            assert(supportsAlignedSIMDLoads == false);
+            assert(supportsUnalignedSIMDLoads == false);
+
+            switch (containingIntrinsicId)
+            {
+                case NI_Base_Vector128_CreateScalarUnsafe:
+                case NI_Base_Vector256_CreateScalarUnsafe:
+                {
+                    assert(supportsSIMDScalarLoads == false);
+
+                    const unsigned expectedSize = genTypeSize(genActualType(containingNode->gtSIMDBaseType));
+                    const unsigned operandSize  = genTypeSize(node->TypeGet());
+
+                    supportsGeneralLoads = (operandSize == expectedSize);
+                    break;
+                }
+
+                case NI_AVX2_BroadcastScalarToVector128:
+                case NI_AVX2_BroadcastScalarToVector256:
+                {
+                    // The memory form of this already takes a pointer, and cannot be further contained.
+                    // The containable form is the one that takes a SIMD value, that may be in memory.
+                    supportsGeneralLoads = (node->TypeGet() == TYP_SIMD16);
+                    break;
+                }
+
+                case NI_SSE_ConvertScalarToVector128Single:
+                case NI_SSE2_ConvertScalarToVector128Double:
+                case NI_SSE2_ConvertScalarToVector128Int32:
+                case NI_SSE2_ConvertScalarToVector128UInt32:
+                case NI_SSE_X64_ConvertScalarToVector128Single:
+                case NI_SSE2_X64_ConvertScalarToVector128Double:
+                case NI_SSE2_X64_ConvertScalarToVector128Int64:
+                case NI_SSE2_X64_ConvertScalarToVector128UInt64:
+                {
+                    if (!varTypeIsIntegral(node->TypeGet()))
+                    {
+                        // The floating-point overload doesn't require any special semantics
+                        assert(containingIntrinsicId == NI_SSE2_ConvertScalarToVector128Double);
+                        supportsSIMDScalarLoads = true;
+                        supportsGeneralLoads    = supportsSIMDScalarLoads;
+                        break;
+                    }
+
+                    assert(supportsSIMDScalarLoads == false);
+
+                    const unsigned expectedSize = genTypeSize(genActualType(containingNode->gtSIMDBaseType));
+                    const unsigned operandSize  = genTypeSize(node->TypeGet());
+
+                    supportsGeneralLoads = (operandSize == expectedSize);
+                    break;
+                }
+
+                default:
+                {
+                    // These intrinsics only expect 16 or 32-byte nodes for containment
+                    assert((genTypeSize(node->TypeGet()) == 16) || (genTypeSize(node->TypeGet()) == 32));
+
+                    supportsSIMDScalarLoads = true;
+                    supportsGeneralLoads    = supportsSIMDScalarLoads;
+                    break;
+                }
+            }
+            break;
+        }
+
+        case HW_Category_Scalar:
+        {
+            // We should only get here for integral nodes.
+            assert(varTypeIsIntegral(node->TypeGet()));
+
+            assert(supportsAlignedSIMDLoads == false);
+            assert(supportsUnalignedSIMDLoads == false);
+            assert(supportsSIMDScalarLoads == false);
+
+            unsigned       expectedSize = genTypeSize(containingNode->TypeGet());
+            const unsigned operandSize  = genTypeSize(node->TypeGet());
+
+            // CRC32 codegen depends on its second oprand's type.
+            // Currently, we are using SIMDBaseType to store the op2Type info.
+            if (containingIntrinsicId == NI_SSE42_Crc32)
+            {
+                var_types op2Type = containingNode->gtSIMDBaseType;
+                expectedSize      = genTypeSize(op2Type);
+            }
+
+            supportsGeneralLoads = (operandSize >= expectedSize);
+            break;
+        }
+
+        default:
+        {
+            assert(supportsAlignedSIMDLoads == false);
+            assert(supportsGeneralLoads == false);
+            assert(supportsSIMDScalarLoads == false);
+            assert(supportsUnalignedSIMDLoads == false);
+            break;
+        }
     }
 
-    bool isContainable = false;
+    noway_assert(supportsRegOptional != nullptr);
+    *supportsRegOptional = supportsGeneralLoads;
+
+    if (!node->OperIsHWIntrinsic())
+    {
+        return supportsGeneralLoads && IsContainableMemoryOp(node);
+    }
 
     // TODO-XArch: Update this to be table driven, if possible.
 
-    NamedIntrinsic      containingIntrinsicID = containingNode->gtHWIntrinsicId;
-    HWIntrinsicCategory containingCategory    = Compiler::categoryOfHWIntrinsic(containingIntrinsicID);
-    NamedIntrinsic      intrinsicID           = node->AsHWIntrinsic()->gtHWIntrinsicId;
+    NamedIntrinsic intrinsicId = node->AsHWIntrinsic()->gtHWIntrinsicId;
 
-    switch (intrinsicID)
+    switch (intrinsicId)
     {
-        // Non-VEX encoded instructions require aligned memory ops, so we can fold them.
-        // However, we cannot do the same for the VEX-encoding as it changes an observable
-        // side-effect and may mask an Access Violation that would otherwise occur.
         case NI_SSE_LoadAlignedVector128:
         case NI_SSE2_LoadAlignedVector128:
-            isContainable = (containingCategory == HW_Category_SimpleSIMD) && !comp->canUseVexEncoding();
-            break;
+        case NI_AVX_LoadAlignedVector256:
+        {
+            return supportsAlignedSIMDLoads;
+        }
 
-        // Only fold a scalar load into a SIMD scalar intrinsic to ensure the number of bits
-        // read remains the same. Likewise, we can't fold a larger load into a SIMD scalar
-        // intrinsic as that would read fewer bits that requested.
         case NI_SSE_LoadScalarVector128:
         case NI_SSE2_LoadScalarVector128:
-            isContainable = (containingCategory == HW_Category_SIMDScalar);
-            break;
+        {
+            return supportsSIMDScalarLoads;
+        }
 
         // VEX encoding supports unaligned memory ops, so we can fold them
         case NI_SSE_LoadVector128:
         case NI_SSE2_LoadVector128:
         case NI_AVX_LoadVector256:
-        case NI_AVX_LoadAlignedVector256:
-            isContainable = (containingCategory == HW_Category_SimpleSIMD) && comp->canUseVexEncoding();
-            break;
+        {
+            return supportsUnalignedSIMDLoads;
+        }
 
         default:
+        {
+            assert(!node->isContainableHWIntrinsic());
             return false;
+        }
     }
+}
 
-    return isContainable;
+//----------------------------------------------------------------------------------------------
+// ContainCheckHWIntrinsicAddr: Perform containment analysis for an address operand of a hardware
+//                              intrinsic node.
+//
+//  Arguments:
+//     node  - The hardware intrinsic node
+//     pAddr - The "parent" pointer to the address operand, so that we can update the operand
+//             of the parent as needed.
+//
+void Lowering::ContainCheckHWIntrinsicAddr(GenTreeHWIntrinsic* node, GenTree** pAddr)
+{
+    assert(((*pAddr)->TypeGet() == TYP_I_IMPL) || ((*pAddr)->TypeGet() == TYP_BYREF));
+    TryCreateAddrMode(LIR::Use(BlockRange(), pAddr, node), true);
+    GenTree* addr = *pAddr;
+    if ((addr->OperIs(GT_CLS_VAR_ADDR, GT_LCL_VAR_ADDR) ||
+         (addr->IsCnsIntOrI() && addr->AsIntConCommon()->FitsInAddrBase(comp)) || (addr->OperGet() == GT_LEA)) &&
+        IsSafeToContainMem(node, addr))
+    {
+        MakeSrcContained(node, addr);
+    }
 }
 
 //----------------------------------------------------------------------------------------------
@@ -2364,63 +2824,519 @@ bool Lowering::IsContainableHWIntrinsicOp(GenTreeHWIntrinsic* containingNode, Ge
 //
 void Lowering::ContainCheckHWIntrinsic(GenTreeHWIntrinsic* node)
 {
-    NamedIntrinsic      intrinsicID = node->gtHWIntrinsicId;
-    HWIntrinsicCategory category    = Compiler::categoryOfHWIntrinsic(intrinsicID);
-    HWIntrinsicFlag     flags       = Compiler::flagsOfHWIntrinsic(intrinsicID);
-    int                 numArgs     = Compiler::numArgsOfHWIntrinsic(node);
-    GenTree*            op1         = node->gtGetOp1();
-    GenTree*            op2         = node->gtGetOp2();
+    NamedIntrinsic      intrinsicId = node->gtHWIntrinsicId;
+    HWIntrinsicCategory category    = HWIntrinsicInfo::lookupCategory(intrinsicId);
+    int                 numArgs     = HWIntrinsicInfo::lookupNumArgs(node);
+    var_types           baseType    = node->gtSIMDBaseType;
 
-    if ((flags & HW_Flag_NoContainment) != 0)
+    GenTree* op1 = node->gtGetOp1();
+    GenTree* op2 = node->gtGetOp2();
+    GenTree* op3 = nullptr;
+
+    if (!HWIntrinsicInfo::SupportsContainment(intrinsicId))
     {
+        // AVX2 gather are not containable and always have constant IMM argument
+        if (HWIntrinsicInfo::isAVX2GatherIntrinsic(intrinsicId))
+        {
+            GenTree* lastOp = HWIntrinsicInfo::lookupLastOp(node);
+            assert(lastOp != nullptr);
+            MakeSrcContained(node, lastOp);
+        }
         // Exit early if containment isn't supported
         return;
     }
 
     // TODO-XArch-CQ: Non-VEX encoded instructions can have both ops contained
 
-    if (numArgs == 2)
+    const bool isCommutative = HWIntrinsicInfo::IsCommutative(intrinsicId);
+
+    if (numArgs == 1)
     {
+        // One argument intrinsics cannot be commutative
+        assert(!isCommutative);
+
+        assert(!op1->OperIsList());
+        assert(op2 == nullptr);
+
         switch (category)
         {
+            case HW_Category_MemoryLoad:
+            {
+                GenTree** pAddr = &node->gtOp1;
+                ContainCheckHWIntrinsicAddr(node, pAddr);
+                break;
+            }
             case HW_Category_SimpleSIMD:
             case HW_Category_SIMDScalar:
-                if (IsContainableHWIntrinsicOp(node, op2))
+            case HW_Category_Scalar:
+            {
+                switch (intrinsicId)
                 {
-                    MakeSrcContained(node, op2);
+                    case NI_SSE_ReciprocalScalar:
+                    case NI_SSE_ReciprocalSqrtScalar:
+                    case NI_SSE_SqrtScalar:
+                    case NI_SSE2_SqrtScalar:
+                    case NI_SSE41_CeilingScalar:
+                    case NI_SSE41_FloorScalar:
+                    case NI_SSE41_RoundCurrentDirectionScalar:
+                    case NI_SSE41_RoundToNearestIntegerScalar:
+                    case NI_SSE41_RoundToNegativeInfinityScalar:
+                    case NI_SSE41_RoundToPositiveInfinityScalar:
+                    case NI_SSE41_RoundToZeroScalar:
+                    {
+                        // These intrinsics have both 1 and 2-operand overloads.
+                        //
+                        // The 1-operand overload basically does `intrinsic(op1, op1)`
+                        //
+                        // Because of this, the operand must be loaded into a register
+                        // and cannot be contained.
+                        return;
+                    }
+
+                    case NI_SSE2_ConvertToInt32:
+                    case NI_SSE2_X64_ConvertToInt64:
+                    case NI_SSE2_ConvertToUInt32:
+                    case NI_SSE2_X64_ConvertToUInt64:
+                    case NI_AVX2_ConvertToInt32:
+                    case NI_AVX2_ConvertToUInt32:
+                    {
+                        if (varTypeIsIntegral(baseType))
+                        {
+                            // These intrinsics are "ins reg/mem, xmm" and don't
+                            // currently support containment.
+                            return;
+                        }
+
+                        break;
+                    }
+
+                    default:
+                    {
+                        break;
+                    }
                 }
-                else if (((flags & HW_Flag_Commutative) != 0) && IsContainableHWIntrinsicOp(node, op1))
+
+                bool supportsRegOptional = false;
+
+                if (IsContainableHWIntrinsicOp(node, op1, &supportsRegOptional))
                 {
                     MakeSrcContained(node, op1);
-
-                    // Swap the operands here to make the containment checks in codegen significantly simpler
-                    node->gtOp1 = op2;
-                    node->gtOp2 = op1;
                 }
-                else if (comp->canUseVexEncoding())
+                else if (supportsRegOptional)
                 {
-                    // We can only mark as reg optional when using the VEX encoding
-                    // since that supports unaligned mem operands and non-VEX doesn't
-                    op2->SetRegOptional();
+                    op1->SetRegOptional();
                 }
                 break;
+            }
 
             default:
-                // TODO-XArch-CQ: Assert that this is unreached after we have ensured the relevant node types are
-                // handled.
-                //                https://github.com/dotnet/coreclr/issues/16497
+            {
+                unreached();
                 break;
+            }
         }
     }
-
-    if (Compiler::categoryOfHWIntrinsic(intrinsicID) == HW_Category_IMM)
+    else
     {
-        assert(numArgs >= 2);
-        GenTree* lastOp = Compiler::lastOpOfHWIntrinsic(node, numArgs);
-        assert(lastOp != nullptr);
-        if (Compiler::isImmHWIntrinsic(intrinsicID, lastOp))
+        if (numArgs == 2)
         {
-            if (lastOp->IsCnsIntOrI())
+            assert(!op1->OperIsList());
+            assert(op2 != nullptr);
+            assert(!op2->OperIsList());
+
+            switch (category)
+            {
+                case HW_Category_MemoryLoad:
+                {
+                    GenTree** pAddr = nullptr;
+                    if ((intrinsicId == NI_AVX_MaskLoad) || (intrinsicId == NI_AVX2_MaskLoad))
+                    {
+                        pAddr = &node->gtOp.gtOp1;
+                    }
+                    else
+                    {
+                        pAddr = &node->gtOp.gtOp2;
+                    }
+                    ContainCheckHWIntrinsicAddr(node, pAddr);
+                    break;
+                }
+                case HW_Category_MemoryStore:
+                {
+                    GenTree** pAddr = &node->gtOp1;
+                    ContainCheckHWIntrinsicAddr(node, pAddr);
+                    break;
+                }
+                case HW_Category_SimpleSIMD:
+                case HW_Category_SIMDScalar:
+                case HW_Category_Scalar:
+                {
+                    if (HWIntrinsicInfo::GeneratesMultipleIns(intrinsicId))
+                    {
+                        switch (intrinsicId)
+                        {
+                            case NI_SSE_CompareLessThanOrderedScalar:
+                            case NI_SSE_CompareLessThanUnorderedScalar:
+                            case NI_SSE_CompareLessThanOrEqualOrderedScalar:
+                            case NI_SSE_CompareLessThanOrEqualUnorderedScalar:
+                            case NI_SSE2_CompareLessThanOrderedScalar:
+                            case NI_SSE2_CompareLessThanUnorderedScalar:
+                            case NI_SSE2_CompareLessThanOrEqualOrderedScalar:
+                            case NI_SSE2_CompareLessThanOrEqualUnorderedScalar:
+                            {
+                                // We need to swap the operands for CompareLessThanOrEqual
+                                node->gtOp1 = op2;
+                                node->gtOp2 = op1;
+                                op2         = op1;
+                                break;
+                            }
+
+                            default:
+                            {
+                                // TODO-XArch-CQ: The Compare*OrderedScalar and Compare*UnorderedScalar methods
+                                //                are commutative if you also inverse the intrinsic.
+                                break;
+                            }
+                        }
+                    }
+
+                    bool supportsRegOptional = false;
+
+                    if (IsContainableHWIntrinsicOp(node, op2, &supportsRegOptional))
+                    {
+                        MakeSrcContained(node, op2);
+                    }
+                    else if ((isCommutative || (intrinsicId == NI_BMI2_MultiplyNoFlags) ||
+                              (intrinsicId == NI_BMI2_X64_MultiplyNoFlags)) &&
+                             IsContainableHWIntrinsicOp(node, op1, &supportsRegOptional))
+                    {
+                        MakeSrcContained(node, op1);
+
+                        // Swap the operands here to make the containment checks in codegen significantly simpler
+                        node->gtOp1 = op2;
+                        node->gtOp2 = op1;
+                    }
+                    else if (supportsRegOptional)
+                    {
+                        op2->SetRegOptional();
+
+                        // TODO-XArch-CQ: For commutative nodes, either operand can be reg-optional.
+                        //                https://github.com/dotnet/coreclr/issues/6361
+                    }
+                    break;
+                }
+
+                case HW_Category_IMM:
+                {
+                    // We don't currently have any IMM intrinsics which are also commutative
+                    assert(!isCommutative);
+                    bool supportsRegOptional = false;
+
+                    switch (intrinsicId)
+                    {
+                        case NI_SSE2_ShiftLeftLogical:
+                        case NI_SSE2_ShiftRightArithmetic:
+                        case NI_SSE2_ShiftRightLogical:
+                        case NI_AVX2_ShiftLeftLogical:
+                        case NI_AVX2_ShiftRightArithmetic:
+                        case NI_AVX2_ShiftRightLogical:
+                        {
+                            // These intrinsics can have op2 be imm or reg/mem
+
+                            if (!HWIntrinsicInfo::isImmOp(intrinsicId, op2))
+                            {
+                                if (IsContainableHWIntrinsicOp(node, op2, &supportsRegOptional))
+                                {
+                                    MakeSrcContained(node, op2);
+                                }
+                                else if (supportsRegOptional)
+                                {
+                                    op2->SetRegOptional();
+                                }
+                            }
+                            break;
+                        }
+
+                        case NI_SSE2_Shuffle:
+                        case NI_SSE2_ShuffleHigh:
+                        case NI_SSE2_ShuffleLow:
+                        case NI_AVX2_Permute4x64:
+                        {
+                            // These intrinsics have op2 as an imm and op1 as a reg/mem
+
+                            if (IsContainableHWIntrinsicOp(node, op1, &supportsRegOptional))
+                            {
+                                MakeSrcContained(node, op1);
+                            }
+                            else if (supportsRegOptional)
+                            {
+                                op1->SetRegOptional();
+                            }
+                            break;
+                        }
+
+                        case NI_AVX_Permute:
+                        {
+                            // These intrinsics can have op2 be imm or reg/mem
+                            // They also can have op1 be reg/mem and op2 be imm
+
+                            if (HWIntrinsicInfo::isImmOp(intrinsicId, op2))
+                            {
+                                if (IsContainableHWIntrinsicOp(node, op1, &supportsRegOptional))
+                                {
+                                    MakeSrcContained(node, op1);
+                                }
+                                else if (supportsRegOptional)
+                                {
+                                    op1->SetRegOptional();
+                                }
+                            }
+                            else if (IsContainableHWIntrinsicOp(node, op2, &supportsRegOptional))
+                            {
+                                MakeSrcContained(node, op2);
+                            }
+                            else if (supportsRegOptional)
+                            {
+                                op2->SetRegOptional();
+                            }
+                            break;
+                        }
+
+                        case NI_AES_KeygenAssist:
+                        {
+                            if (IsContainableHWIntrinsicOp(node, op1, &supportsRegOptional))
+                            {
+                                MakeSrcContained(node, op1);
+                            }
+                            else if (supportsRegOptional)
+                            {
+                                op1->SetRegOptional();
+                            }
+                            break;
+                        }
+
+                        default:
+                        {
+                            break;
+                        }
+                    }
+
+                    break;
+                }
+
+                case HW_Category_Special:
+                {
+                    if (intrinsicId == NI_SSE2_CompareLessThan)
+                    {
+                        bool supportsRegOptional = false;
+
+                        if (IsContainableHWIntrinsicOp(node, op2, &supportsRegOptional))
+                        {
+                            MakeSrcContained(node, op2);
+                        }
+                        else if (supportsRegOptional)
+                        {
+                            op2->SetRegOptional();
+                        }
+                    }
+                    else
+                    {
+                        unreached();
+                    }
+                    break;
+                }
+
+                default:
+                {
+                    unreached();
+                    break;
+                }
+            }
+        }
+        else if (numArgs == 3)
+        {
+            // three argument intrinsics should not be marked commutative
+            assert(!isCommutative);
+
+            assert(op1->OperIsList());
+            assert(op2 == nullptr);
+
+            GenTreeArgList* argList         = op1->AsArgList();
+            GenTreeArgList* originalArgList = argList;
+
+            op1     = argList->Current();
+            argList = argList->Rest();
+
+            op2     = argList->Current();
+            argList = argList->Rest();
+
+            op3 = argList->Current();
+            assert(argList->Rest() == nullptr);
+
+            switch (category)
+            {
+                case HW_Category_MemoryStore:
+                {
+                    GenTree** pAddr = &node->gtOp.gtOp1->gtOp.gtOp1;
+                    ContainCheckHWIntrinsicAddr(node, pAddr);
+                    break;
+                }
+                case HW_Category_SimpleSIMD:
+                case HW_Category_SIMDScalar:
+                case HW_Category_Scalar:
+                {
+                    if ((intrinsicId >= NI_FMA_MultiplyAdd) && (intrinsicId <= NI_FMA_MultiplySubtractNegatedScalar))
+                    {
+                        bool supportsRegOptional = false;
+
+                        if (IsContainableHWIntrinsicOp(node, op3, &supportsRegOptional))
+                        {
+                            // 213 form: op1 = (op2 * op1) + [op3]
+                            MakeSrcContained(node, op3);
+                        }
+                        else if (IsContainableHWIntrinsicOp(node, op2, &supportsRegOptional))
+                        {
+                            // 132 form: op1 = (op1 * op3) + [op2]
+                            MakeSrcContained(node, op2);
+                        }
+                        else if (IsContainableHWIntrinsicOp(node, op1, &supportsRegOptional))
+                        {
+                            // Intrinsics with CopyUpperBits semantics cannot have op1 be contained
+
+                            if (!HWIntrinsicInfo::CopiesUpperBits(intrinsicId))
+                            {
+                                // 231 form: op3 = (op2 * op3) + [op1]
+                                MakeSrcContained(node, op1);
+                            }
+                        }
+                        else
+                        {
+                            assert(supportsRegOptional);
+
+                            // TODO-XArch-CQ: Technically any one of the three operands can
+                            //                be reg-optional. With a limitation on op1 where
+                            //                it can only be so if CopyUpperBits is off.
+                            //                https://github.com/dotnet/coreclr/issues/6361
+
+                            // 213 form: op1 = (op2 * op1) + op3
+                            op3->SetRegOptional();
+                        }
+                    }
+                    else
+                    {
+                        bool supportsRegOptional = false;
+
+                        switch (intrinsicId)
+                        {
+                            case NI_SSE41_BlendVariable:
+                            case NI_AVX_BlendVariable:
+                            case NI_AVX2_BlendVariable:
+                            {
+                                if (IsContainableHWIntrinsicOp(node, op2, &supportsRegOptional))
+                                {
+                                    MakeSrcContained(node, op2);
+                                }
+                                else if (supportsRegOptional)
+                                {
+                                    op2->SetRegOptional();
+                                }
+                                break;
+                            }
+
+                            case NI_BMI2_MultiplyNoFlags:
+                            case NI_BMI2_X64_MultiplyNoFlags:
+                            {
+                                if (IsContainableHWIntrinsicOp(node, op2, &supportsRegOptional))
+                                {
+                                    MakeSrcContained(node, op2);
+                                }
+                                else if (IsContainableHWIntrinsicOp(node, op1, &supportsRegOptional))
+                                {
+                                    MakeSrcContained(node, op1);
+                                    // MultiplyNoFlags is a Commutative operation, so swap the first two operands here
+                                    // to make the containment checks in codegen significantly simpler
+                                    *(originalArgList->pCurrent())         = op2;
+                                    *(originalArgList->Rest()->pCurrent()) = op1;
+                                }
+                                else if (supportsRegOptional)
+                                {
+                                    op2->SetRegOptional();
+                                }
+                                break;
+                            }
+
+                            default:
+                            {
+                                unreached();
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                case HW_Category_IMM:
+                {
+                    bool supportsRegOptional = false;
+
+                    switch (intrinsicId)
+                    {
+                        case NI_SSE_Shuffle:
+                        case NI_SSE2_Insert:
+                        case NI_SSE2_Shuffle:
+                        case NI_SSSE3_AlignRight:
+                        case NI_SSE41_Blend:
+                        case NI_SSE41_DotProduct:
+                        case NI_SSE41_Insert:
+                        case NI_SSE41_X64_Insert:
+                        case NI_SSE41_MultipleSumAbsoluteDifferences:
+                        case NI_AVX_Blend:
+                        case NI_AVX_Compare:
+                        case NI_AVX_CompareScalar:
+                        case NI_AVX_DotProduct:
+                        case NI_AVX_Permute2x128:
+                        case NI_AVX_Shuffle:
+                        case NI_AVX2_Blend:
+                        case NI_AVX2_MultipleSumAbsoluteDifferences:
+                        case NI_AVX2_Permute2x128:
+                        case NI_PCLMULQDQ_CarrylessMultiply:
+                        {
+                            if (IsContainableHWIntrinsicOp(node, op2, &supportsRegOptional))
+                            {
+                                MakeSrcContained(node, op2);
+                            }
+                            else if (supportsRegOptional)
+                            {
+                                op2->SetRegOptional();
+                            }
+                            break;
+                        }
+
+                        default:
+                        {
+                            break;
+                        }
+                    }
+
+                    break;
+                }
+
+                default:
+                {
+                    unreached();
+                    break;
+                }
+            }
+        }
+        else
+        {
+            unreached();
+        }
+
+        if (HWIntrinsicInfo::lookupCategory(intrinsicId) == HW_Category_IMM)
+        {
+            GenTree* lastOp = HWIntrinsicInfo::lookupLastOp(node);
+            assert(lastOp != nullptr);
+
+            if (HWIntrinsicInfo::isImmOp(intrinsicId, lastOp) && lastOp->IsCnsIntOrI())
             {
                 MakeSrcContained(node, lastOp);
             }
@@ -2437,10 +3353,10 @@ void Lowering::ContainCheckHWIntrinsic(GenTreeHWIntrinsic* node)
 //
 void Lowering::ContainCheckFloatBinary(GenTreeOp* node)
 {
-    assert(node->OperIsBinary() && varTypeIsFloating(node));
+    assert(node->OperIs(GT_ADD, GT_SUB, GT_MUL, GT_DIV) && varTypeIsFloating(node));
 
     // overflow operations aren't supported on float/double types.
-    assert(!node->gtOverflow());
+    assert(!node->gtOverflowEx());
 
     GenTree* op1 = node->gtGetOp1();
     GenTree* op2 = node->gtGetOp2();
@@ -2449,12 +3365,23 @@ void Lowering::ContainCheckFloatBinary(GenTreeOp* node)
     // everything is made explicit by adding casts.
     assert(op1->TypeGet() == op2->TypeGet());
 
-    if (IsContainableMemoryOp(op2) || op2->IsCnsNonZeroFltOrDbl())
+    bool isSafeToContainOp1 = true;
+    bool isSafeToContainOp2 = true;
+
+    if (op2->IsCnsNonZeroFltOrDbl())
     {
         MakeSrcContained(node, op2);
     }
-    else if (node->OperIsCommutative() &&
-             (op1->IsCnsNonZeroFltOrDbl() || (IsContainableMemoryOp(op1) && IsSafeToContainMem(node, op1))))
+    else if (IsContainableMemoryOp(op2))
+    {
+        isSafeToContainOp2 = IsSafeToContainMem(node, op2);
+        if (isSafeToContainOp2)
+        {
+            MakeSrcContained(node, op2);
+        }
+    }
+
+    if (!op2->isContained() && node->OperIsCommutative())
     {
         // Though we have GT_ADD(op1=memOp, op2=non-memOp, we try to reorder the operands
         // as long as it is safe so that the following efficient code sequence is generated:
@@ -2464,15 +3391,31 @@ void Lowering::ContainCheckFloatBinary(GenTreeOp* node)
         // Instead of
         //      movss op1Reg, [memOp]; addss/sd targetReg, Op2Reg  (if op1Reg == targetReg) OR
         //      movss op1Reg, [memOp]; movaps targetReg, op1Reg, addss/sd targetReg, Op2Reg
-        MakeSrcContained(node, op1);
+
+        if (op1->IsCnsNonZeroFltOrDbl())
+        {
+            MakeSrcContained(node, op1);
+        }
+        else if (IsContainableMemoryOp(op1))
+        {
+            isSafeToContainOp1 = IsSafeToContainMem(node, op1);
+            if (isSafeToContainOp1)
+            {
+                MakeSrcContained(node, op1);
+            }
+        }
     }
-    else
+
+    if (!op1->isContained() && !op2->isContained())
     {
         // If there are no containable operands, we can make an operand reg optional.
-        SetRegOptionalForBinOp(node);
+        // IsSafeToContainMem is expensive so we call it at most once for each operand
+        // in this method. If we already called IsSafeToContainMem, it must have returned false;
+        // otherwise, the corresponding operand (op1 or op2) would be contained.
+        isSafeToContainOp1 = isSafeToContainOp1 && IsSafeToContainMem(node, op1);
+        isSafeToContainOp2 = isSafeToContainOp2 && IsSafeToContainMem(node, op2);
+        SetRegOptionalForBinOp(node, isSafeToContainOp1, isSafeToContainOp2);
     }
 }
 
 #endif // _TARGET_XARCH_
-
-#endif // !LEGACY_BACKEND

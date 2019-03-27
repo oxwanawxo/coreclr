@@ -79,7 +79,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             // throw an exception from Lookup.
             if (!_this.HasKey(key))
             {
-                value = default(V);
+                value = default;
                 return false;
             }
 
@@ -90,9 +90,9 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)  // Still may hit this case due to a race condition
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                 {
-                    value = default(V);
+                    value = default;
                     return false;
                 }
                 throw;
@@ -111,7 +111,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     throw new KeyNotFoundException(SR.Format(SR.Arg_KeyNotFoundWithKey, key.ToString()));
                 throw;
             }
@@ -199,7 +199,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             return enumeration.MoveNext();
         }
 
-        Object IEnumerator.Current
+        object IEnumerator.Current
         {
             get { return ((IEnumerator<TKey>)this).Current; }
         }
@@ -298,7 +298,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             return enumeration.MoveNext();
         }
 
-        Object IEnumerator.Current
+        object IEnumerator.Current
         {
             get { return ((IEnumerator<TValue>)this).Current; }
         }

@@ -315,6 +315,7 @@ bool MscorlibBinder::ConvertType(const BYTE*& pSig, SigBuilder * pSigBuilder)
 {
     bool bSomethingResolved = false;
 
+Again:
     CorElementType type = (CorElementType)*pSig++;
 
     switch (type)
@@ -342,6 +343,19 @@ bool MscorlibBinder::ConvertType(const BYTE*& pSig, SigBuilder * pSigBuilder)
             bSomethingResolved = true;
         break;
 
+    case ELEMENT_TYPE_CMOD_OPT:
+    case ELEMENT_TYPE_CMOD_REQD:
+        {
+            // The binder class id may overflow 1 byte. Use 2 bytes to encode it.
+            BinderClassID id = (BinderClassID)(*pSig + 0x100 * *(pSig + 1));
+            pSig += 2;
+
+            pSigBuilder->AppendElementType(type);
+            pSigBuilder->AppendToken(GetClassLocal(id)->GetCl());
+            bSomethingResolved = true;
+        }
+        goto Again;
+
     case ELEMENT_TYPE_CLASS:
     case ELEMENT_TYPE_VALUETYPE:
         {
@@ -352,6 +366,14 @@ bool MscorlibBinder::ConvertType(const BYTE*& pSig, SigBuilder * pSigBuilder)
             pSigBuilder->AppendElementType(type);
             pSigBuilder->AppendToken(GetClassLocal(id)->GetCl());
             bSomethingResolved = true;
+        }
+        break;
+
+    case ELEMENT_TYPE_VAR:
+    case ELEMENT_TYPE_MVAR:
+        {
+            pSigBuilder->AppendElementType(type);
+            pSigBuilder->AppendData(*pSig++);
         }
         break;
 
@@ -453,7 +475,6 @@ void MscorlibBinder::TriggerGCUnderStress()
     {
         THROWS;
         GC_TRIGGERS;
-        SO_TOLERANT;
         INJECT_FAULT(ThrowOutOfMemory());
     }
     CONTRACTL_END;
@@ -646,7 +667,7 @@ static void FCallCheckSignature(MethodDesc* pMD, PCODE pImpl)
 {
     STANDARD_VM_CONTRACT;
 
-    char* pUnmanagedSig = NULL;
+    const char* pUnmanagedSig = NULL;
 
     FCSigCheck* pSigCheck = FCSigCheck::g_pFCSigCheck;
     while (pSigCheck != NULL)
@@ -661,7 +682,7 @@ static void FCallCheckSignature(MethodDesc* pMD, PCODE pImpl)
     MetaSig msig(pMD);   
     int argIndex = -2; // start with return value
     int enregisteredArguments = 0;
-    char* pUnmanagedArg = pUnmanagedSig;
+    const char* pUnmanagedArg = pUnmanagedSig;
     for (;;)
     {
         CorElementType argType = ELEMENT_TYPE_END;
@@ -755,9 +776,9 @@ static void FCallCheckSignature(MethodDesc* pMD, PCODE pImpl)
                 ("Unexpected end of managed fcall signature\n"
                 "Method: %s:%s\n", pMD->m_pszDebugClassName, pMD->m_pszDebugMethodName));
 
-            char* pUnmanagedArgEnd = strchr(pUnmanagedArg, ',');
+            const char* pUnmanagedArgEnd = strchr(pUnmanagedArg, ',');
 
-            char* pUnmanagedTypeEnd = (pUnmanagedArgEnd != NULL) ? 
+            const char* pUnmanagedTypeEnd = (pUnmanagedArgEnd != NULL) ? 
                 pUnmanagedArgEnd : (pUnmanagedArg + strlen(pUnmanagedArg));
 
             if (argIndex != -2)

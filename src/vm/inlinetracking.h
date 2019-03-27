@@ -37,6 +37,8 @@
 class MethodDesc;
 typedef DPTR(class MethodDesc)          PTR_MethodDesc;
 
+class ZapHeap;
+
 struct MethodInModule
 {
     Module *m_module;
@@ -104,7 +106,7 @@ public:
     static count_t Hash(key_t k)
     {
         LIMITED_METHOD_DAC_CONTRACT;
-        return ((count_t)k.m_methodDef ^ (count_t)k.m_module);
+        return ((count_t)k.m_methodDef ^ (count_t)(SIZE_T)k.m_module);
     }
     static const element_t Null()
     {

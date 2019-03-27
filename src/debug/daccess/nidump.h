@@ -29,7 +29,6 @@ typedef DPTR(ArrayClass) PTR_ArrayClass;
 typedef DPTR(DelegateEEClass) PTR_DelegateEEClass;
 typedef DPTR(UMThunkMarshInfo) PTR_UMThunkMarshInfo;
 typedef DPTR(CORCOMPILE_DEPENDENCY) PTR_CORCOMPILE_DEPENDENCY;
-typedef DPTR(struct RemotableMethodInfo) PTR_RemotableMethodInfo;
 typedef DPTR(struct ModuleCtorInfo) PTR_ModuleCtorInfo;
 typedef DPTR(class EEImplMethodDesc) PTR_EEImplMethodDesc;
 typedef DPTR(class EEClassLayoutInfo) PTR_EEClassLayoutInfo;
@@ -194,7 +193,7 @@ public:
                           PTR_Module module );
     
 #ifndef STUB_DISPATCH_ALL
-    void DumpMethodTableSlotChunk( PTR_PCODE slotChunk, COUNT_T size );
+    void DumpMethodTableSlotChunk( TADDR slotChunk, COUNT_T size, bool );
 #endif
 
     void DumpSlot( unsigned index, PCODE tgt );
@@ -323,7 +322,7 @@ public:
      */
     struct Import
     {
-        PTR_CORCOMPILE_IMPORT_TABLE_ENTRY entry;
+        DWORD index;
         Dependency *dependency;
     };
 private:
@@ -478,6 +477,8 @@ private:
     template<typename T>
     TADDR DPtrToPreferredAddr( T ptr );
 
+    TADDR DPtrToPreferredAddr( TADDR tptr );
+
     void DumpAssemblySignature(CORCOMPILE_ASSEMBLY_SIGNATURE & assemblySignature);
 
     SIZE_T CountFields( PTR_MethodTable mt );
@@ -500,12 +501,13 @@ private:
 
     struct SlotChunk
     {
-        PTR_PCODE addr;
+        TADDR addr;
         WORD nSlots;
+        bool isRelative;
 
         inline bool operator==(const SlotChunk& sc) const
         {
-            return (addr == sc.addr) && (nSlots == sc.nSlots);
+            return (addr == sc.addr) && (nSlots == sc.nSlots) && (isRelative == sc.isRelative);
         }
 
         inline bool operator<(const SlotChunk& sc) const

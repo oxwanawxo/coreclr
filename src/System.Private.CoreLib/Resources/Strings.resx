@@ -166,6 +166,18 @@
   <data name="AppDomain_AppBaseNotSet" xml:space="preserve">
     <value>The ApplicationBase must be set before retrieving this property.</value>
   </data>
+  <data name="AppDomain_Name" xml:space="preserve">
+    <value>Name:</value>
+  </data>
+  <data name="AppDomain_NoContextPolicies" xml:space="preserve">
+    <value>There are no context policies.</value>
+  </data>
+  <data name="AppDomain_Policy_PrincipalTwice" xml:space="preserve">
+    <value>Default principal object cannot be set twice.</value>
+  </data>
+  <data name="AmbiguousImplementationException_NullMessage" xml:space="preserve">
+    <value>Ambiguous implementation found.</value>
+  </data>
   <data name="Arg_AccessException" xml:space="preserve">
     <value>Cannot access member.</value>
   </data>
@@ -174,9 +186,6 @@
   </data>
   <data name="Arg_AmbiguousMatchException" xml:space="preserve">
     <value>Ambiguous match found.</value>
-  </data>
-  <data name="Arg_AppDomainUnloadedException" xml:space="preserve">
-    <value>Attempted to access an unloaded AppDomain.</value>
   </data>
   <data name="Arg_ApplicationException" xml:space="preserve">
     <value>Error in the application.</value>
@@ -226,6 +235,9 @@
   <data name="Arg_CannotMixComparisonInfrastructure" xml:space="preserve">
     <value>The usage of IKeyComparer and IHashCodeProvider/IComparer interfaces cannot be mixed; use one or the other.</value>
   </data>
+  <data name="Arg_CannotUnloadAppDomainException" xml:space="preserve">
+    <value>Attempt to unload the AppDomain failed.</value>
+  </data>
   <data name="Arg_CATypeResolutionFailed" xml:space="preserve">
     <value>Failed to resolve type from string "{0}" which was embedded in custom attribute blob.</value>
   </data>
@@ -266,7 +278,7 @@
     <value>Delegate to an instance method cannot have null 'this'.</value>
   </data>
   <data name="Arg_DlgtTargMeth" xml:space="preserve">
-    <value>Cannot bind to the target method because its signature or security transparency is not compatible with that of the delegate type.</value>
+    <value>Cannot bind to the target method because its signature is not compatible with that of the delegate type.</value>
   </data>
   <data name="Arg_DlgtTypeMis" xml:space="preserve">
     <value>Delegates must be of the same type.</value>
@@ -406,6 +418,9 @@
   <data name="Arg_InvalidNeutralResourcesLanguage_FallbackLoc" xml:space="preserve">
     <value>The NeutralResourcesLanguageAttribute specifies an invalid or unrecognized ultimate resource fallback location: "{0}".</value>
   </data>
+  <data name="Arg_InvalidSatelliteContract_Asm_Ver" xml:space="preserve">
+    <value>Satellite contract version attribute on the assembly '{0}' specifies an invalid version: {1}.</value>
+  </data>
   <data name="Arg_InvalidOleVariantTypeException" xml:space="preserve">
     <value>Specified OLE variant was invalid.</value>
   </data>
@@ -496,6 +511,9 @@
   <data name="Arg_MustBeDouble" xml:space="preserve">
     <value>Object must be of type Double.</value>
   </data>
+  <data name="Arg_MustBeDriveLetterOrRootDir" xml:space="preserve">
+    <value>Drive name must be a root directory (i.e. 'C:\') or a drive letter ('C').</value>
+  </data>
   <data name="Arg_MustBeEnum" xml:space="preserve">
     <value>Type provided must be an Enum.</value>
   </data>
@@ -541,6 +559,9 @@
   <data name="Arg_MustBeType" xml:space="preserve">
     <value>Type must be a type provided by the runtime.</value>
   </data>
+  <data name="Arg_MustBeTrue" xml:space="preserve">
+    <value>Argument must be true.</value>
+  </data>
   <data name="Arg_MustBeUInt16" xml:space="preserve">
     <value>Object must be of type UInt16.</value>
   </data>
@@ -584,7 +605,7 @@
     <value>Must specify binding flags describing the invoke operation required (BindingFlags.InvokeMethod CreateInstance GetField SetField GetProperty SetProperty).</value>
   </data>
   <data name="Arg_NoDefCTor" xml:space="preserve">
-    <value>No parameterless constructor defined for this object.</value>
+    <value>No parameterless constructor defined for type '{0}'.</value>
   </data>
   <data name="Arg_NoITypeInfo" xml:space="preserve">
     <value>Specified TypeInfo was invalid because it did not support the ITypeInfo interface.</value>
@@ -640,6 +661,9 @@
   <data name="Arg_OverflowException" xml:space="preserve">
     <value>Arithmetic operation resulted in an overflow.</value>
   </data>
+  <data name="Arg_OutOfMemoryException" xml:space="preserve">
+    <value>Insufficient memory to continue the execution of the program.</value>
+  </data>
   <data name="Arg_ParamName_Name" xml:space="preserve">
     <value>Parameter name: {0}</value>
   </data>
@@ -679,47 +703,17 @@
   <data name="Arg_RanksAndBounds" xml:space="preserve">
     <value>Number of lengths and lowerBounds must match.</value>
   </data>
-  <data name="Arg_ReflectionOnlyCA" xml:space="preserve">
-    <value>It is illegal to reflect on the custom attributes of a Type loaded via ReflectionOnlyGetType (see Assembly.ReflectionOnly) -- use CustomAttributeData instead.</value>
-  </data>
-  <data name="Arg_ReflectionOnlyField" xml:space="preserve">
-    <value>It is illegal to get or set the value on a field on a Type loaded via ReflectionOnlyGetType.</value>
-  </data>
-  <data name="Arg_ReflectionOnlyInvoke" xml:space="preserve">
-    <value>It is illegal to invoke a method on a Type loaded via ReflectionOnlyGetType.</value>
-  </data>
-  <data name="Arg_RegBadKeyKind" xml:space="preserve">
-    <value>The specified RegistryValueKind is an invalid value.</value>
-  </data>
   <data name="Arg_RegGetOverflowBug" xml:space="preserve">
     <value>RegistryKey.GetValue does not allow a String that has a length greater than Int32.MaxValue.</value>
   </data>
-  <data name="Arg_RegInvalidKeyName" xml:space="preserve">
-    <value>Registry key name must start with a valid base key name.</value>
-  </data>
   <data name="Arg_RegKeyNotFound" xml:space="preserve">
     <value>The specified registry key does not exist.</value>
-  </data>
-  <data name="Arg_RegKeyStrLenBug" xml:space="preserve">
-    <value>Registry key names should not be greater than 255 characters.</value>
-  </data>
-  <data name="Arg_RegSetBadArrType" xml:space="preserve">
-    <value>RegistryKey.SetValue does not support arrays of type '{0}'. Only Byte[] and String[] are supported.</value>
-  </data>
-  <data name="Arg_RegSetMismatchedKind" xml:space="preserve">
-    <value>The type of the value object did not match the specified RegistryValueKind or the object could not be properly converted.</value>
-  </data>
-  <data name="Arg_RegSetStrArrNull" xml:space="preserve">
-    <value>RegistryKey.SetValue does not allow a String[] that contains a null String reference.</value>
   </data>
   <data name="Arg_RegSubKeyValueAbsent" xml:space="preserve">
     <value>No value exists with that name.</value>
   </data>
   <data name="Arg_RegValStrLenBug" xml:space="preserve">
     <value>Registry value names should not be greater than 16,383 characters.</value>
-  </data>
-  <data name="Arg_RemoveArgNotFound" xml:space="preserve">
-    <value>Cannot remove the specified item because it was not found in the specified Collection.</value>
   </data>
   <data name="Arg_ResMgrNotResSet" xml:space="preserve">
     <value>Type parameter must refer to a subclass of ResourceSet.</value>
@@ -846,6 +840,9 @@
   </data>
   <data name="Argument_ArraysInvalid" xml:space="preserve">
     <value>Array or pointer types are not valid.</value>
+  </data>
+  <data name="Argument_AttributeNamesMustBeUnique" xml:space="preserve">
+    <value>Attribute names must be unique.</value>
   </data>
   <data name="Argument_BadAttributeOnInterfaceMethod" xml:space="preserve">
     <value>Interface method must be abstract and virtual.</value>
@@ -1159,6 +1156,18 @@
   <data name="Argument_InvalidDigitSubstitution" xml:space="preserve">
     <value>The DigitSubstitution property must be of a valid member of the DigitShapes enumeration. Valid entries include Context, NativeNational or None.</value>
   </data>
+  <data name="Argument_InvalidElementName" xml:space="preserve">
+    <value>Invalid element name '{0}'.</value>
+  </data>
+  <data name="Argument_InvalidElementTag" xml:space="preserve">
+    <value>Invalid element tag '{0}'.</value>
+  </data>
+  <data name="Argument_InvalidElementText" xml:space="preserve">
+    <value>Invalid element text '{0}'.</value>
+  </data>
+  <data name="Argument_InvalidElementValue" xml:space="preserve">
+    <value>Invalid element value '{0}'.</value>
+  </data>
   <data name="Argument_InvalidEnum" xml:space="preserve">
     <value>The Enum type should contain one and only one instance field.</value>
   </data>
@@ -1255,6 +1264,12 @@
   <data name="Argument_InvalidSerializedString" xml:space="preserve">
     <value>The specified serialized string '{0}' is not supported.</value>
   </data>
+  <data name="Argument_InvalidStartupHookSyntax" xml:space="preserve">
+    <value>The syntax of the startup hook variable was invalid.</value>
+  </data>
+  <data name="Argument_InvalidStartupHookSignature" xml:space="preserve">
+    <value>The signature of the startup hook '{0}' in assembly '{1}' was invalid. It must be 'public static void Initialize()'.</value>
+  </data>
   <data name="Argument_InvalidTimeSpanStyles" xml:space="preserve">
     <value>An undefined TimeSpanStyles value is being used.</value>
   </data>
@@ -1314,9 +1329,6 @@
   </data>
   <data name="Argument_MustBeRuntimeMethodInfo" xml:space="preserve">
     <value>MethodInfo must be a runtime MethodInfo object.</value>
-  </data>
-  <data name="Argument_MustBeRuntimeModule" xml:space="preserve">
-    <value>Module must be a runtime Module object.</value>
   </data>
   <data name="Argument_MustBeRuntimeReflectionObject" xml:space="preserve">
     <value>The object must be a runtime Reflection object.</value>
@@ -1523,7 +1535,7 @@
     <value>The DaylightTransitionStart property must not equal the DaylightTransitionEnd property.</value>
   </data>
   <data name="Argument_TypedReferenceInvalidField" xml:space="preserve">
-    <value>Field '{0}' in TypedReferences cannot be static or init only.</value>
+    <value>Field '{0}' in TypedReferences cannot be static.</value>
   </data>
   <data name="Argument_TypeIsWinRTType" xml:space="preserve">
     <value>The type must not be a Windows Runtime type.</value>
@@ -1564,9 +1576,6 @@
   <data name="Argument_UnmatchingSymScope" xml:space="preserve">
     <value>Non-matching symbol scope.</value>
   </data>
-  <data name="Argument_UnrecognizedLoaderOptimization" xml:space="preserve">
-    <value>Unrecognized LOADER_OPTIMIZATION property value.  Supported values may include "SingleDomain", "MultiDomain", "MultiDomainHost", and "NotSpecified".</value>
-  </data>
   <data name="Argument_UTCOutOfRange" xml:space="preserve">
     <value>The UTC time represented when the offset is applied must be between year 0 and 10,000.</value>
   </data>
@@ -1574,7 +1583,7 @@
     <value>The unmanaged Version information is too large to persist.</value>
   </data>
   <data name="Argument_WaitHandleNameTooLong" xml:space="preserve">
-    <value>The name '{0}' can be no more than {1} characters in length.</value>
+    <value>The length of the name exceeds the maximum limit.</value>
   </data>
   <data name="Argument_WinRTSystemRuntimeType" xml:space="preserve">
     <value>Cannot marshal type '{0}' to Windows Runtime. Only 'System.RuntimeType' is supported.</value>
@@ -1587,6 +1596,9 @@
   </data>
   <data name="ArgumentException_OtherNotArrayOfCorrectLength" xml:space="preserve">
     <value>Object is not a array with the same number of elements as the array to compare it to.</value>
+  </data>
+  <data name="ArgumentException_NotIsomorphic" xml:space="preserve">
+    <value>Object contains non-primitive or non-blittable data.</value>
   </data>
   <data name="ArgumentException_TupleIncorrectType" xml:space="preserve">
     <value>Argument must be of type {0}.</value>
@@ -1621,6 +1633,9 @@
   <data name="ArgumentNull_Buffer" xml:space="preserve">
     <value>Buffer cannot be null.</value>
   </data>
+  <data name="ArgumentNull_Child" xml:space="preserve">
+    <value>Cannot have a null child.</value>
+  </data>
   <data name="ArgumentNull_Collection" xml:space="preserve">
     <value>Collection cannot be null.</value>
   </data>
@@ -1638,9 +1653,6 @@
   </data>
   <data name="ArgumentNull_Key" xml:space="preserve">
     <value>Key cannot be null.</value>
-  </data>
-  <data name="ArgumentNull_Obj" xml:space="preserve">
-    <value>Object cannot be null.</value>
   </data>
   <data name="ArgumentNull_Path" xml:space="preserve">
     <value>Path cannot be null.</value>
@@ -1918,11 +1930,17 @@
   <data name="ArrayTypeMismatch_ConstrainedCopy" xml:space="preserve">
     <value>Array.ConstrainedCopy will only work on array types that are provably compatible, without any form of boxing, unboxing, widening, or casting of each array element.  Change the array types (i.e., copy a Derived[] to a Base[]), or use a mitigation strategy in the CER for Array.Copy's less powerful reliability contract, such as cloning the array or throwing away the potentially corrupt destination array.</value>
   </data>
-  <data name="Arugment_EmitMixedContext1" xml:space="preserve">
-    <value>Type '{0}' was loaded in the ReflectionOnly context but the AssemblyBuilder was not created as AssemblyBuilderAccess.ReflectionOnly.</value>
+  <data name="AssemblyLoadContext_Constructor_CannotInstantiateWhileUnloading" xml:space="preserve">
+    <value>Cannot instantiate AssemblyLoadContext while the current process is exiting.</value>
   </data>
-  <data name="Arugment_EmitMixedContext2" xml:space="preserve">
-    <value>Type '{0}' was not loaded in the ReflectionOnly context but the AssemblyBuilder was created as AssemblyBuilderAccess.ReflectionOnly.</value>
+  <data name="AssemblyLoadContext_Unload_CannotUnloadIfNotCollectible" xml:space="preserve">
+    <value>Cannot unload non-collectible AssemblyLoadContext.</value>
+  </data>
+  <data name="AssemblyLoadContext_Unload_AlreadyUnloaded" xml:space="preserve">
+    <value>Unload called on AssemblyLoadContext that is unloading or that was already unloaded.</value>
+  </data>
+  <data name="AssemblyLoadContext_Verify_NotUnloading" xml:space="preserve">
+    <value>AssemblyLoadContext is unloading or was already unloaded.</value>
   </data>
   <data name="AssertionFailed" xml:space="preserve">
     <value>Assertion failed.</value>
@@ -1950,6 +1968,9 @@
   </data>
   <data name="BadImageFormat_ParameterSignatureMismatch" xml:space="preserve">
     <value>The parameters and the signature of the method don't match.</value>
+  </data>
+  <data name="BadImageFormat_ResType_SerBlobMismatch" xml:space="preserve">
+    <value>The type serialized in the .resources file was not the same type that the .resources file said it contained. Expected '{0}' but read '{1}'.</value>
   </data>
   <data name="BadImageFormat_ResourceDataLengthInvalid" xml:space="preserve">
     <value>Corrupt .resources file.  The specified data length '{0}' is not a valid position in the stream.</value>
@@ -1989,69 +2010,6 @@
   </data>
   <data name="ConcurrentCollection_SyncRoot_NotSupported" xml:space="preserve">
     <value>The SyncRoot property may not be used for the synchronization of concurrent collections.</value>
-  </data>
-  <data name="ConcurrentDictionary_ArrayIncorrectType" xml:space="preserve">
-    <value>The array is multidimensional, or the type parameter for the set cannot be cast automatically to the type of the destination array.</value>
-  </data>
-  <data name="ConcurrentDictionary_ArrayNotLargeEnough" xml:space="preserve">
-    <value>The index is equal to or greater than the length of the array, or the number of elements in the dictionary is greater than the available space from index to the end of the destination array.</value>
-  </data>
-  <data name="ConcurrentDictionary_CapacityMustNotBeNegative" xml:space="preserve">
-    <value>The capacity argument must be greater than or equal to zero.</value>
-  </data>
-  <data name="ConcurrentDictionary_ConcurrencyLevelMustBePositive" xml:space="preserve">
-    <value>The concurrencyLevel argument must be positive.</value>
-  </data>
-  <data name="ConcurrentDictionary_IndexIsNegative" xml:space="preserve">
-    <value>The index argument is less than zero.</value>
-  </data>
-  <data name="ConcurrentDictionary_ItemKeyIsNull" xml:space="preserve">
-    <value>TKey is a reference type and item.Key is null.</value>
-  </data>
-  <data name="ConcurrentDictionary_KeyAlreadyExisted" xml:space="preserve">
-    <value>The key already existed in the dictionary.</value>
-  </data>
-  <data name="ConcurrentDictionary_TypeOfKeyIncorrect" xml:space="preserve">
-    <value>The key was of an incorrect type for this dictionary.</value>
-  </data>
-  <data name="ConcurrentDictionary_TypeOfValueIncorrect" xml:space="preserve">
-    <value>The value was of an incorrect type for this dictionary.</value>
-  </data>
-  <data name="event_Barrier_PhaseFinished" xml:space="preserve">
-    <value>Barrier finishing phase {1}.</value>
-  </data>
-  <data name="event_ConcurrentBag_TryPeekSteals" xml:space="preserve">
-    <value>ConcurrentBag stealing in TryPeek.</value>
-  </data>
-  <data name="event_ConcurrentBag_TryTakeSteals" xml:space="preserve">
-    <value>ConcurrentBag stealing in TryTake.</value>
-  </data>
-  <data name="event_ConcurrentDictionary_AcquiringAllLocks" xml:space="preserve">
-    <value>ConcurrentDictionary acquiring all locks on {0} bucket(s).</value>
-  </data>
-  <data name="event_ConcurrentStack_FastPopFailed" xml:space="preserve">
-    <value>Pop from ConcurrentStack spun {0} time(s).</value>
-  </data>
-  <data name="event_ConcurrentStack_FastPushFailed" xml:space="preserve">
-    <value>Push to ConcurrentStack spun {0} time(s).</value>
-  </data>
-  <data name="event_ParallelFork" xml:space="preserve">
-    <value>Task {1} entering fork/join {2}.</value>
-  </data>
-  <data name="event_ParallelInvokeBegin" xml:space="preserve">
-    <value>Beginning ParallelInvoke {2} from Task {1} for {4} actions.</value>
-  </data>
-  <data name="event_ParallelInvokeEnd" xml:space="preserve">
-    <value>Ending ParallelInvoke {2}.</value>
-  </data>
-  <data name="event_ParallelJoin" xml:space="preserve">
-    <value>Task {1} leaving fork/join {2}.</value>
-  </data>
-  <data name="event_ParallelLoopBegin" xml:space="preserve">
-    <value>Beginning {3} loop {2} from Task {1}.</value>
-  </data>
-  <data name="event_ParallelLoopEnd" xml:space="preserve">
-    <value>Ending loop {2} after {3} iterations.</value>
   </data>
   <data name="event_SpinLock_FastPathFailed" xml:space="preserve">
     <value>SpinLock beginning to spin.</value>
@@ -2354,7 +2312,7 @@
     <value>Could not find the ending brace.</value>
   </data>
   <data name="Format_GuidHexPrefix" xml:space="preserve">
-    <value>Expected hex 0x in '{0}'.</value>
+    <value>Expected 0x prefix.</value>
   </data>
   <data name="Format_GuidInvalidChar" xml:space="preserve">
     <value>Guid string should only contain hexadecimal characters.</value>
@@ -2515,6 +2473,9 @@
   <data name="InvalidOperation_CannotImportGlobalFromDifferentModule" xml:space="preserve">
     <value>Unable to import a global method or field from a different module.</value>
   </data>
+  <data name="InvalidOperation_CannotRegisterSecondResolver" xml:space="preserve">
+    <value>A resolver is already set for the assembly.</value>
+  </data>
   <data name="InvalidOperation_CannotRemoveLastFromEmptyCollection" xml:space="preserve">
     <value>Cannot remove the last element from an empty collection.</value>
   </data>
@@ -2545,14 +2506,14 @@
   <data name="InvalidOperation_CollectionCorrupted" xml:space="preserve">
     <value>A prior operation on this collection was interrupted by an exception. Collection's state is no longer trusted.</value>
   </data>
+  <data name="InvalidOperation_ComputerName" xml:space="preserve">
+    <value>Computer name could not be obtained.</value>
+  </data>
   <data name="InvalidOperation_ConcurrentOperationsNotSupported" xml:space="preserve">
     <value>Operations that change non-concurrent collections must have exclusive access. A concurrent update was performed on this collection and corrupted its state. The collection's state is no longer correct.</value>
   </data>
   <data name="InvalidOperation_ConstructorNotAllowedOnInterface" xml:space="preserve">
     <value>Interface cannot have constructors.</value>
-  </data>
-  <data name="InvalidOperation_CriticalTransparentAreMutuallyExclusive" xml:space="preserve">
-    <value>SecurityTransparent and SecurityCritical attributes cannot be applied to the assembly scope at the same time.</value>
   </data>
   <data name="InvalidOperation_DateTimeParsing" xml:space="preserve">
     <value>Internal Error in DateTime and Calendar operations.</value>
@@ -2638,9 +2599,6 @@
   <data name="InvalidOperation_NotAllowedInDynamicMethod" xml:space="preserve">
     <value>The requested operation is invalid for DynamicMethod.</value>
   </data>
-  <data name="InvalidOperation_NotAllowedInReflectionOnly" xml:space="preserve">
-    <value>The requested operation is invalid in the ReflectionOnly context.</value>
-  </data>
   <data name="InvalidOperation_NotAVarArgCallingConvention" xml:space="preserve">
     <value>Calling convention must be VarArgs.</value>
   </data>
@@ -2695,17 +2653,20 @@
   <data name="InvalidOperation_SetData_OnlyOnce" xml:space="preserve">
     <value>SetData can only be used to set the value of a given name once.</value>
   </data>
+  <data name="InvalidOperation_SetLatencyModeNoGC" xml:space="preserve">
+    <value>The NoGCRegion mode is in progress.End it and then set a different mode.</value>
+  </data>
   <data name="InvalidOperation_ShouldNotHaveMethodBody" xml:space="preserve">
     <value>Method body should not exist.</value>
-  </data>
-  <data name="InvalidOperation_StrongNameKeyPairRequired" xml:space="preserve">
-    <value>A strong name key pair is required to emit a strong-named dynamic assembly.</value>
   </data>
   <data name="InvalidOperation_ThreadWrongThreadStart" xml:space="preserve">
     <value>The thread was created with a ThreadStart delegate that does not accept a parameter.</value>
   </data>
   <data name="InvalidOperation_TimeoutsNotSupported" xml:space="preserve">
     <value>Timeouts are not supported on this stream.</value>
+  </data>
+  <data name="InvalidOperation_TimerAlreadyClosed" xml:space="preserve">
+    <value>The Timer was already closed using an incompatible Dispose method.</value>
   </data>
   <data name="InvalidOperation_TypeCannotBeBoxed" xml:space="preserve">
     <value>The given type cannot be boxed.</value>
@@ -2715,6 +2676,9 @@
   </data>
   <data name="InvalidOperation_TypeNotCreated" xml:space="preserve">
     <value>Type has not been created.</value>
+  </data>
+  <data name="InvalidOperation_UnderlyingArrayListChanged" xml:space="preserve">
+    <value>This range in the underlying list is invalid. A possible cause is that elements were removed.</value>
   </data>
   <data name="InvalidOperation_UnknownEnumType" xml:space="preserve">
     <value>Unknown enum type.</value>
@@ -2945,10 +2909,10 @@
     <value>Cannot create arrays of ByRef-like values.</value>
   </data>
   <data name="NotSupported_ByRefToByRefLikeReturn" xml:space="preserve">
-    <value>ByRef to ByRefLike return values not supported in reflection invocation.</value>
+    <value>ByRef to ByRef-like return values are not supported in reflection invocation.</value>
   </data>
   <data name="NotSupported_ByRefToVoidReturn" xml:space="preserve">
-    <value>ByRef to void return values not supported in reflection invocation.</value>
+    <value>ByRef to void return values are not supported in reflection invocation.</value>
   </data>
   <data name="NotSupported_CallToVarArg" xml:space="preserve">
     <value>Vararg calling convention not supported.</value>
@@ -2968,11 +2932,8 @@
   <data name="NotSupported_CollectibleBoundNonCollectible" xml:space="preserve">
     <value>A non-collectible assembly may not reference a collectible assembly.</value>
   </data>
-  <data name="NotSupported_CollectibleCOM" xml:space="preserve">
-    <value>COM Interop is not supported for collectible types.</value>
-  </data>
-  <data name="NotSupported_CollectibleDelegateMarshal" xml:space="preserve">
-    <value>Delegate marshaling for types within collectible assemblies is not supported.</value>
+  <data name="NotSupported_CollectibleWinRT" xml:space="preserve">
+    <value>WinRT Interop is not supported for collectible types.</value>
   </data>
   <data name="NotSupported_CreateInstanceWithTypeBuilder" xml:space="preserve">
     <value>CreateInstance cannot be used with an object of type TypeBuilder.</value>
@@ -2988,9 +2949,6 @@
   </data>
   <data name="NotSupported_DynamicAssembly" xml:space="preserve">
     <value>The invoked member is not supported in a dynamic assembly.</value>
-  </data>
-  <data name="NotSupported_DynamicAssemblyNoRunAccess" xml:space="preserve">
-    <value>Cannot execute code on a dynamic assembly without run access.</value>
   </data>
   <data name="NotSupported_DynamicMethodFlags" xml:space="preserve">
     <value>Wrong MethodAttributes or CallingConventions for DynamicMethod. Only public, static, standard supported</value>
@@ -3070,6 +3028,9 @@
   <data name="NotSupported_PIAInAppxProcess" xml:space="preserve">
     <value>A Primary Interop Assembly is not supported in AppX.</value>
   </data>
+  <data name="NotSupported_RangeCollection" xml:space="preserve">
+    <value>The specified operation is not supported on Ranges.</value>
+  </data>
   <data name="NotSupported_Reading" xml:space="preserve">
     <value>Accessor does not support reading.</value>
   </data>
@@ -3111,6 +3072,9 @@
   </data>
   <data name="NotSupported_UnknownTypeCode" xml:space="preserve">
     <value>TypeCode '{0}' was not valid.</value>
+  </data>
+  <data name="NotSupported_WaitAllSTAThread" xml:space="preserve">
+    <value>WaitAll for multiple handles on a STA thread is not supported.</value>
   </data>
   <data name="NotSupported_UnreadableStream" xml:space="preserve">
     <value>Stream does not support reading.</value>
@@ -3157,9 +3121,6 @@
   <data name="ObjectDisposed_ReaderClosed" xml:space="preserve">
     <value>Cannot read from a closed TextReader.</value>
   </data>
-  <data name="ObjectDisposed_RegKeyClosed" xml:space="preserve">
-    <value>Cannot access a closed registry key.</value>
-  </data>
   <data name="ObjectDisposed_ResourceSet" xml:space="preserve">
     <value>Cannot access a closed resource set.</value>
   </data>
@@ -3168,6 +3129,9 @@
   </data>
   <data name="ObjectDisposed_ViewAccessorClosed" xml:space="preserve">
     <value>Cannot access a closed accessor.</value>
+  </data>
+  <data name="ObjectDisposed_SafeHandleClosed" xml:space="preserve">
+    <value>Safe handle has been closed.</value>
   </data>
   <data name="OperationCanceled" xml:space="preserve">
     <value>The operation was canceled.</value>
@@ -3186,9 +3150,6 @@
   </data>
   <data name="Overflow_Decimal" xml:space="preserve">
     <value>Value was either too large or too small for a Decimal.</value>
-  </data>
-  <data name="Overflow_Double" xml:space="preserve">
-    <value>Value was either too large or too small for a Double.</value>
   </data>
   <data name="Overflow_Duration" xml:space="preserve">
     <value>The duration cannot be returned for TimeSpan.MinValue because the absolute value of TimeSpan.MinValue exceeds the value of TimeSpan.MaxValue.</value>
@@ -3210,9 +3171,6 @@
   </data>
   <data name="Overflow_SByte" xml:space="preserve">
     <value>Value was either too large or too small for a signed byte.</value>
-  </data>
-  <data name="Overflow_Single" xml:space="preserve">
-    <value>Value was either too large or too small for a Single.</value>
   </data>
   <data name="Overflow_TimeSpanElementTooLarge" xml:space="preserve">
     <value>The TimeSpan string '{0}' could not be parsed because at least one of the numeric components is out of range or contains too many digits.</value>
@@ -3262,6 +3220,30 @@
   <data name="PlatformNotSupported_OverlappedIO" xml:space="preserve">
     <value>This API is specific to the way in which Windows handles asynchronous I/O, and is not supported on this platform.</value>
   </data>
+  <data name="PlatformNotSupported_ITypeInfo" xml:space="preserve">
+    <value>Marshalling a System.Type to an unmanaged ITypeInfo or marshalling an ITypeInfo to a System.Type is not supported on this platform.</value>
+  </data>
+  <data name="PlatformNotSupported_IExpando" xml:space="preserve">
+    <value>Marshalling an IDispatchEx to an IReflect or IExpando is not supported on this platform.</value>
+  </data>
+  <data name="PlatformNotSupported_AppDomains" xml:space="preserve">
+    <value>Secondary AppDomains are not supported on this platform.</value>
+  </data>
+  <data name="PlatformNotSupported_CAS" xml:space="preserve">
+    <value>Code Access Security is not supported on this platform.</value>
+  </data>
+  <data name="PlatformNotSupported_AppDomain_ResMon" xml:space="preserve">
+    <value>AppDomain resource monitoring is not supported on this platform.</value>
+  </data>
+  <data name="PlatformNotSupported_Principal" xml:space="preserve">
+    <value>Windows Principal functionality is not supported on this platform.</value>
+  </data>
+  <data name="PlatformNotSupported_ThreadAbort" xml:space="preserve">
+    <value>Thread abort is not supported on this platform.</value>
+  </data>
+  <data name="PlatformNotSupported_ThreadSuspend" xml:space="preserve">
+    <value>Thread suspend is not supported on this platform.</value>
+  </data>
   <data name="Policy_CannotLoadSemiTrustAssembliesDuringInit" xml:space="preserve">
     <value>All assemblies loaded as part of AppDomain initialization must be fully trusted.</value>
   </data>
@@ -3283,6 +3265,9 @@
   <data name="PreconditionFailed_Cnd" xml:space="preserve">
     <value>Precondition failed: {0}</value>
   </data>
+  <data name="PersistedFiles_NoHomeDirectory" xml:space="preserve">
+    <value>The home directory of the current user could not be determined.</value>
+  </data>
   <data name="Rank_MultiDimNotSupported" xml:space="preserve">
     <value>Only single dimension arrays are supported here.</value>
   </data>
@@ -3291,9 +3276,6 @@
   </data>
   <data name="ReflectionTypeLoad_LoadFailed" xml:space="preserve">
     <value>Unable to load one or more of the requested types.</value>
-  </data>
-  <data name="Remoting_AppDomainUnloaded_ThreadUnwound" xml:space="preserve">
-    <value>The application domain in which the thread was running has been unloaded.</value>
   </data>
   <data name="ResourceReaderIsClosed" xml:space="preserve">
     <value>ResourceReader is closed.</value>
@@ -3565,6 +3547,15 @@
   <data name="TaskT_TransitionToFinal_AlreadyCompleted" xml:space="preserve">
     <value>An attempt was made to transition a task to a final state when it had already completed.</value>
   </data>
+  <data name="Thread_ApartmentState_ChangeFailed" xml:space="preserve">
+    <value>Failed to set the specified COM apartment state.</value>
+  </data>
+  <data name="Thread_GetSetCompressedStack_NotSupported" xml:space="preserve">
+    <value>Use CompressedStack.(Capture/Run) instead.</value>
+  </data>
+  <data name="Thread_Operation_RequiresCurrentThread" xml:space="preserve">
+    <value>This operation must be performed on the same thread as that represented by the Thread instance.</value>
+  </data>
   <data name="Threading_AbandonedMutexException" xml:space="preserve">
     <value>The wait completed due to an abandoned mutex.</value>
   </data>
@@ -3579,6 +3570,9 @@
   </data>
   <data name="Threading_SemaphoreFullException" xml:space="preserve">
     <value>Adding the specified count to the semaphore would cause it to exceed its maximum count.</value>
+  </data>
+  <data name="Threading_ThreadInterrupted" xml:space="preserve">
+    <value>Thread was interrupted from a waiting state.</value>
   </data>
   <data name="ThreadLocal_Disposed" xml:space="preserve">
     <value>The ThreadLocal object has been disposed.</value>
@@ -3618,12 +3612,6 @@
   </data>
   <data name="UnauthorizedAccess_RegistryKeyGeneric_Key" xml:space="preserve">
     <value>Access to the registry key '{0}' is denied.</value>
-  </data>
-  <data name="UnauthorizedAccess_RegistryNoWrite" xml:space="preserve">
-    <value>Cannot write to the registry key.</value>
-  </data>
-  <data name="UnauthorizedAccess_SystemDomain" xml:space="preserve">
-    <value>Cannot execute an assembly in the system domain.</value>
   </data>
   <data name="UnknownError_Num" xml:space="preserve">
     <value>Unknown error "{0}".</value>
@@ -3676,18 +3664,6 @@
   <data name="SynchronizationLockException_MisMatchedWrite" xml:space="preserve">
     <value>The write lock is being released without being held.</value>
   </data>
-  <data name="ConcurrentStack_PushPopRange_CountOutOfRange" xml:space="preserve">
-    <value>The count argument must be greater than or equal to zero.</value>
-  </data>
-  <data name="ConcurrentStack_PushPopRange_InvalidCount" xml:space="preserve">
-    <value>The sum of the startIndex and count arguments must be less than or equal to the collection's Count.</value>
-  </data>
-  <data name="ConcurrentStack_PushPopRange_StartOutOfRange" xml:space="preserve">
-    <value>The startIndex argument must be greater than or equal to zero.</value>
-  </data>
-  <data name="ConcurrentDictionary_SourceContainsDuplicateKeys" xml:space="preserve">
-    <value>The source argument contains duplicate keys.</value>
-  </data>
   <data name="NotSupported_SignatureType" xml:space="preserve">
     <value>This method is not supported on signature types.</value>
   </data>
@@ -3732,5 +3708,53 @@
   </data>
   <data name="Arg_MustBeNullTerminatedString" xml:space="preserve">
     <value>The string must be null-terminated.</value>
+  </data>
+  <data name="ArgumentOutOfRange_Week_ISO" xml:space="preserve">
+    <value>The week parameter must be in the range 1 through 53.</value>
+  </data>
+  <data name="Argument_BadPInvokeMethod" xml:space="preserve">
+    <value>PInvoke methods must be static and native and cannot be abstract.</value>
+  </data>
+  <data name="Argument_BadPInvokeOnInterface" xml:space="preserve">
+    <value>PInvoke methods cannot exist on interfaces.</value>
+  </data>
+  <data name="Argument_MethodRedefined" xml:space="preserve">
+    <value>Method has been already defined.</value>
+  </data>
+  <data name="Argument_CannotExtractScalar" xml:space="preserve">
+    <value>Cannot extract a Unicode scalar value from the specified index in the input.</value>
+  </data>
+  <data name="Argument_CannotParsePrecision" xml:space="preserve">
+    <value>Characters following the format symbol must be a number of {0} or less.</value>
+  </data>
+  <data name="Argument_GWithPrecisionNotSupported" xml:space="preserve">
+    <value>The 'G' format combined with a precision is not supported.</value>
+  </data>
+  <data name="Argument_PrecisionTooLarge" xml:space="preserve">
+    <value>Precision cannot be larger than {0}.</value>
+  </data>
+  <data name="AssemblyDependencyResolver_FailedToLoadHostpolicy" xml:space="preserve">
+    <value>Cannot load hostpolicy library. AssemblyDependencyResolver is currently only supported if the runtime is hosted through hostpolicy library.</value>
+  </data>
+  <data name="AssemblyDependencyResolver_FailedToResolveDependencies" xml:space="preserve">
+    <value>Dependency resolution failed for component {0} with error code {1}. Detailed error: {2}</value>
+  </data>
+  <data name="Arg_EnumNotCloneable" xml:space="preserve">
+    <value>The supplied object does not implement ICloneable.</value>
+  </data>
+  <data name="InvalidOp_InvalidNewEnumVariant" xml:space="preserve">
+    <value>The returned enumerator does not implement IEnumVARIANT.</value>
+  </data>
+  <data name="Argument_StructArrayTooLarge" xml:space="preserve">
+    <value>Array size exceeds addressing limitations.</value>
+  </data>
+  <data name="IndexOutOfRange_ArrayWithOffset" xml:space="preserve">
+    <value>ArrayWithOffset: offset exceeds array size.</value>
+  </data>
+  <data name="Serialization_DangerousDeserialization" xml:space="preserve">
+    <value>An action was attempted during deserialization that could lead to a security vulnerability. The action has been aborted.</value>
+  </data>
+  <data name="Serialization_DangerousDeserialization_Switch" xml:space="preserve">
+    <value>An action was attempted during deserialization that could lead to a security vulnerability. The action has been aborted. To allow the action, set the '{0}' AppContext switch to true.</value>
   </data>
 </root>

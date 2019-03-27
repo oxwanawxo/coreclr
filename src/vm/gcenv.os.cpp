@@ -211,11 +211,18 @@ bool GCToOSInterface::VirtualRelease(void* address, size_t size)
 //  size    - size of the virtual memory range
 // Return:
 //  true if it has succeeded, false if it has failed
-bool GCToOSInterface::VirtualCommit(void* address, size_t size)
+bool GCToOSInterface::VirtualCommit(void* address, size_t size, uint32_t node)
 {
     LIMITED_METHOD_CONTRACT;
 
-    return ::ClrVirtualAlloc(address, size, MEM_COMMIT, PAGE_READWRITE) != NULL;
+    if (node == NUMA_NODE_UNDEFINED)
+    {
+        return ::ClrVirtualAlloc(address, size, MEM_COMMIT, PAGE_READWRITE) != NULL;
+    }
+    else
+    {
+        return NumaNodeInfo::VirtualAllocExNuma(::GetCurrentProcess(), address, size, MEM_COMMIT, PAGE_READWRITE, node) != NULL;
+    }
 }
 
 // Decomit virtual memory range.
@@ -487,16 +494,21 @@ static size_t GetRestrictedPhysicalMemoryLimit()
             if ((limit_info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_WORKINGSET) != 0)
                 job_workingset_limit = limit_info.BasicLimitInformation.MaximumWorkingSetSize;
 
-            job_physical_memory_limit = min (job_memory_limit, job_process_memory_limit);
-            job_physical_memory_limit = min (job_physical_memory_limit, job_workingset_limit);
+            if ((job_memory_limit != (size_t)MAX_PTR) ||
+                (job_process_memory_limit != (size_t)MAX_PTR) ||
+                (job_workingset_limit != (size_t)MAX_PTR))
+            {
+                job_physical_memory_limit = min (job_memory_limit, job_process_memory_limit);
+                job_physical_memory_limit = min (job_physical_memory_limit, job_workingset_limit);
 
-            MEMORYSTATUSEX ms;
-            ::GetProcessMemoryLoad(&ms);
-            total_virtual = ms.ullTotalVirtual;
-            total_physical = ms.ullAvailPhys;
+                MEMORYSTATUSEX ms;
+                ::GetProcessMemoryLoad(&ms);
+                total_virtual = ms.ullTotalVirtual;
+                total_physical = ms.ullAvailPhys;
 
-            // A sanity check in case someone set a larger limit than there is actual physical memory.
-            job_physical_memory_limit = (size_t) min (job_physical_memory_limit, ms.ullTotalPhys);
+                // A sanity check in case someone set a larger limit than there is actual physical memory.
+                job_physical_memory_limit = (size_t) min (job_physical_memory_limit, ms.ullTotalPhys);
+            }
         }
     }
 
@@ -566,13 +578,28 @@ static size_t GetRestrictedPhysicalMemoryLimit()
 // Get the physical memory that this process can use.
 // Return:
 //  non zero if it has succeeded, 0 if it has failed
-uint64_t GCToOSInterface::GetPhysicalMemoryLimit()
+//
+// PERF TODO: Requires more work to not treat the restricted case to be special. 
+// To be removed before 3.0 ships.
+uint64_t GCToOSInterface::GetPhysicalMemoryLimit(bool* is_restricted)
 {
     LIMITED_METHOD_CONTRACT;
 
+    if (is_restricted)
+        *is_restricted = false;
+
     size_t restricted_limit = GetRestrictedPhysicalMemoryLimit();
     if (restricted_limit != 0)
+    {
+        if (is_restricted 
+#ifndef FEATURE_PAL
+            && !g_UseRestrictedVirtualMemory
+#endif
+            )
+            *is_restricted = true;
+
         return restricted_limit;
+    }
 
     MEMORYSTATUSEX memStatus;
     ::GetProcessMemoryLoad(&memStatus);
@@ -605,7 +632,7 @@ void GCToOSInterface::GetMemoryStatus(uint32_t* memory_load, uint64_t* available
             workingSetSize = pmc.WorkingSetSize;
         }
 #else
-        status = PAL_GetWorkingSetSize(&workingSetSize);
+        status = PAL_GetPhysicalMemoryUsed(&workingSetSize);
 #endif
         if(status)
         {
@@ -708,7 +735,42 @@ uint32_t GCToOSInterface::GetTotalProcessorCount()
 {
     LIMITED_METHOD_CONTRACT;
 
-    return g_SystemInfo.dwNumberOfProcessors;
+    if (CPUGroupInfo::CanEnableGCCPUGroups())
+    {
+        return CPUGroupInfo::GetNumActiveProcessors();
+    }
+    else
+    {
+        return g_SystemInfo.dwNumberOfProcessors;
+    }
+}
+
+bool GCToOSInterface::CanEnableGCNumaAware()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    return NumaNodeInfo::CanEnableGCNumaAware() != FALSE;
+}
+
+bool GCToOSInterface::GetNumaProcessorNode(PPROCESSOR_NUMBER proc_no, uint16_t *node_no)
+{
+    LIMITED_METHOD_CONTRACT;
+
+    return NumaNodeInfo::GetNumaProcessorNodeEx(proc_no, node_no) != FALSE;
+}
+
+bool GCToOSInterface::CanEnableGCCPUGroups()
+{
+    LIMITED_METHOD_CONTRACT;
+
+    return CPUGroupInfo::CanEnableGCCPUGroups() != FALSE;
+}
+
+void GCToOSInterface::GetGroupForProcessor(uint16_t processor_number, uint16_t* group_number, uint16_t* group_processor_number)
+{
+    LIMITED_METHOD_CONTRACT;
+
+    return CPUGroupInfo::GetGroupForProcessor(processor_number, group_number, group_processor_number);
 }
 
 // Initialize the critical section

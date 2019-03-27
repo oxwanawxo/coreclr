@@ -124,25 +124,6 @@ namespace System.Reflection
         #endregion
 
         #region Internal Members
-        internal override string FormatNameAndSig(bool serialization)
-        {
-            // Serialization uses ToString to resolve MethodInfo overloads.
-            StringBuilder sbName = new StringBuilder(Name);
-
-            // serialization == true: use unambiguous (except for assembly name) type names to distinguish between overloads.
-            // serialization == false: use basic format to maintain backward compatibility of MethodInfo.ToString().
-            TypeNameFormatFlags format = serialization ? TypeNameFormatFlags.FormatSerialization : TypeNameFormatFlags.FormatBasic;
-
-            if (IsGenericMethod)
-                sbName.Append(RuntimeMethodHandle.ConstructInstantiation(this, format));
-
-            sbName.Append("(");
-            sbName.Append(ConstructParameters(GetParameterTypes(), CallingConvention, serialization));
-            sbName.Append(")");
-
-            return sbName.ToString();
-        }
-
         internal override bool CacheEquals(object o)
         {
             RuntimeMethodInfo m = o as RuntimeMethodInfo;
@@ -194,10 +175,25 @@ namespace System.Reflection
         #endregion
 
         #region Object Overrides
-        public override String ToString()
+        public override string ToString()
         {
             if (m_toString == null)
-                m_toString = ReturnType.FormatTypeName() + " " + FormatNameAndSig();
+            {
+                var sbName = new ValueStringBuilder(MethodNameBufferSize);
+
+                sbName.Append(ReturnType.FormatTypeName());
+                sbName.Append(' ');
+                sbName.Append(Name);
+
+                if (IsGenericMethod)
+                    sbName.Append(RuntimeMethodHandle.ConstructInstantiation(this, TypeNameFormatFlags.FormatBasic));
+
+                sbName.Append('(');
+                AppendParameters(ref sbName, GetParameterTypes(), CallingConvention);
+                sbName.Append(')');
+
+                m_toString = sbName.ToString();
+            }
 
             return m_toString;
         }
@@ -255,12 +251,12 @@ namespace System.Reflection
         #endregion
 
         #region ICustomAttributeProvider
-        public override Object[] GetCustomAttributes(bool inherit)
+        public override object[] GetCustomAttributes(bool inherit)
         {
-            return CustomAttribute.GetCustomAttributes(this, typeof(object) as RuntimeType as RuntimeType, inherit);
+            return CustomAttribute.GetCustomAttributes(this, typeof(object) as RuntimeType, inherit);
         }
 
-        public override Object[] GetCustomAttributes(Type attributeType, bool inherit)
+        public override object[] GetCustomAttributes(Type attributeType, bool inherit)
         {
             if (attributeType == null)
                 throw new ArgumentNullException(nameof(attributeType));
@@ -293,7 +289,7 @@ namespace System.Reflection
         #endregion
 
         #region MemberInfo Overrides
-        public override String Name
+        public override string Name
         {
             get
             {
@@ -369,7 +365,7 @@ namespace System.Reflection
 
             ParameterInfo[] ret = new ParameterInfo[m_parameters.Length];
 
-            Array.Copy(m_parameters, ret, m_parameters.Length);
+            Array.Copy(m_parameters, 0, ret, 0, m_parameters.Length);
 
             return ret;
         }
@@ -383,9 +379,6 @@ namespace System.Reflection
         {
             get
             {
-                Type declaringType = DeclaringType;
-                if ((declaringType == null && Module.Assembly.ReflectionOnly) || declaringType is ReflectionOnlyType)
-                    throw new InvalidOperationException(SR.InvalidOperation_NotAllowedInReflectionOnly);
                 return new RuntimeMethodHandle(this);
             }
         }
@@ -402,15 +395,15 @@ namespace System.Reflection
 
         public override MethodBody GetMethodBody()
         {
-            MethodBody mb = RuntimeMethodHandle.GetMethodBody(this, ReflectedTypeInternal);
+            RuntimeMethodBody mb = RuntimeMethodHandle.GetMethodBody(this, ReflectedTypeInternal);
             if (mb != null)
-                mb.m_methodBase = this;
+                mb._methodBase = this;
             return mb;
         }
         #endregion
 
         #region Invocation Logic(On MemberBase)
-        private void CheckConsistency(Object target)
+        private void CheckConsistency(object target)
         {
             // only test instance methods
             if ((m_methodAttributes & MethodAttributes.Static) != MethodAttributes.Static)
@@ -427,14 +420,8 @@ namespace System.Reflection
 
         private void ThrowNoInvokeException()
         {
-            // method is ReflectionOnly
-            Type declaringType = DeclaringType;
-            if ((declaringType == null && Module.Assembly.ReflectionOnly) || declaringType is ReflectionOnlyType)
-            {
-                throw new InvalidOperationException(SR.Arg_ReflectionOnlyInvoke);
-            }
             // method is on a class that contains stack pointers
-            else if ((InvocationFlags & INVOCATION_FLAGS.INVOCATION_FLAGS_CONTAINS_STACK_POINTERS) != 0)
+            if ((InvocationFlags & INVOCATION_FLAGS.INVOCATION_FLAGS_CONTAINS_STACK_POINTERS) != 0)
             {
                 throw new NotSupportedException();
             }
@@ -467,7 +454,7 @@ namespace System.Reflection
 
         [DebuggerStepThroughAttribute]
         [Diagnostics.DebuggerHidden]
-        public override Object Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+        public override object Invoke(object obj, BindingFlags invokeAttr, Binder binder, object[] parameters, CultureInfo culture)
         {
             object[] arguments = InvokeArgumentsCheck(obj, invokeAttr, binder, parameters, culture);
 
@@ -476,7 +463,7 @@ namespace System.Reflection
                 return RuntimeMethodHandle.InvokeMethod(obj, null, Signature, false, wrapExceptions);
             else
             {
-                Object retValue = RuntimeMethodHandle.InvokeMethod(obj, arguments, Signature, false, wrapExceptions);
+                object retValue = RuntimeMethodHandle.InvokeMethod(obj, arguments, Signature, false, wrapExceptions);
 
                 // copy out. This should be made only if ByRef are present.
                 for (int index = 0; index < arguments.Length; index++)
@@ -488,7 +475,7 @@ namespace System.Reflection
 
         [DebuggerStepThroughAttribute]
         [Diagnostics.DebuggerHidden]
-        private object[] InvokeArgumentsCheck(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+        private object[] InvokeArgumentsCheck(object obj, BindingFlags invokeAttr, Binder binder, object[] parameters, CultureInfo culture)
         {
             Signature sig = Signature;
 
@@ -538,6 +525,8 @@ namespace System.Reflection
             }
         }
 
+        public override bool IsCollectible => RuntimeMethodHandle.GetIsCollectible(new RuntimeMethodHandleInternal(m_handle));
+
         public override MethodInfo GetBaseDefinition()
         {
             if (!IsVirtual || IsStatic || m_declaringType == null || m_declaringType.IsInterface)
@@ -580,7 +569,7 @@ namespace System.Reflection
                 DelegateBindingFlags.OpenDelegateOnly | DelegateBindingFlags.RelaxedSignature);
         }
 
-        public override Delegate CreateDelegate(Type delegateType, Object target)
+        public override Delegate CreateDelegate(Type delegateType, object target)
         {
             // This API is new in Whidbey and allows the full range of delegate
             // flexability (open or closed delegates binding to static or
@@ -593,7 +582,7 @@ namespace System.Reflection
                 DelegateBindingFlags.RelaxedSignature);
         }
 
-        private Delegate CreateDelegateInternal(Type delegateType, Object firstArgument, DelegateBindingFlags bindingFlags)
+        private Delegate CreateDelegateInternal(Type delegateType, object firstArgument, DelegateBindingFlags bindingFlags)
         {
             // Validate the parameters.
             if (delegateType == null)

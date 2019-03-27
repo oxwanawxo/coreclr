@@ -38,12 +38,11 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         {
             object _this = Unsafe.As<object>(this);
 
-            IMapView<K, V> _this_map = _this as IMapView<K, V>;
-            if (_this_map != null)
+            if (_this is IMapView<K, V> _this_map)
             {
                 uint size = _this_map.Size;
 
-                if (((uint)Int32.MaxValue) < size)
+                if (((uint)int.MaxValue) < size)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingDictionaryTooLarge);
                 }
@@ -55,7 +54,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
                 IVectorView<KeyValuePair<K, V>> _this_vector = Unsafe.As<IVectorView<KeyValuePair<K, V>>>(this);
                 uint size = _this_vector.Size;
 
-                if (((uint)Int32.MaxValue) < size)
+                if (((uint)int.MaxValue) < size)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingListTooLarge);
                 }

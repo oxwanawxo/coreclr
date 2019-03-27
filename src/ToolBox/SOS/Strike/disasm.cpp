@@ -530,7 +530,7 @@ INT_PTR ParseHexNumber (__in_z char *ptr, ___out char **endptr)
         endptr1 = endptr2;
     }
     // if the hex number was specified as 000006fbf9b70f50, an overflow occurred
-    else if (ULONG_MAX == value1 && errno == ERANGE)
+    else if ((INT_PTR)ULONG_MAX == value1 && errno == ERANGE)
     {
         if (!strncmp(ptr, "0x", 2))
             ptr += 2;
@@ -873,8 +873,6 @@ void PrintNativeStack(DWORD_PTR ip, BOOL bSuppressLines)
 // Return TRUE if we have printed something.
 BOOL PrintCallInfo(DWORD_PTR vEBP, DWORD_PTR IP, DumpStackFlag& DSFlag, BOOL bSymbolOnly)
 {
-    char Symbol[1024];
-    char filename[MAX_PATH_FNAME+1];
     ULONG64 Displacement;
     BOOL bOutput = FALSE;
 

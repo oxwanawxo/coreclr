@@ -15,17 +15,15 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 #pragma hdrstop
 #endif
 
-#ifndef LEGACY_BACKEND // This file is ONLY used for the RyuJIT backend that uses the linear scan register allocator.
-
 #ifdef _TARGET_XARCH_
+#ifdef FEATURE_SIMD
+
 #include "emit.h"
 #include "codegen.h"
 #include "sideeffects.h"
 #include "lower.h"
 #include "gcinfo.h"
 #include "gcinfoencoder.h"
-
-#ifdef FEATURE_SIMD
 
 // Instruction immediates
 
@@ -732,9 +730,11 @@ void CodeGen::genSIMDScalarMove(
 
 void CodeGen::genSIMDZero(var_types targetType, var_types baseType, regNumber targetReg)
 {
-    // pxor reg, reg
-    instruction ins = getOpForSIMDIntrinsic(SIMDIntrinsicBitwiseXor, baseType);
-    inst_RV_RV(ins, targetReg, targetReg, targetType, emitActualTypeSize(targetType));
+    // We just use `INS_xorps` instead of `getOpForSIMDIntrinsic(SIMDIntrinsicBitwiseXor, baseType)`
+    // since `genSIMDZero` is used for both `System.Numerics.Vectors` and HardwareIntrinsics. Modern
+    // CPUs handle this specially in the renamer and it never hits the execution pipeline, additionally
+    // `INS_xorps` is always available (when using either the legacy or VEX encoding).
+    inst_RV_RV(INS_xorps, targetReg, targetReg, targetType, emitActualTypeSize(targetType));
 }
 
 //------------------------------------------------------------------------
@@ -2234,7 +2234,7 @@ void CodeGen::genSIMDIntrinsicDotProduct(GenTreeSIMD* simdNode)
             // tmp = v0
             // tmp = shuffle(tmp, tmp, SHUFFLE_XYZW)          // tmp = (0+1, 1+0, 2+3, 3+2)
             // v0 = v0 + tmp                                  // v0  = (0+1+2+3, 0+1+2+3, 0+1+2+3, 0+1+2+3)
-            //                                                // Essentially horizontal addtion of all elements.
+            //                                                // Essentially horizontal addition of all elements.
             //                                                // We could achieve the same using SSEv3 instruction
             //                                                // HADDPS.
             //
@@ -2895,7 +2895,7 @@ void CodeGen::genStoreLclTypeSIMD12(GenTree* treeNode)
     unsigned varNum = treeNode->gtLclVarCommon.gtLclNum;
     assert(varNum < compiler->lvaCount);
 
-    if (treeNode->OperGet() == GT_LCL_FLD)
+    if (treeNode->OperGet() == GT_STORE_LCL_FLD)
     {
         offs = treeNode->gtLclFld.gtLclOffs;
     }
@@ -3093,7 +3093,7 @@ void CodeGen::genSIMDIntrinsicUpperRestore(GenTreeSIMD* simdNode)
 
 //------------------------------------------------------------------------
 // genSIMDIntrinsic: Generate code for a SIMD Intrinsic.  This is the main
-// routine which in turn calls apropriate genSIMDIntrinsicXXX() routine.
+// routine which in turn calls appropriate genSIMDIntrinsicXXX() routine.
 //
 // Arguments:
 //    simdNode - The GT_SIMD node
@@ -3209,4 +3209,3 @@ void CodeGen::genSIMDIntrinsic(GenTreeSIMD* simdNode)
 
 #endif // FEATURE_SIMD
 #endif //_TARGET_XARCH_
-#endif // !LEGACY_BACKEND

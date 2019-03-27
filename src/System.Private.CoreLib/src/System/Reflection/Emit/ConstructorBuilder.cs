@@ -2,18 +2,10 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-// 
+using System.Globalization;
 
 namespace System.Reflection.Emit
 {
-    using System;
-    using System.Reflection;
-    using CultureInfo = System.Globalization.CultureInfo;
-    using System.Collections.Generic;
-    using System.Diagnostics.SymbolStore;
-    using System.Security;
-    using System.Runtime.InteropServices;
-
     public sealed class ConstructorBuilder : ConstructorInfo
     {
         private readonly MethodBuilder m_methodBuilder;
@@ -21,7 +13,7 @@ namespace System.Reflection.Emit
 
         #region Constructor
 
-        internal ConstructorBuilder(String name, MethodAttributes attributes, CallingConventions callingConvention,
+        internal ConstructorBuilder(string name, MethodAttributes attributes, CallingConventions callingConvention,
             Type[] parameterTypes, Type[][] requiredCustomModifiers, Type[][] optionalCustomModifiers, ModuleBuilder mod, TypeBuilder type)
         {
             int sigLength;
@@ -38,7 +30,7 @@ namespace System.Reflection.Emit
             token = m_methodBuilder.GetToken();
         }
 
-        internal ConstructorBuilder(String name, MethodAttributes attributes, CallingConventions callingConvention,
+        internal ConstructorBuilder(string name, MethodAttributes attributes, CallingConventions callingConvention,
             Type[] parameterTypes, ModuleBuilder mod, TypeBuilder type) :
             this(name, attributes, callingConvention, parameterTypes, null, null, mod, type)
         {
@@ -59,7 +51,7 @@ namespace System.Reflection.Emit
         #endregion
 
         #region Object Overrides
-        public override String ToString()
+        public override string ToString()
         {
             return m_methodBuilder.ToString();
         }
@@ -87,7 +79,7 @@ namespace System.Reflection.Emit
             get { return m_methodBuilder.DeclaringType; }
         }
 
-        public override String Name
+        public override string Name
         {
             get { return m_methodBuilder.Name; }
         }
@@ -95,7 +87,7 @@ namespace System.Reflection.Emit
         #endregion
 
         #region MethodBase Overrides
-        public override Object Invoke(Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+        public override object Invoke(object obj, BindingFlags invokeAttr, Binder binder, object[] parameters, CultureInfo culture)
         {
             throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
@@ -124,7 +116,7 @@ namespace System.Reflection.Emit
         #endregion
 
         #region ConstructorInfo Overrides
-        public override Object Invoke(BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+        public override object Invoke(BindingFlags invokeAttr, Binder binder, object[] parameters, CultureInfo culture)
         {
             throw new NotSupportedException(SR.NotSupported_DynamicModule);
         }
@@ -132,12 +124,12 @@ namespace System.Reflection.Emit
         #endregion
 
         #region ICustomAttributeProvider Implementation
-        public override Object[] GetCustomAttributes(bool inherit)
+        public override object[] GetCustomAttributes(bool inherit)
         {
             return m_methodBuilder.GetCustomAttributes(inherit);
         }
 
-        public override Object[] GetCustomAttributes(Type attributeType, bool inherit)
+        public override object[] GetCustomAttributes(Type attributeType, bool inherit)
         {
             return m_methodBuilder.GetCustomAttributes(attributeType, inherit);
         }
@@ -155,7 +147,7 @@ namespace System.Reflection.Emit
             return m_methodBuilder.GetToken();
         }
 
-        public ParameterBuilder DefineParameter(int iSequence, ParameterAttributes attributes, String strParamName)
+        public ParameterBuilder DefineParameter(int iSequence, ParameterAttributes attributes, string strParamName)
         {
             // Theoretically we shouldn't allow iSequence to be 0 because in reflection ctors don't have 
             // return parameters. But we'll allow it for backward compatibility with V2. The attributes 
@@ -204,7 +196,7 @@ namespace System.Reflection.Emit
             return m_methodBuilder.ReturnType;
         }
 
-        public String Signature
+        public string Signature
         {
             get { return m_methodBuilder.Signature; }
         }

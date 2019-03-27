@@ -113,10 +113,6 @@ GVAL_IMPL_INIT(DWORD, g_fHostConfig, 0);
 
 GVAL_IMPL_INIT(GCHeapType, g_heap_type, GC_HEAP_WKS);
 
-void UpdateGCSettingFromHost()
-{
-}
-
 HRESULT GetExceptionHResult(OBJECTREF throwable)
 {
     return E_FAIL;
@@ -235,11 +231,6 @@ ClassID TypeHandleToClassID(TypeHandle th)
 // Stubed-out implementations of functions that can do anything useful only when we are actually running managed code
 //
 
-MethodTable *Object::GetTrueMethodTable()
-{
-    UNREACHABLE();
-}
-
 FuncPtrStubs::FuncPtrStubs()
     : m_hashTableCrst(CrstFuncPtrStubs, CRST_UNSAFE_ANYMODE)
 {
@@ -277,11 +268,6 @@ CORINFO_GENERIC_HANDLE JIT_GenericHandleWorker(MethodDesc *  pMD, MethodTable * 
 }
 
 void CrawlFrame::GetExactGenericInstantiations(Instantiation *pClassInst, Instantiation *pMethodInst)
-{
-    UNREACHABLE();
-}
-
-OBJECTREF AppDomain::GetExposedObject()
 {
     UNREACHABLE();
 }
@@ -377,15 +363,19 @@ extern "C" UINT_PTR STDCALL GetCurrentIP()
     return 0;
 }
 
-void EEPolicy::HandleFatalError(UINT exitCode, UINT_PTR address, LPCWSTR pszMessage, PEXCEPTION_POINTERS pExceptionInfo, LPCWSTR errorSource, LPCWSTR argExceptionString)
+// This method must return a value to avoid getting non-actionable dumps on x86.
+// If this method were a DECLSPEC_NORETURN then dumps would not provide the necessary
+// context at the point of the failure
+int NOINLINE EEPolicy::HandleFatalError(UINT exitCode, UINT_PTR address, LPCWSTR pszMessage, PEXCEPTION_POINTERS pExceptionInfo, LPCWSTR errorSource, LPCWSTR argExceptionString)
 { 
     fprintf(stderr, "Fatal error: %08x\n", exitCode);
     ExitProcess(exitCode);
+    return -1;
 }
 
 //---------------------------------------------------------------------------------------
 
-Assembly * AppDomain::RaiseAssemblyResolveEvent(AssemblySpec * pSpec, BOOL fIntrospection, BOOL fPreBind)
+Assembly * AppDomain::RaiseAssemblyResolveEvent(AssemblySpec * pSpec)
 {
     return NULL;
 }
@@ -402,9 +392,4 @@ DomainAssembly * AppDomain::RaiseTypeResolveEventThrowing(DomainAssembly* pAssem
 
 void AppDomain::RaiseLoadingAssemblyEvent(DomainAssembly *pAssembly)
 {
-}
-
-BOOL AppDomain::BindingByManifestFile()
-{
-    return FALSE;
 }

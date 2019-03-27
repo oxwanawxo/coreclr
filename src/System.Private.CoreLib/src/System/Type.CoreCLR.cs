@@ -22,24 +22,24 @@ namespace System
         }
 
         [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod
-        public static Type GetType(String typeName, bool throwOnError, bool ignoreCase)
+        public static Type GetType(string typeName, bool throwOnError, bool ignoreCase)
         {
             StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
-            return RuntimeType.GetType(typeName, throwOnError, ignoreCase, false, ref stackMark);
+            return RuntimeType.GetType(typeName, throwOnError, ignoreCase, ref stackMark);
         }
 
         [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod
-        public static Type GetType(String typeName, bool throwOnError)
+        public static Type GetType(string typeName, bool throwOnError)
         {
             StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
-            return RuntimeType.GetType(typeName, throwOnError, false, false, ref stackMark);
+            return RuntimeType.GetType(typeName, throwOnError, false, ref stackMark);
         }
 
         [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod
-        public static Type GetType(String typeName)
+        public static Type GetType(string typeName)
         {
             StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
-            return RuntimeType.GetType(typeName, false, false, false, ref stackMark);
+            return RuntimeType.GetType(typeName, false, false, ref stackMark);
         }
 
         [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod
@@ -84,7 +84,7 @@ namespace System
         //   param progID:     the progID of the class to retrieve
         //   returns:          the class object associated to the progID
         ////
-        public static Type GetTypeFromProgID(String progID, String server, bool throwOnError)
+        public static Type GetTypeFromProgID(string progID, string server, bool throwOnError)
         {
             return RuntimeType.GetTypeFromProgIDImpl(progID, server, throwOnError);
         }
@@ -96,7 +96,7 @@ namespace System
         //   param CLSID:      the CLSID of the class to retrieve
         //   returns:          the class object associated to the CLSID
         ////
-        public static Type GetTypeFromCLSID(Guid clsid, String server, bool throwOnError)
+        public static Type GetTypeFromCLSID(Guid clsid, string server, bool throwOnError)
         {
             return RuntimeType.GetTypeFromCLSIDImpl(clsid, server, throwOnError);
         }
@@ -142,12 +142,7 @@ namespace System
 #endif // FEATURE_COMINTEROP
 
         // This is only ever called on RuntimeType objects.
-        internal string FormatTypeName()
-        {
-            return FormatTypeName(false);
-        }
-
-        internal virtual string FormatTypeName(bool serialization)
+        internal virtual string FormatTypeName()
         {
             throw new NotImplementedException();
         }

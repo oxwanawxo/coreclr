@@ -26,8 +26,8 @@ extern int doParallelSuperPMI(CommandLine::Options& o);
 // There must be a single, fixed prefix common to all strings, to ease the determination of when
 // to parse the string fully.
 const char* const g_AllFormatStringFixedPrefix  = "Loaded ";
-const char* const g_SummaryFormatString         = "Loaded %d  Jitted %d  FailedCompile %d";
-const char* const g_AsmDiffsSummaryFormatString = "Loaded %d  Jitted %d  FailedCompile %d  Diffs %d";
+const char* const g_SummaryFormatString         = "Loaded %d  Jitted %d  FailedCompile %d Excluded %d";
+const char* const g_AsmDiffsSummaryFormatString = "Loaded %d  Jitted %d  FailedCompile %d Excluded %d Diffs %d";
 
 //#define SuperPMI_ChewMemory 0x7FFFFFFF //Amount of address space to consume on startup
 
@@ -129,7 +129,7 @@ int __cdecl main(int argc, char* argv[])
     if (0 != PAL_Initialize(argc, argv))
     {
         fprintf(stderr, "Error: Fail to PAL_Initialize\n");
-        return -1;
+        return (int)SpmiResult::GeneralFailure;
     }
 #endif // FEATURE_PAL
 
@@ -165,7 +165,7 @@ int __cdecl main(int argc, char* argv[])
     CommandLine::Options o;
     if (!CommandLine::Parse(argc, argv, &o))
     {
-        return -1;
+        return (int)SpmiResult::GeneralFailure;
     }
 
     if (o.parallel)
@@ -228,7 +228,7 @@ int __cdecl main(int argc, char* argv[])
         new MethodContextReader(o.nameOfInputMethodContextFile, o.indexes, o.indexCount, o.hash, o.offset, o.increment);
     if (!reader->isValid())
     {
-        return -1;
+        return (int)SpmiResult::GeneralFailure;
     }
 
     int loadedCount       = 0;
@@ -238,6 +238,7 @@ int __cdecl main(int argc, char* argv[])
     int errorCount        = 0;
     int missingCount      = 0;
     int index             = 0;
+    int excludedCount     = 0;
 
     st1.Start();
     NearDiffer nearDiffer(o.targetArchitecture, o.useCoreDisTools);
@@ -246,7 +247,7 @@ int __cdecl main(int argc, char* argv[])
     {
         if (!nearDiffer.InitAsmDiff())
         {
-            return -1;
+            return (int)SpmiResult::GeneralFailure;
         }
     }
 
@@ -255,7 +256,7 @@ int __cdecl main(int argc, char* argv[])
         MethodContextBuffer mcb = reader->GetNextMethodContext();
         if (mcb.Error())
         {
-            return -1;
+            return (int)SpmiResult::GeneralFailure;
         }
         else if (mcb.allDone())
         {
@@ -284,7 +285,17 @@ int __cdecl main(int argc, char* argv[])
 
         loadedCount++;
         if (!MethodContext::Initialize(loadedCount, mcb.buff, mcb.size, &mc))
-            return -1;
+        {
+            return (int)SpmiResult::GeneralFailure;
+        }
+
+        if (reader->IsMethodExcluded(mc))
+        {
+            excludedCount++;
+            LogInfo("main method %d of size %d with was excluded from the compilation.",
+                    reader->GetMethodContextIndex(), mc->methodSize);
+            continue;
+        }
 
         if (jit == nullptr)
         {
@@ -294,7 +305,7 @@ int __cdecl main(int argc, char* argv[])
             if (jit == nullptr)
             {
                 // InitJit already printed a failure message
-                return -2;
+                return (int)SpmiResult::JitFailedToInit;
             }
 
             if (o.nameOfJit2 != nullptr)
@@ -304,7 +315,7 @@ int __cdecl main(int argc, char* argv[])
                 if (jit2 == nullptr)
                 {
                     // InitJit already printed a failure message
-                    return -2;
+                    return (int)SpmiResult::JitFailedToInit;
                 }
             }
         }
@@ -318,7 +329,7 @@ int __cdecl main(int argc, char* argv[])
         mc->cr         = new CompileResult();
         mc->originalCR = crl;
 
-        if (mc->wasEnviromentChanged())
+        if (mc->WasEnvironmentChanged(jit->getEnvironment()))
         {
             if (!jit->resetConfig(mc))
             {
@@ -520,13 +531,13 @@ int __cdecl main(int argc, char* argv[])
                     if (hFileOut == INVALID_HANDLE_VALUE)
                     {
                         LogError("Failed to open output '%s'. GetLastError()=%u", buff, GetLastError());
-                        return -1;
+                        return (int)SpmiResult::GeneralFailure;
                     }
                     mc->saveToFile(hFileOut);
                     if (CloseHandle(hFileOut) == 0)
                     {
                         LogError("CloseHandle for output file failed. GetLastError()=%u", GetLastError());
-                        return -1;
+                        return (int)SpmiResult::GeneralFailure;
                     }
                     LogInfo("Wrote out repro to '%s'", buff);
                 }
@@ -552,12 +563,12 @@ int __cdecl main(int argc, char* argv[])
     // NOTE: these output status strings are parsed by parallelsuperpmi.cpp::ProcessChildStdOut().
     if (o.applyDiff)
     {
-        LogInfo(g_AsmDiffsSummaryFormatString, loadedCount, jittedCount, failToReplayCount,
+        LogInfo(g_AsmDiffsSummaryFormatString, loadedCount, jittedCount, failToReplayCount, excludedCount,
                 jittedCount - failToReplayCount - matchCount);
     }
     else
     {
-        LogInfo(g_SummaryFormatString, loadedCount, jittedCount, failToReplayCount);
+        LogInfo(g_SummaryFormatString, loadedCount, jittedCount, failToReplayCount, excludedCount);
     }
 
     st2.Stop();
@@ -578,28 +589,20 @@ int __cdecl main(int argc, char* argv[])
     }
     Logger::Shutdown();
 
-    enum Result
-    {
-        Success,
-        Error,
-        Diffs,
-        Misses
-    };
-
-    Result result = Success;
+    SpmiResult result = SpmiResult::Success;
 
     if (errorCount > 0)
     {
-        result = Error;
+        result = SpmiResult::Error;
     }
     else if (o.applyDiff && matchCount != jittedCount)
     {
-        result = Diffs;
+        result = SpmiResult::Diffs;
     }
     else if (missingCount > 0)
     {
-        result = Misses;
+        result = SpmiResult::Misses;
     }
 
-    return result;
+    return (int)result;
 }

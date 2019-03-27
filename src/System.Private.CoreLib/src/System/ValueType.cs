@@ -22,22 +22,22 @@ namespace System
     [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")] 
     public abstract class ValueType
     {
-        public override bool Equals(Object obj)
+        public override bool Equals(object obj)
         {
             if (null == obj)
             {
                 return false;
             }
-            RuntimeType thisType = (RuntimeType)this.GetType();
-            RuntimeType thatType = (RuntimeType)obj.GetType();
+            Type thisType = this.GetType();
+            Type thatType = obj.GetType();
 
             if (thatType != thisType)
             {
                 return false;
             }
 
-            Object thisObj = (Object)this;
-            Object thisResult, thatResult;
+            object thisObj = (object)this;
+            object thisResult, thatResult;
 
             // if there are no GC references in this object we can avoid reflection 
             // and do a fast memcmp
@@ -48,8 +48,8 @@ namespace System
 
             for (int i = 0; i < thisFields.Length; i++)
             {
-                thisResult = ((RtFieldInfo)thisFields[i]).UnsafeGetValue(thisObj);
-                thatResult = ((RtFieldInfo)thisFields[i]).UnsafeGetValue(obj);
+                thisResult = thisFields[i].GetValue(thisObj);
+                thatResult = thisFields[i].GetValue(obj);
 
                 if (thisResult == null)
                 {
@@ -67,10 +67,10 @@ namespace System
         }
 
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
-        private static extern bool CanCompareBits(Object obj);
+        private static extern bool CanCompareBits(object obj);
 
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
-        private static extern bool FastEqualsCheck(Object a, Object b);
+        private static extern bool FastEqualsCheck(object a, object b);
 
         /*=================================GetHashCode==================================
         **Action: Our algorithm for returning the hashcode is a little bit complex.  We look
@@ -88,7 +88,7 @@ namespace System
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
         internal static extern int GetHashCodeOfPtr(IntPtr ptr);
 
-        public override String ToString()
+        public override string ToString()
         {
             return this.GetType().ToString();
         }

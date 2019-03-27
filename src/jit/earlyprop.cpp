@@ -115,7 +115,10 @@ GenTree* Compiler::getObjectHandleNodeFromAllocation(GenTree* tree)
         {
             if (call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_NEWFAST) ||
                 call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_NEWSFAST) ||
+                call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_NEWSFAST_FINALIZE) ||
                 call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_NEWSFAST_ALIGN8) ||
+                call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_NEWSFAST_ALIGN8_VC) ||
+                call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_NEWSFAST_ALIGN8_FINALIZE) ||
                 call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_NEWARR_1_DIRECT) ||
                 call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_NEWARR_1_R2R_DIRECT) ||
                 call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_NEWARR_1_OBJ) ||
@@ -155,7 +158,7 @@ GenTree* Compiler::getObjectHandleNodeFromAllocation(GenTree* tree)
 //    an object reference pointer, is treated in the same way as an array reference pointer.
 //
 //    Null check folding tries to find GT_INDIR(obj + const) that GT_NULLCHECK(obj) can be folded into
-///   and removed. Currently, the algorithm only matches GT_INDIR and GT_NULLCHECK in the same basic block.
+//    and removed. Currently, the algorithm only matches GT_INDIR and GT_NULLCHECK in the same basic block.
 
 void Compiler::optEarlyProp()
 {
@@ -273,7 +276,7 @@ GenTree* Compiler::optEarlyPropRewriteTree(GenTree* tree)
         return nullptr;
     }
 
-    if (!objectRefPtr->OperIsScalarLocal() || fgExcludeFromSsa(objectRefPtr->AsLclVarCommon()->GetLclNum()))
+    if (!objectRefPtr->OperIsScalarLocal() || !lvaInSsa(objectRefPtr->AsLclVarCommon()->GetLclNum()))
 
     {
         return nullptr;
@@ -287,9 +290,7 @@ GenTree* Compiler::optEarlyPropRewriteTree(GenTree* tree)
     {
         assert((propKind == optPropKind::OPK_ARRAYLEN) || (propKind == optPropKind::OPK_OBJ_GETTYPE));
         assert(actualVal->IsCnsIntOrI());
-#if SMALL_TREE_NODES
         assert(actualVal->GetNodeSize() == TREE_NODE_SZ_SMALL);
-#endif
 
         ssize_t actualConstVal = actualVal->AsIntCon()->IconValue();
 
@@ -321,7 +322,6 @@ GenTree* Compiler::optEarlyPropRewriteTree(GenTree* tree)
                         GenTree* comma = check->gtGetParent(nullptr);
                         if ((comma != nullptr) && comma->OperIs(GT_COMMA) && (comma->gtGetOp1() == check))
                         {
-                            GenTree* next = check->gtNext;
                             optRemoveRangeCheck(comma, compCurStmt);
                             // Both `tree` and `check` have been removed from the statement.
                             // 'tree' was replaced with 'nop' or side effect list under 'comma'.
@@ -335,7 +335,7 @@ GenTree* Compiler::optEarlyPropRewriteTree(GenTree* tree)
 #ifdef DEBUG
         if (verbose)
         {
-            printf("optEarlyProp Rewriting BB%02u\n", compCurBB->bbNum);
+            printf("optEarlyProp Rewriting " FMT_BB "\n", compCurBB->bbNum);
             gtDispTree(compCurStmt);
             printf("\n");
         }
@@ -361,10 +361,8 @@ GenTree* Compiler::optEarlyPropRewriteTree(GenTree* tree)
             actualValClone->LabelIndex(this);
         }
 
-        DecLclVarRefCountsVisitor::WalkTree(this, tree);
-        // acutalValClone has small tree node size, it is safe to use CopyFrom here.
+        // actualValClone has small tree node size, it is safe to use CopyFrom here.
         tree->ReplaceWith(actualValClone, this);
-        IncLclVarRefCountsVisitor::WalkTree(this, tree);
 
 #ifdef DEBUG
         if (verbose)
@@ -444,7 +442,7 @@ GenTree* Compiler::optPropGetValueRec(unsigned lclNum, unsigned ssaNum, optPropK
             assert(treelhs == treeDefParent->gtGetOp1());
             GenTree* treeRhs = treeDefParent->gtGetOp2();
 
-            if (treeRhs->OperIsScalarLocal() && !fgExcludeFromSsa(treeRhs->AsLclVarCommon()->GetLclNum()))
+            if (treeRhs->OperIsScalarLocal() && lvaInSsa(treeRhs->AsLclVarCommon()->GetLclNum()))
             {
                 // Recursively track the Rhs
                 unsigned rhsLclNum = treeRhs->AsLclVarCommon()->GetLclNum();
@@ -498,11 +496,11 @@ void Compiler::optFoldNullCheck(GenTree* tree)
     // Check for a pattern like this:
     //
     //                         =
-    //                       /   \
+    //                       /   \.
     //                      x    comma
-    //                           /   \
+    //                           /   \.
     //                     nullcheck  +
-    //                         |     / \
+    //                         |     / \.
     //                         y    y  const
     //
     //
@@ -518,9 +516,9 @@ void Compiler::optFoldNullCheck(GenTree* tree)
     // and transform it into
     //
     //                         =
-    //                       /   \
+    //                       /   \.
     //                      x     +
-    //                           / \
+    //                           / \.
     //                          y  const
     //
     //

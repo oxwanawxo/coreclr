@@ -39,6 +39,13 @@
 #include <errno.h>
 #include <unistd.h> // sysconf
 #include "globals.h"
+#include "cgroup.h"
+
+#if defined(_ARM_) || defined(_ARM64_)
+#define SYSCONF_GET_NUMPROCS _SC_NPROCESSORS_CONF
+#else
+#define SYSCONF_GET_NUMPROCS _SC_NPROCESSORS_ONLN
+#endif
 
 // The cachced number of logical CPUs observed.
 static uint32_t g_logicalCpuCount = 0;
@@ -50,7 +57,7 @@ static uint8_t* g_helperPage = 0;
 static pthread_mutex_t g_flushProcessWriteBuffersMutex;
 
 size_t GetRestrictedPhysicalMemoryLimit();
-bool GetWorkingSetSize(size_t* val);
+bool GetPhysicalMemoryUsed(size_t* val);
 bool GetCpuLimit(uint32_t* val);
 
 static size_t g_RestrictedPhysicalMemoryLimit = 0;
@@ -67,7 +74,7 @@ bool GCToOSInterface::Initialize()
     g_pageSizeUnixInl = uint32_t((pageSize > 0) ? pageSize : 0x1000);
 
     // Calculate and cache the number of processors on this machine
-    int cpuCount = sysconf(_SC_NPROCESSORS_ONLN);
+    int cpuCount = sysconf(SYSCONF_GET_NUMPROCS);
     if (cpuCount == -1)
     {
         return false;
@@ -112,6 +119,8 @@ bool GCToOSInterface::Initialize()
     }
 #endif // HAVE_MACH_ABSOLUTE_TIME
 
+    InitializeCGroup();
+
     return true;
 }
 
@@ -124,6 +133,8 @@ void GCToOSInterface::Shutdown()
     assert(ret == 0);
 
     munmap(g_helperPage, OS_PAGE_SIZE);
+
+    CleanupCGroup();
 }
 
 // Get numeric id of the current thread if possible on the
@@ -313,8 +324,9 @@ bool GCToOSInterface::VirtualRelease(void* address, size_t size)
 //  size    - size of the virtual memory range
 // Return:
 //  true if it has succeeded, false if it has failed
-bool GCToOSInterface::VirtualCommit(void* address, size_t size)
+bool GCToOSInterface::VirtualCommit(void* address, size_t size, uint32_t node)
 {
+    assert(node == NUMA_NODE_UNDEFINED && "Numa allocation is not ported to local GC on unix yet");
     return mprotect(address, size, PROT_WRITE | PROT_READ) == 0;
 }
 
@@ -437,7 +449,12 @@ the processors enabled.
 --*/
 static uintptr_t GetFullAffinityMask(int cpuCount)
 {
-    return ((uintptr_t)1 << (cpuCount)) - 1;
+    if ((size_t)cpuCount < sizeof(uintptr_t) * 8)
+    {
+        return ((uintptr_t)1 << cpuCount) - 1;
+    }
+
+    return ~(uintptr_t)0;
 }
 
 // Get affinity mask of the current process
@@ -455,14 +472,9 @@ static uintptr_t GetFullAffinityMask(int cpuCount)
 //  specify a 1 bit for a processor when the system affinity mask specifies a 0 bit for that processor.
 bool GCToOSInterface::GetCurrentProcessAffinityMask(uintptr_t* processAffinityMask, uintptr_t* systemAffinityMask)
 {
-    if (g_logicalCpuCount > 64)
-    {
-        *processAffinityMask = 0;
-        *systemAffinityMask = 0;
-        return true;
-    }
+    unsigned int cpuCountInMask = (g_logicalCpuCount > 64) ? 64 : g_logicalCpuCount;
 
-    uintptr_t systemMask = GetFullAffinityMask(g_logicalCpuCount);
+    uintptr_t systemMask = GetFullAffinityMask(cpuCountInMask);
 
 #if HAVE_SCHED_GETAFFINITY
 
@@ -473,7 +485,7 @@ bool GCToOSInterface::GetCurrentProcessAffinityMask(uintptr_t* processAffinityMa
     {
         uintptr_t processMask = 0;
 
-        for (int i = 0; i < g_logicalCpuCount; i++)
+        for (unsigned int i = 0; i < cpuCountInMask; i++)
         {
             if (CPU_ISSET(i, &cpuSet))
             {
@@ -488,9 +500,9 @@ bool GCToOSInterface::GetCurrentProcessAffinityMask(uintptr_t* processAffinityMa
     else if (errno == EINVAL)
     {
         // There are more processors than can fit in a cpu_set_t
-        // return zero in both masks.
-        *processAffinityMask = 0;
-        *systemAffinityMask = 0;
+        // return all bits set for all processors (upto 64) for both masks
+        *processAffinityMask = systemMask;
+        *systemAffinityMask = systemMask;
         return true;
     }
     else
@@ -524,7 +536,7 @@ uint32_t GCToOSInterface::GetCurrentProcessCpuCount()
 
     pmask &= smask;
 
-    int count = 0;
+    unsigned int count = 0;
     while (pmask)
     {
         pmask &= (pmask - 1);
@@ -570,9 +582,12 @@ size_t GCToOSInterface::GetVirtualMemoryLimit()
 // Remarks:
 //  If a process runs with a restricted memory limit, it returns the limit. If there's no limit 
 //  specified, it returns amount of actual physical memory.
-uint64_t GCToOSInterface::GetPhysicalMemoryLimit()
+uint64_t GCToOSInterface::GetPhysicalMemoryLimit(bool* is_restricted)
 {
     size_t restricted_limit;
+    if (is_restricted)
+        *is_restricted = false;
+
     // The limit was not cached
     if (g_RestrictedPhysicalMemoryLimit == 0)
     {
@@ -582,7 +597,11 @@ uint64_t GCToOSInterface::GetPhysicalMemoryLimit()
     restricted_limit = g_RestrictedPhysicalMemoryLimit;
 
     if (restricted_limit != 0 && restricted_limit != SIZE_T_MAX)
+    {
+        if (is_restricted)
+            *is_restricted = true;
         return restricted_limit;
+    }
 
     long pages = sysconf(_SC_PHYS_PAGES);
     if (pages == -1) 
@@ -617,7 +636,7 @@ void GCToOSInterface::GetMemoryStatus(uint32_t* memory_load, uint64_t* available
 
         // Get the physical memory in use - from it, we can get the physical memory available.
         // We do this only when we have the total physical memory available.
-        if (total > 0 && GetWorkingSetSize(&used))
+        if (total > 0 && GetPhysicalMemoryUsed(&used))
         {
             available = total > used ? total-used : 0; 
             load = (uint32_t)(((float)used * 100) / (float)total);
@@ -691,6 +710,26 @@ uint32_t GCToOSInterface::GetTotalProcessorCount()
     return g_logicalCpuCount;
 }
 
+bool GCToOSInterface::CanEnableGCNumaAware()
+{
+    return false;
+}
+
+bool GCToOSInterface::GetNumaProcessorNode(PPROCESSOR_NUMBER proc_no, uint16_t *node_no)
+{
+    assert(!"Numa has not been ported to local GC for unix");
+    return false;
+}
+
+bool GCToOSInterface::CanEnableGCCPUGroups()
+{
+    return false;
+}
+
+void GCToOSInterface::GetGroupForProcessor(uint16_t processor_number, uint16_t* group_number, uint16_t* group_processor_number)
+{
+    assert(!"CpuGroup has not been ported to local GC for unix");
+}
 
 // Initialize the critical section
 void CLRCriticalSection::Initialize()

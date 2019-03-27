@@ -109,7 +109,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     return false;
 
                 throw;
@@ -125,7 +125,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             IMap<K, V> _this = Unsafe.As<IMap<K, V>>(this);
             if (!_this.HasKey(key))
             {
-                value = default(V);
+                value = default;
                 return false;
             }
 
@@ -136,7 +136,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (KeyNotFoundException)
             {
-                value = default(V);
+                value = default;
                 return false;
             }
         }
@@ -153,7 +153,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     throw new KeyNotFoundException(SR.Arg_KeyNotFound);
                 throw;
             }

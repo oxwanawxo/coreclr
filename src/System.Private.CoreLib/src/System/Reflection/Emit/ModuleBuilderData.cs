@@ -2,13 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
-using System.Diagnostics;
-using System.Globalization;
-using System.IO;
-using System.Reflection;
-using System.Runtime.Versioning;
-
 namespace System.Reflection.Emit
 {
     // This is a package private class. This class hold all of the managed
@@ -16,47 +9,16 @@ namespace System.Reflection.Emit
     // this class cannot be accessed from the EE.
     internal class ModuleBuilderData
     {
-        internal ModuleBuilderData(ModuleBuilder module, String strModuleName, String strFileName, int tkFile)
+        public const string MultiByteValueClass = "$ArrayType$";
+
+        public readonly TypeBuilder _globalTypeBuilder;
+        public readonly string _moduleName;
+        public bool _hasGlobalBeenCreated;
+
+        internal ModuleBuilderData(ModuleBuilder module, string moduleName)
         {
-            m_globalTypeBuilder = new TypeBuilder(module);
-            m_module = module;
-            m_tkFile = tkFile;
-
-            InitNames(strModuleName, strFileName);
+            _globalTypeBuilder = new TypeBuilder(module);
+            _moduleName = moduleName;
         }
-
-        // Initialize module and file names.
-        private void InitNames(String strModuleName, String strFileName)
-        {
-            m_strModuleName = strModuleName;
-            if (strFileName == null)
-            {
-                // fake a transient module file name
-                m_strFileName = strModuleName;
-            }
-            else
-            {
-                String strExtension = Path.GetExtension(strFileName);
-                if (strExtension == null || strExtension == String.Empty)
-                {
-                    // This is required by our loader. It cannot load module file that does not have file extension.
-                    throw new ArgumentException(SR.Format(SR.Argument_NoModuleFileExtension, strFileName));
-                }
-                m_strFileName = strFileName;
-            }
-        }
-
-        internal String m_strModuleName;     // scope name (can be different from file name)
-        internal String m_strFileName;
-        internal bool m_fGlobalBeenCreated;
-        internal bool m_fHasGlobal;
-        internal TypeBuilder m_globalTypeBuilder;
-        internal ModuleBuilder m_module;
-
-        private int m_tkFile;
-        internal bool m_isSaved;
-        internal const String MULTI_BYTE_VALUE_CLASS = "$ArrayType$";
-        internal String m_strResourceFileName;
-        internal byte[] m_resourceBytes;
     }
 }

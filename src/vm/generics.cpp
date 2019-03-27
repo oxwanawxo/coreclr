@@ -19,7 +19,6 @@
 #include "eeconfig.h"
 #include "generics.h"
 #include "genericdict.h"
-#include "stackprobe.h"
 #include "typestring.h"
 #include "typekey.h"
 #include "dumpcommon.h"
@@ -144,13 +143,6 @@ TypeHandle ClassLoader::LoadCanonicalGenericInstantiation(TypeKey *pTypeKey,
         ThrowHR(COR_E_OVERFLOW);
 
     TypeHandle ret = TypeHandle();
-    DECLARE_INTERIOR_STACK_PROBE;
-#ifndef DACCESS_COMPILE
-    if ((dwAllocSize/GetOsPageSize()+1) >= 2)
-    {
-        DO_INTERIOR_STACK_PROBE_FOR_NOTHROW_CHECK_THREAD((10+dwAllocSize/GetOsPageSize()+1), NO_FORBIDGC_LOADER_USE_ThrowSO(););
-    }
-#endif // DACCESS_COMPILE
     TypeHandle *repInst = (TypeHandle*) _alloca(dwAllocSize);
 
     for (DWORD i = 0; i < ntypars; i++)
@@ -162,7 +154,6 @@ TypeHandle ClassLoader::LoadCanonicalGenericInstantiation(TypeKey *pTypeKey,
     TypeKey canonKey(pTypeKey->GetModule(), pTypeKey->GetTypeToken(), Instantiation(repInst, ntypars));
     ret = ClassLoader::LoadConstructedTypeThrowing(&canonKey, fLoadTypes, level);
 
-    END_INTERIOR_STACK_PROBE;
     RETURN(ret);
 }
 
@@ -224,10 +215,7 @@ ClassLoader::CreateTypeHandleForNonCanonicalGenericInstantiation(
 
     // These are all copied across from the old MT, i.e. don't depend on the
     // instantiation.
-    BOOL fHasRemotingVtsInfo = FALSE;
-    BOOL fHasContextStatics = FALSE;
     BOOL fHasGenericsStaticsInfo = pOldMT->HasGenericsStaticsInfo();
-    BOOL fHasThreadStatics = (pOldMT->GetNumThreadStaticFields() > 0);
 
 #ifdef FEATURE_COMINTEROP
     BOOL fHasDynamicInterfaceMap = pOldMT->HasDynamicInterfaceMap();
@@ -240,11 +228,7 @@ ClassLoader::CreateTypeHandleForNonCanonicalGenericInstantiation(
     // Collectible types have some special restrictions
     if (pAllocator->IsCollectible())
     {
-        if (fHasThreadStatics || fHasContextStatics)
-        {
-            ClassLoader::ThrowTypeLoadException(pTypeKey, IDS_CLASSLOAD_COLLECTIBLESPECIALSTATICS);
-        }
-        else if (pOldMT->HasFixedAddressVTStatics())
+        if (pOldMT->HasFixedAddressVTStatics())
         {
             ClassLoader::ThrowTypeLoadException(pTypeKey, IDS_CLASSLOAD_COLLECTIBLEFIXEDVTATTR);
         }
@@ -284,13 +268,10 @@ ClassLoader::CreateTypeHandleForNonCanonicalGenericInstantiation(
 
     // We need space for the optional members.
     DWORD cbOptional = MethodTable::GetOptionalMembersAllocationSize(dwMultipurposeSlotsMask,
-                                                      FALSE, // fHasRemotableMethodInfo
                                                       fHasGenericsStaticsInfo,
                                                       fHasGuidInfo,
                                                       fHasCCWTemplate,
                                                       fHasRCWPerTypeData,
-                                                      fHasRemotingVtsInfo,
-                                                      fHasContextStatics,
                                                       pOldMT->HasTokenOverflow());
 
     // We need space for the PerInstInfo, i.e. the generic dictionary pointers...
@@ -324,7 +305,7 @@ ClassLoader::CreateTypeHandleForNonCanonicalGenericInstantiation(
     // If none, we need to allocate space for the slots
     if (!canShareVtableChunks)
     {
-        allocSize += S_SIZE_T( cSlots ) * S_SIZE_T( sizeof(PCODE) );
+        allocSize += S_SIZE_T( cSlots ) * S_SIZE_T( sizeof(MethodTable::VTableIndir2_t) );
     }
 
     if (allocSize.IsOverflow())
@@ -446,7 +427,7 @@ ClassLoader::CreateTypeHandleForNonCanonicalGenericInstantiation(
         else
         {
             // Use the locally allocated chunk
-            it.SetIndirectionSlot((PTR_PCODE)(pMemory+offsetOfUnsharedVtableChunks));
+            it.SetIndirectionSlot((MethodTable::VTableIndir2_t *)(pMemory+offsetOfUnsharedVtableChunks));
             offsetOfUnsharedVtableChunks += it.GetSize();
         }
     }
@@ -455,31 +436,15 @@ ClassLoader::CreateTypeHandleForNonCanonicalGenericInstantiation(
     if (!canShareVtableChunks)
     {
         // Need to assign the slots one by one to filter out jump thunks
+        MethodTable::MethodDataWrapper hOldMTData(MethodTable::GetMethodData(pOldMT, FALSE));
         for (DWORD i = 0; i < cSlots; i++)
         {
-            pMT->SetSlot(i, pOldMT->GetRestoredSlot(i));
+            pMT->CopySlotFrom(i, hOldMTData, pOldMT);
         }
     }
 
     // All flags on m_pNgenPrivateData data apart
     // are initially false for a dynamically generated instantiation.
-    //
-    // Last time this was checked this included
-    //    enum_flag_RemotingConfigChecked
-    //    enum_flag_RequiresManagedActivation
-    //    enum_flag_Unrestored
-    //    enum_flag_CriticalTypePrepared
-#ifdef FEATURE_PREJIT
-    //    enum_flag_NGEN_IsFixedUp
-    //    enum_flag_NGEN_NeedsRestoreCached
-    //    enum_flag_NGEN_NeedsRestore
-#endif // FEATURE_PREJIT
-
-    if (pOldMT->RequiresManagedActivation())
-    {
-        // Will also set enum_flag_RemotingConfigChecked
-        pMT->SetRequiresManagedActivation();
-    }
 
     if (fContainsGenericVariables)
         pMT->SetContainsGenericVariables();
@@ -617,7 +582,6 @@ ClassLoader::CreateTypeHandleForNonCanonicalGenericInstantiation(
     // Check we've set up the flags correctly on the new method table
     _ASSERTE(!fContainsGenericVariables == !pMT->ContainsGenericVariables());
     _ASSERTE(!fHasGenericsStaticsInfo == !pMT->HasGenericsStaticsInfo());
-    _ASSERTE(!pLoaderModule->GetAssembly()->IsDomainNeutral() == !pMT->IsDomainNeutral());
 #ifdef FEATURE_COMINTEROP
     _ASSERTE(!fHasDynamicInterfaceMap == !pMT->HasDynamicInterfaceMap());
     _ASSERTE(!fHasRCWPerTypeData == !pMT->HasRCWPerTypeData());
@@ -995,7 +959,6 @@ BOOL GetExactInstantiationsOfMethodAndItsClassFromCallInformation(
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         CANNOT_TAKE_LOCK;
         PRECONDITION(CheckPointer(pRepMethod));
         SUPPORTS_DAC;
@@ -1034,7 +997,6 @@ BOOL GetExactInstantiationsOfMethodAndItsClassFromCallInformation(
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         CANNOT_TAKE_LOCK;
         PRECONDITION(CheckPointer(pRepMethod));
         SUPPORTS_DAC;

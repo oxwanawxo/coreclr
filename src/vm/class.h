@@ -36,14 +36,12 @@
 #include "hash.h"
 #include "crst.h"
 #include "cgensys.h"
-#include "declsec.h"
 #ifdef FEATURE_COMINTEROP
 #include "stdinterfaces.h"
 #endif
 #include "slist.h"
 #include "spinlock.h"
 #include "typehandle.h"
-#include "perfcounters.h"
 #include "methodtable.h"
 #include "eeconfig.h"
 #include "typectxt.h"
@@ -358,7 +356,7 @@ class EEClassLayoutInfo
 #endif // FEATURE_COMINTEROP
        BOOL fExplicitOffsets,       // explicit offsets?
        MethodTable *pParentMT,       // the loaded superclass
-       ULONG cMembers,              // total number of members (methods + fields)
+       ULONG cTotalFields,              // total number of fields (instance and static)
        HENUMInternal *phEnumField,  // enumerator for field
        Module* pModule,             // Module that defines the scope, loader and heap (for allocate FieldMarshalers)
        const SigTypeContext *pTypeContext,          // Type parameters for NStruct being loaded
@@ -410,7 +408,7 @@ class EEClassLayoutInfo
             e_HAS_EXPLICIT_SIZE         = 0x08,
 #ifdef UNIX_AMD64_ABI
 #ifdef FEATURE_HFA
-#error Can't have FEATURE_HFA and UNIX_AMD64_ABI defined at the same time.
+#error "Can't have FEATURE_HFA and UNIX_AMD64_ABI defined at the same time."
 #endif // FEATURE_HFA
             e_NATIVE_PASS_IN_REGISTERS  = 0x10, // Flag wheter a native struct is passed in registers.
 #endif // UNIX_AMD64_ABI
@@ -515,6 +513,11 @@ class EEClassLayoutInfo
         {
             LIMITED_METHOD_CONTRACT;
             return (m_bFlags & e_NATIVE_PASS_IN_REGISTERS) != 0;
+        }
+#else
+        bool IsNativeStructPassedInRegisters()
+        {
+            return false;
         }
 #endif // UNIX_AMD64_ABI
 
@@ -875,11 +878,6 @@ public:
         WRAPPER_NO_CONTRACT;
         return IsTdSequentialLayout(GetAttrClass());
     }
-    BOOL IsSerializable()
-    {
-        WRAPPER_NO_CONTRACT;
-        return IsTdSerializable(GetAttrClass());
-    }
     BOOL IsBeforeFieldInit()
     {
         WRAPPER_NO_CONTRACT;
@@ -1127,13 +1125,13 @@ public:
         return m_VMFlags & VMFLAG_IS_EQUIVALENT_TYPE;
     }
 
-#ifdef FEATURE_COMINTEROP
+#ifdef FEATURE_TYPEEQUIVALENCE
     inline void SetIsEquivalentType()
     {
         LIMITED_METHOD_CONTRACT;
         m_VMFlags |= VMFLAG_IS_EQUIVALENT_TYPE;
     }
-#endif
+#endif // FEATURE_TYPEEQUIVALENCE
 
     /*
      * Number of static handles allocated
@@ -1585,9 +1583,6 @@ public:
         #endif // DACCESS_COMPILE
     }
 
-    // Cached class level reliability contract info, see ConstrainedExecutionRegion.cpp for details.
-    DWORD GetReliabilityContract();
-
 
 #if defined(UNIX_AMD64_ABI)
     // Get number of eightbytes used by a struct passed in registers.
@@ -1796,100 +1791,8 @@ public:
 #if defined(_DEBUG)
 public:
     enum{
-        AUXFLAG_APP_DOMAIN_AGILE                = 0x00000001,
-        AUXFLAG_CHECK_APP_DOMAIN_AGILE          = 0x00000002,
-        AUXFLAG_APP_DOMAIN_AGILITY_DONE         = 0x00000004,
-        AUXFLAG_DESTROYED                       = 0x00000008, // The Destruct() method has already been called on this class
+        AUXFLAG_DESTROYED = 0x00000008, // The Destruct() method has already been called on this class
     };
-
-    inline DWORD GetAuxFlagsRaw()
-    {
-        LIMITED_METHOD_CONTRACT;
-        return m_wAuxFlags;
-    }
-    inline DWORD*  GetAuxFlagsPtr()
-    {
-        LIMITED_METHOD_CONTRACT;
-        return (DWORD*)(&m_wAuxFlags);
-    }
-    inline void SetAuxFlags(DWORD flag)
-    {
-        LIMITED_METHOD_CONTRACT;
-        m_wAuxFlags |= (WORD)flag;
-    }
-
-    // This flag is set (in a checked build only?) for classes whose
-    // instances are always app domain agile.  This can
-    // be either because of type system guarantees or because
-    // the class is explicitly marked.
-    inline BOOL IsAppDomainAgile()
-    {
-        LIMITED_METHOD_CONTRACT;
-        return (m_wAuxFlags & AUXFLAG_APP_DOMAIN_AGILE);
-    }
-    inline void SetAppDomainAgile()
-    {
-        LIMITED_METHOD_CONTRACT;
-        m_wAuxFlags |= AUXFLAG_APP_DOMAIN_AGILE;
-    }
-    // This flag is set in a checked build for classes whose
-    // instances may be marked app domain agile, but agility
-    // isn't guaranteed by type safety.  The JIT will compile
-    // in extra checks to field assignment on some fields
-    // in such a class.
-    inline BOOL IsCheckAppDomainAgile()
-    {
-        LIMITED_METHOD_CONTRACT;
-        return (m_wAuxFlags & AUXFLAG_CHECK_APP_DOMAIN_AGILE);
-    }
-
-    inline void SetCheckAppDomainAgile()
-    {
-        LIMITED_METHOD_CONTRACT;
-        m_wAuxFlags |= AUXFLAG_CHECK_APP_DOMAIN_AGILE;
-    }
-
-    // This flag is set in a checked build to indicate that the
-    // appdomain agility for a class had been set. This is used
-    // for debugging purposes to make sure that we don't allocate
-    // an object before the agility is set.
-    inline BOOL IsAppDomainAgilityDone()
-    {
-        LIMITED_METHOD_CONTRACT;
-        return (m_wAuxFlags & AUXFLAG_APP_DOMAIN_AGILITY_DONE);
-    }
-    inline void SetAppDomainAgilityDone()
-    {
-        LIMITED_METHOD_CONTRACT;
-        m_wAuxFlags |= AUXFLAG_APP_DOMAIN_AGILITY_DONE;
-    }
-    //
-    // This predicate checks whether or not the class is "naturally"
-    // app domain agile - that is:
-    //      (1) it is in the system domain
-    //      (2) all the fields are app domain agile
-    //      (3) it has no finalizer
-    //
-    // Or, this also returns true for a proxy type which is allowed
-    // to have cross app domain refs.
-    //
-    inline BOOL IsTypesafeAppDomainAgile()
-    {
-        LIMITED_METHOD_CONTRACT;
-        return IsAppDomainAgile() && !IsCheckAppDomainAgile();
-    }
-    //
-    // This predictate tests whether any instances are allowed
-    // to be app domain agile.
-    //
-    inline BOOL IsNeverAppDomainAgile()
-    {
-        LIMITED_METHOD_CONTRACT;
-        return !IsAppDomainAgile() && !IsCheckAppDomainAgile();
-    }
-    static void SetAppDomainAgileAttribute(MethodTable * pMT);
-
-    static void GetPredefinedAgility(Module *pModule, mdTypeDef td, BOOL *pfIsAgile, BOOL *pfIsCheckAgile);
 #endif // defined(_DEBUG)
 
     //-------------------------------------------------------------

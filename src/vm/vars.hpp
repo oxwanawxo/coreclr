@@ -79,14 +79,15 @@ class LoaderHeap;
 class IGCHeap;
 class Object;
 class StringObject;
-class TransparentProxyObject;
+#ifdef FEATURE_UTF8STRING
+class Utf8StringObject;
+#endif // FEATURE_UTF8STRING
 class ArrayClass;
 class MethodTable;
 class MethodDesc;
 class SyncBlockCache;
 class SyncTableEntry;
 class ThreadStore;
-class IPCWriterInterface;
 namespace ETW { class CEtwTracer; };
 class DebugInterface;
 class DebugInfoManager;
@@ -158,7 +159,6 @@ class OBJECTREF {
         class ArrayBase* m_asArray;
         class PtrArray* m_asPtrArray;
         class DelegateObject* m_asDelegate;
-        class TransparentProxyObject* m_asTP;
 
         class ReflectClassBaseObject* m_asReflectClass;
         class ExecutionContextObject* m_asExecutionContext;
@@ -316,6 +316,10 @@ class REF : public OBJECTREF
 #define OBJECTREFToObject(objref)  ((objref).operator-> ())
 #define ObjectToSTRINGREF(obj)     (STRINGREF(obj))
 #define STRINGREFToObject(objref)  (*( (StringObject**) &(objref) ))
+#ifdef FEATURE_UTF8STRING
+#define ObjectToUTF8STRINGREF(obj)   (UTF8STRINGREF(obj))
+#define UTF8STRINGREFToObject(objref) (*( (Utf8StringObject**) &(objref) ))
+#endif // FEATURE_UTF8STRING
 
 #else   // _DEBUG_IMPL
 
@@ -326,6 +330,10 @@ class REF : public OBJECTREF
 #define OBJECTREFToObject(objref) ((PTR_Object) (objref))
 #define ObjectToSTRINGREF(obj)    ((PTR_StringObject) (obj))
 #define STRINGREFToObject(objref) ((PTR_StringObject) (objref))
+#ifdef FEATURE_UTF8STRING
+#define ObjectToUTF8STRINGREF(obj)    ((PTR_Utf8StringObject) (obj))
+#define UTF8STRINGREFToObject(objref) ((PTR_Utf8StringObject) (objref))
+#endif // FEATURE_UTF8STRING
 
 #endif // _DEBUG_IMPL
 
@@ -355,7 +363,7 @@ EXTERN IBCLogger            g_IBCLogger;
 // that does not allow g_TrapReturningThreads to creep up unchecked.
 EXTERN Volatile<LONG>       g_trtChgStamp;
 EXTERN Volatile<LONG>       g_trtChgInFlight;
-EXTERN char *               g_ExceptionFile;
+EXTERN const char *         g_ExceptionFile;
 EXTERN DWORD                g_ExceptionLine;
 EXTERN void *               g_ExceptionEIP;
 #endif
@@ -366,6 +374,9 @@ GPTR_DECL(MethodTable,      g_pObjectClass);
 GPTR_DECL(MethodTable,      g_pRuntimeTypeClass);
 GPTR_DECL(MethodTable,      g_pCanonMethodTableClass);  // System.__Canon
 GPTR_DECL(MethodTable,      g_pStringClass);
+#ifdef FEATURE_UTF8STRING
+GPTR_DECL(MethodTable,      g_pUtf8StringClass);
+#endif // FEATURE_UTF8STRING
 GPTR_DECL(MethodTable,      g_pArrayClass);
 GPTR_DECL(MethodTable,      g_pSZArrayHelperClass);
 GPTR_DECL(MethodTable,      g_pNullableClass);
@@ -439,12 +450,6 @@ GPTR_DECL(SyncTableEntry, g_pSyncTable);
 typedef DPTR(RCWCleanupList) PTR_RCWCleanupList;
 GPTR_DECL(RCWCleanupList,g_pRCWCleanupList);
 #endif // FEATURE_COMINTEROP
-
-#ifdef FEATURE_IPCMAN
-// support for IPCManager
-typedef DPTR(IPCWriterInterface) PTR_IPCWriterInterface;
-GPTR_DECL(IPCWriterInterface,  g_pIPCManagerInterface);
-#endif // FEATURE_IPCMAN
 
 // support for Event Tracing for Windows (ETW)
 EXTERN ETW::CEtwTracer* g_pEtwTracer;
@@ -591,12 +596,6 @@ EXTERN bool g_fInControlC;
 
 // There is a global table of prime numbers that's available for e.g. hashing
 extern const DWORD g_rgPrimes[71];
-
-//
-// Cached command line file provided by the host.
-//
-extern LPWSTR g_pCachedCommandLine;
-extern LPWSTR g_pCachedModuleFileName;
 
 //
 // Macros to check debugger and profiler settings.
@@ -827,6 +826,7 @@ extern CEECompileInfo *g_pCEECompileInfo;
 
 #ifdef FEATURE_READYTORUN_COMPILER
 extern bool g_fReadyToRunCompilation;
+extern bool g_fLargeVersionBubble;
 #endif
 
 // Returns true if this is NGen compilation process.

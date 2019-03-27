@@ -302,8 +302,8 @@ void UnwindInfoTable::AddToUnwindInfoTable(UnwindInfoTable** unwindInfoPtr, PT_R
     // We could imagine being much more efficient for 'bulk' updates, but we don't try
     // because we assume that this is rare and we want to keep the code simple
 
-    int usedSpace = unwindInfo->cTableCurCount - unwindInfo->cDeletedEntries;
-    int desiredSpace = usedSpace * 5 / 4 + 1;        // Increase by 20%
+    ULONG usedSpace = unwindInfo->cTableCurCount - unwindInfo->cDeletedEntries;
+    ULONG desiredSpace = usedSpace * 5 / 4 + 1;        // Increase by 20%
     // Be more aggresive if we used all of our space; 
     if (usedSpace == unwindInfo->cTableMaxCount)
         desiredSpace = usedSpace * 3 / 2 + 1;        // Increase by 50%
@@ -449,10 +449,10 @@ extern CrstStatic g_StubUnwindInfoHeapSegmentsCrst;
     STANDARD_VM_CONTRACT;
     {
         // CodeHeapIterator holds the m_CodeHeapCritSec, which insures code heaps don't get deallocated while being walked
-        EEJitManager::CodeHeapIterator heapIterator(NULL, NULL);
+        EEJitManager::CodeHeapIterator heapIterator(NULL);
 
         // Currently m_CodeHeapCritSec is given the CRST_UNSAFE_ANYMODE flag which allows it to be taken in a GC_NOTRIGGER
-        // region but also disallows GC_TRIGGERS.  We need GC_TRIGGERS because we take annother lock.   Ideally we would
+        // region but also disallows GC_TRIGGERS.  We need GC_TRIGGERS because we take another lock.   Ideally we would
         // fix m_CodeHeapCritSec to not have the CRST_UNSAFE_ANYMODE flag, but I currently reached my threshold for fixing
         // contracts.
         CONTRACT_VIOLATION(GCViolation);
@@ -571,7 +571,7 @@ DeleteJitHeapCache
 
 
 #if !defined(DACCESS_COMPILE)
-EEJitManager::CodeHeapIterator::CodeHeapIterator(BaseDomain *pDomainFilter, LoaderAllocator *pLoaderAllocatorFilter)
+EEJitManager::CodeHeapIterator::CodeHeapIterator(LoaderAllocator *pLoaderAllocatorFilter)
     : m_lockHolder(&(ExecutionManager::GetEEJitManager()->m_CodeHeapCritSec)), m_Iterator(NULL, 0, NULL, 0)
 {
     CONTRACTL
@@ -583,7 +583,6 @@ EEJitManager::CodeHeapIterator::CodeHeapIterator(BaseDomain *pDomainFilter, Load
     CONTRACTL_END;
 
     m_pHeapList = NULL;
-    m_pDomain = pDomainFilter;
     m_pLoaderAllocator = pLoaderAllocatorFilter;
     m_pHeapList = ExecutionManager::GetEEJitManager()->GetCodeHeapList();
     if(m_pHeapList)
@@ -628,17 +627,11 @@ BOOL EEJitManager::CodeHeapIterator::Next()
             BYTE * code = m_Iterator.GetMethodCode();
             CodeHeader * pHdr = (CodeHeader *)(code - sizeof(CodeHeader));
             m_pCurrent = !pHdr->IsStubCodeBlock() ? pHdr->GetMethodDesc() : NULL;
-            if (m_pDomain && m_pCurrent)
-            {
-                BaseDomain *pCurrentBaseDomain = m_pCurrent->GetDomain();
-                if(pCurrentBaseDomain != m_pDomain)
-                    continue;
-            }
 
             // LoaderAllocator filter
             if (m_pLoaderAllocator && m_pCurrent)
             {
-                LoaderAllocator *pCurrentLoaderAllocator = m_pCurrent->GetLoaderAllocatorForCode();
+                LoaderAllocator *pCurrentLoaderAllocator = m_pCurrent->GetLoaderAllocator();
                 if(pCurrentLoaderAllocator != m_pLoaderAllocator)
                     continue;
             }
@@ -668,7 +661,6 @@ ExecutionManager::ReaderLockHolder::ReaderLockHolder(HostCallPreference hostCall
         NOTHROW;
         if (hostCallPreference == AllowHostCalls) { HOST_CALLS; } else { HOST_NOCALLS; }
         GC_NOTRIGGER;
-        SO_TOLERANT;
         CAN_TAKE_LOCK;
     } CONTRACTL_END;
 
@@ -703,7 +695,6 @@ ExecutionManager::ReaderLockHolder::~ReaderLockHolder()
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -869,7 +860,7 @@ BOOL IsFunctionFragment(TADDR baseAddress, PTR_RUNTIME_FUNCTION pFunctionEntry)
     // simplifies identifying a host record a lot.
     // 
     // 1. Prolog only: The host record. Epilog Count and E bit are all 0.
-    // 2. Prolog and some epilogs: The host record with acompannying epilog-only records
+    // 2. Prolog and some epilogs: The host record with accompanying epilog-only records
     // 3. Epilogs only: First unwind code is Phantom prolog (Starting with an end_c, indicating an empty prolog)
     // 4. No prologs or epilogs: First unwind code is Phantom prolog  (Starting with an end_c, indicating an empty prolog)
     //
@@ -901,6 +892,35 @@ BOOL IsFunctionFragment(TADDR baseAddress, PTR_RUNTIME_FUNCTION pFunctionEntry)
 #endif
 }
 
+// When we have fragmented unwind we usually want to refer to the
+// unwind record that includes the prolog. We can find it by searching
+// back in the sequence of unwind records.
+PTR_RUNTIME_FUNCTION FindRootEntry(PTR_RUNTIME_FUNCTION pFunctionEntry, TADDR baseAddress)
+{
+    LIMITED_METHOD_DAC_CONTRACT;
+
+    PTR_RUNTIME_FUNCTION pRootEntry = pFunctionEntry;
+
+    if (pRootEntry != NULL)
+    {
+        // Walk backwards in the RUNTIME_FUNCTION array until we find a non-fragment.
+        // We're guaranteed to find one, because we require that a fragment live in a function or funclet
+        // that has a prolog, which will have non-fragment .xdata.
+        for (;;)
+        {
+            if (!IsFunctionFragment(baseAddress, pRootEntry))
+            {
+                // This is not a fragment; we're done
+                break;
+            }
+
+            --pRootEntry;
+        }
+    }
+
+    return pRootEntry;
+}
+
 #endif // EXCEPTION_DATA_SUPPORTS_FUNCTION_FRAGMENTS
 
 
@@ -928,7 +948,6 @@ ExecutionManager::ScanFlag ExecutionManager::GetScanFlags()
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         HOST_NOCALLS;
         SUPPORTS_DAC;
     } CONTRACTL_END;
@@ -1085,30 +1104,12 @@ TADDR IJitManager::GetFuncletStartAddress(EECodeInfo * pCodeInfo)
 #endif
 
     TADDR baseAddress = pCodeInfo->GetModuleBase();
-    TADDR funcletStartAddress = baseAddress + RUNTIME_FUNCTION__BeginAddress(pFunctionEntry);
 
 #if defined(EXCEPTION_DATA_SUPPORTS_FUNCTION_FRAGMENTS)
-    // Is the RUNTIME_FUNCTION a fragment? If so, we need to walk backwards until we find the first
-    // non-fragment RUNTIME_FUNCTION, and use that one. This happens when we have very large functions
-    // and multiple RUNTIME_FUNCTION entries per function or funclet. However, all but the first will
-    // have the "F" bit set in the unwind data, indicating a fragment (with phantom prolog unwind codes).
-
-    for (;;)
-    {
-        if (!IsFunctionFragment(baseAddress, pFunctionEntry))
-        {
-            // This is not a fragment; we're done
-            break;
-        }
-
-        // We found a fragment. Walk backwards in the RUNTIME_FUNCTION array until we find a non-fragment.
-        // We're guaranteed to find one, because we require that a fragment live in a function or funclet
-        // that has a prolog, which will have non-fragment .xdata.
-        --pFunctionEntry;
-
-        funcletStartAddress = baseAddress + RUNTIME_FUNCTION__BeginAddress(pFunctionEntry);
-    }
+    pFunctionEntry = FindRootEntry(pFunctionEntry, baseAddress);
 #endif // EXCEPTION_DATA_SUPPORTS_FUNCTION_FRAGMENTS
+
+    TADDR funcletStartAddress = baseAddress + RUNTIME_FUNCTION__BeginAddress(pFunctionEntry);
 
     return funcletStartAddress;
 }
@@ -1270,6 +1271,7 @@ void EEJitManager::SetCpuInfo()
 
     //
     // NOTE: This function needs to be kept in sync with Zapper::CompileAssembly()
+    // NOTE: This function needs to be kept in sync with compSetProcesor() in jit\compiler.cpp
     //
 
     CORJIT_FLAGS CPUCompileFlags;
@@ -1282,11 +1284,12 @@ void EEJitManager::SetCpuInfo()
 
     switch (CPU_X86_FAMILY(cpuInfo.dwCPUType))
     {
-    case CPU_X86_PENTIUM_4:
-        CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_TARGET_P4);
-        break;
-    default:
-        break;
+        case CPU_X86_PENTIUM_4:
+            CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_TARGET_P4);
+            break;
+
+        default:
+            break;
     }
 
     if (CPU_X86_USE_CMOV(cpuInfo.dwFeatures))
@@ -1302,121 +1305,134 @@ void EEJitManager::SetCpuInfo()
 #endif // _TARGET_X86_
 
 #if defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
+    // NOTE: The below checks are based on the information reported by
+    //   Intel® 64 and IA-32 Architectures Software Developer’s Manual. Volume 2
+    //   and
+    //   AMD64 Architecture Programmer’s Manual. Volume 3
+    // For more information, please refer to the CPUID instruction in the respective manuals
+
+    // We will set the following flags:
+    //   CORJIT_FLAG_USE_SSE2 is required
+    //      SSE       - EDX bit 25    (buffer[15] & 0x02)
+    //      SSE2      - EDX bit 26    (buffer[15] & 0x04)
+    //   CORJIT_FLAG_USE_SSE3 if the following feature bits are set (input EAX of 1)
+    //      CORJIT_FLAG_USE_SSE2
+    //      SSE3      - ECX bit 0     (buffer[8]  & 0x01)
+    //   CORJIT_FLAG_USE_SSSE3 if the following feature bits are set (input EAX of 1)
+    //      CORJIT_FLAG_USE_SSE3
+    //      SSSE3     - ECX bit 9     (buffer[9]  & 0x02)
+    //   CORJIT_FLAG_USE_SSE41 if the following feature bits are set (input EAX of 1)
+    //      CORJIT_FLAG_USE_SSSE3
+    //      SSE4.1    - ECX bit 19    (buffer[10] & 0x08)
+    //   CORJIT_FLAG_USE_SSE42 if the following feature bits are set (input EAX of 1)
+    //      CORJIT_FLAG_USE_SSE41
+    //      SSE4.2    - ECX bit 20    (buffer[10] & 0x10)
+    //   CORJIT_FLAG_USE_POPCNT if the following feature bits are set (input EAX of 1)
+    //      CORJIT_FLAG_USE_SSE42
+    //      POPCNT    - ECX bit 23    (buffer[10] & 0x80)
+    //   CORJIT_FLAG_USE_AVX if the following feature bits are set (input EAX of 1), and xmmYmmStateSupport returns 1:
+    //      CORJIT_FLAG_USE_SSE42
+    //      OSXSAVE   - ECX bit 27   (buffer[11] & 0x08)
+    //      XGETBV    - XCR0[2:1]    11b
+    //      AVX       - ECX bit 28   (buffer[11] & 0x10)
+    //   CORJIT_FLAG_USE_FMA if the following feature bits are set (input EAX of 1), and xmmYmmStateSupport returns 1:
+    //      CORJIT_FLAG_USE_AVX
+    //      FMA       - ECX bit 12   (buffer[9]  & 0x10)
+    //   CORJIT_FLAG_USE_AVX2 if the following feature bit is set (input EAX of 0x07 and input ECX of 0):
+    //      CORJIT_FLAG_USE_AVX
+    //      AVX2      - EBX bit 5    (buffer[4]  & 0x20)
+    //   CORJIT_FLAG_USE_AVX_512 is not currently set, but defined so that it can be used in future without
+    //   CORJIT_FLAG_USE_AES
+    //      CORJIT_FLAG_USE_SSE2
+    //      AES       - ECX bit 25   (buffer[11] & 0x01)
+    //   CORJIT_FLAG_USE_PCLMULQDQ
+    //      CORJIT_FLAG_USE_SSE2
+    //      PCLMULQDQ - ECX bit 1    (buffer[8] & 0x01)
+    //   CORJIT_FLAG_USE_BMI1 if the following feature bit is set (input EAX of 0x07 and input ECX of 0):
+    //      BMI1 - EBX bit 3         (buffer[4]  & 0x08)
+    //   CORJIT_FLAG_USE_BMI2 if the following feature bit is set (input EAX of 0x07 and input ECX of 0):
+    //      BMI2 - EBX bit 8         (buffer[5]  & 0x01)
+    //   CORJIT_FLAG_USE_LZCNT if the following feature bits are set (input EAX of 80000001H)
+    //      LZCNT - ECX bit 5        (buffer[8]  & 0x20)
+    // synchronously updating VM and JIT.
+
     unsigned char buffer[16];
     DWORD maxCpuId = getcpuid(0, buffer);
-    if (maxCpuId >= 0)
+
+    if (maxCpuId >= 1)
     {
         // getcpuid executes cpuid with eax set to its first argument, and ecx cleared.
         // It returns the resulting eax in buffer[0-3], ebx in buffer[4-7], ecx in buffer[8-11],
         // and edx in buffer[12-15].
-        // We will set the following flags:
-        // CORJIT_FLAG_USE_SSE3 if the following feature bits are set (input EAX of 1)
-        //    SSE3 - ECX bit 0     (buffer[8]  & 0x01)
-        // CORJIT_FLAG_USE_SSSE3 if the following feature bits are set (input EAX of 1)
-        //    SSE3 - ECX bit 0     (buffer[8]  & 0x01)
-        //    SSSE3 - ECX bit 9    (buffer[9]  & 0x02)
-        // CORJIT_FLAG_USE_SSE41 if the following feature bits are set (input EAX of 1)
-        //    SSE3 - ECX bit 0     (buffer[8]  & 0x01)
-        //    SSSE3 - ECX bit 9    (buffer[9]  & 0x02)
-        //    SSE4.1 - ECX bit 19  (buffer[10] & 0x08)
-        // CORJIT_FLAG_USE_SSE42 if the following feature bits are set (input EAX of 1)
-        //    SSE3 - ECX bit 0     (buffer[8]  & 0x01)
-        //    SSSE3 - ECX bit 9    (buffer[9]  & 0x02)
-        //    SSE4.2 - ECX bit 20  (buffer[10] & 0x10)
-        // CORJIT_FLAG_USE_POPCNT if the following feature bits are set (input EAX of 1)
-        //    SSE3 - ECX bit 0     (buffer[8]  & 0x01)
-        //    SSSE3 - ECX bit 9    (buffer[9]  & 0x02)
-        //    SSE4.2 - ECX bit 20  (buffer[10] & 0x10)
-        //    POPCNT - ECX bit 23  (buffer[10] & 0x80)
-        // CORJIT_FLAG_USE_AVX if the following feature bits are set (input EAX of 1), and xmmYmmStateSupport returns 1:
-        //    OSXSAVE - ECX bit 27 (buffer[11] & 0x08)
-        //    AVX - ECX bit 28     (buffer[11] & 0x10)
-        // CORJIT_FLAG_USE_FMA if the following feature bits are set (input EAX of 1), and xmmYmmStateSupport returns 1:
-        //    FMA - ECX bit 12     (buffer[9]  & 0x10)
-        // CORJIT_FLAG_USE_AVX2 if the following feature bit is set (input EAX of 0x07 and input ECX of 0):
-        //    AVX2 - EBX bit 5     (buffer[4]  & 0x20)
-        // CORJIT_FLAG_USE_AVX_512 is not currently set, but defined so that it can be used in future without
-        // CORJIT_FLAG_USE_BMI1 if the following feature bit is set (input EAX of 0x07 and input ECX of 0):
-        //    BMI1 - EBX bit 3     (buffer[4]  & 0x08)
-        // CORJIT_FLAG_USE_BMI2 if the following feature bit is set (input EAX of 0x07 and input ECX of 0):
-        //    BMI2 - EBX bit 8     (buffer[5]  & 0x01)
-        // CORJIT_FLAG_USE_LZCNT if the following feature bits are set (input EAX of 80000001H)
-        //    LZCNT - ECX bit 5    (buffer[8]  & 0x20)
-        // synchronously updating VM and JIT.
+
         (void) getcpuid(1, buffer);
-        // If SSE2 is not enabled, there is no point in checking the rest.
-        // SSE2 is bit 26 of EDX   (buffer[15] & 0x04)
-        // TODO: Determine whether we should break out the various SSE options further.
-        if ((buffer[15] & 0x04) != 0)               // SSE2
+
+        // If SSE/SSE2 is not enabled, there is no point in checking the rest.
+        //   SSE  is bit 25 of EDX   (buffer[15] & 0x02)
+        //   SSE2 is bit 26 of EDX   (buffer[15] & 0x04)
+
+        if ((buffer[15] & 0x06) == 0x06)                                    // SSE & SSE2
         {
-            if ((buffer[8]  & 0x01) != 0)           // SSE3
-            {
-                CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_SSE3);
-                if ((buffer[9]  & 0x02) != 0)           // SSSE3
-                {
-                    CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_SSSE3);
-                    if ((buffer[10] & 0x08) != 0)           // SSE4.1
-                    {
-                        CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_SSE41);
-                    }
-                    if ((buffer[10] & 0x10) != 0)           // SSE4.2
-                    {
-                        CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_SSE42);
-                        if ((buffer[10] & 0x80) != 0)       // POPCNT
-                        {
-                            CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_POPCNT);
-                        }
-                    }
-                }
-            }
-            
-            if ((buffer[11] & 0x01) != 0)           // AESNI
+            if ((buffer[11] & 0x02) != 0)                                   // AESNI
             {
                 CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_AES);
             }
-            if ((buffer[8] & 0x02) != 0)            // PCLMULQDQ 
+
+            if ((buffer[8] & 0x02) != 0)                                    // PCLMULQDQ 
             {
                 CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_PCLMULQDQ);
             }
-            if ((buffer[11] & 0x18) == 0x18)        // AVX
+
+            if ((buffer[8] & 0x01) != 0)                                    // SSE3
             {
-                if(DoesOSSupportAVX())
+                CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_SSE3);
+
+                if ((buffer[9] & 0x02) != 0)                                // SSSE3
                 {
-                    if (xmmYmmStateSupport() == 1)
+                    CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_SSSE3);
+
+                    if ((buffer[10] & 0x08) != 0)                           // SSE4.1
                     {
-                        CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_AVX);
-                        if ((buffer[9]  & 0x10) != 0) // FMA
+                        CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_SSE41);
+
+                        if ((buffer[10] & 0x10) != 0)                       // SSE4.2
                         {
-                            CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_FMA);
-                        }
-                        if (maxCpuId >= 0x07)
-                        {
-                            (void) getextcpuid(0, 0x07, buffer);
-                            if ((buffer[4]  & 0x20) != 0) // AVX2
+                            CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_SSE42);
+
+                            if ((buffer[10] & 0x80) != 0)                   // POPCNT
                             {
-                                CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_AVX2);
+                                CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_POPCNT);
+                            }
+
+                            if ((buffer[11] & 0x18) == 0x18)                // AVX & OSXSAVE
+                            {
+                                if(DoesOSSupportAVX() && (xmmYmmStateSupport() == 1))
+                                {
+                                    CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_AVX);
+
+                                    if ((buffer[9] & 0x10) != 0)            // FMA
+                                    {
+                                        CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_FMA);
+                                    }
+
+                                    if (maxCpuId >= 0x07)
+                                    {
+                                        (void) getextcpuid(0, 0x07, buffer);
+
+                                        if ((buffer[4] & 0x20) != 0)        // AVX2
+                                        {
+                                            CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_AVX2);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
-            (void) getextcpuid(0, 0x07, buffer);
-            if ((buffer[4]  & 0x08) != 0)           // BMI1
-            {
-                CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_BMI1);
-            }
-            if ((buffer[5]  & 0x01) != 0)           //BMI2
-            {
-                CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_BMI2);
-            }
-
-            (void) getcpuid(0x80000001, buffer);
-            if ((buffer[8]  & 0x20) != 0)           // LZCNT
-            {
-                CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_LZCNT);
-            }
 
             static ConfigDWORD fFeatureSIMD;
+
             if (fFeatureSIMD.val(CLRConfig::EXTERNAL_FeatureSIMD) != 0)
             {
                 CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_FEATURE_SIMD);
@@ -1427,12 +1443,39 @@ void EEJitManager::SetCpuInfo()
                 CPUCompileFlags.Clear(CORJIT_FLAGS::CORJIT_FLAG_USE_AVX2);
             }
         }
+
+        if (maxCpuId >= 0x07)
+        {
+            (void)getextcpuid(0, 0x07, buffer);
+
+            if ((buffer[4] & 0x08) != 0)            // BMI1
+            {
+                CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_BMI1);
+            }
+
+            if ((buffer[5] & 0x01) != 0)            // BMI2
+            {
+                CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_BMI2);
+            }
+        }
+    }
+
+    DWORD maxCpuIdEx = getcpuid(0x80000000, buffer);
+
+    if (maxCpuIdEx >= 0x80000001)
+    {
+        // getcpuid executes cpuid with eax set to its first argument, and ecx cleared.
+        // It returns the resulting eax in buffer[0-3], ebx in buffer[4-7], ecx in buffer[8-11],
+        // and edx in buffer[12-15].
+
+        (void) getcpuid(0x80000001, buffer);
+
+        if ((buffer[8] & 0x20) != 0)            // LZCNT
+        {
+            CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_USE_LZCNT);
+        }
     }
 #endif // defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
-
-#if defined(_TARGET_ARM64_) && defined(FEATURE_PAL)
-    PAL_GetJitCpuCapabilityFlags(&CPUCompileFlags);
-#endif
 
 #if defined(_TARGET_ARM64_)
     static ConfigDWORD fFeatureSIMD;
@@ -1440,7 +1483,26 @@ void EEJitManager::SetCpuInfo()
     {
         CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_FEATURE_SIMD);
     }
-#endif
+#if defined(FEATURE_PAL)
+    PAL_GetJitCpuCapabilityFlags(&CPUCompileFlags);
+#elif defined(_WIN64)
+    // FP and SIMD support are enabled by default
+    CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_HAS_ARM64_SIMD);
+    CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_HAS_ARM64_FP);
+    // PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE (30)
+    if (IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE))
+    {
+        CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_HAS_ARM64_AES);
+        CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_HAS_ARM64_SHA1);
+        CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_HAS_ARM64_SHA256);
+    }
+    // PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE (31)
+    if (IsProcessorFeaturePresent(PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE))
+    {
+        CPUCompileFlags.Set(CORJIT_FLAGS::CORJIT_FLAG_HAS_ARM64_CRC32);
+    }
+#endif // _WIN64
+#endif // _TARGET_ARM64_
 
     m_CPUCompileFlags = CPUCompileFlags;
 }
@@ -1485,7 +1547,7 @@ JIT_LOAD_DATA g_JitLoadData;
 #if !defined(FEATURE_MERGE_JIT_AND_ENGINE)
 
 // Global that holds the path to custom JIT location
-extern "C" LPCWSTR g_CLRJITPath = nullptr;
+LPCWSTR g_CLRJITPath = nullptr;
 
 #endif // !defined(FEATURE_MERGE_JIT_AND_ENGINE)
 
@@ -2227,7 +2289,7 @@ void CodeHeapRequestInfo::Init()
     } CONTRACTL_END;
 
     if (m_pAllocator == NULL)
-        m_pAllocator = m_pMD->GetLoaderAllocatorForCode();
+        m_pAllocator = m_pMD->GetLoaderAllocator();
     m_isDynamicDomain = (m_pMD != NULL) ? m_pMD->IsLCGMethod() : false;
     m_isCollectible = m_pAllocator->IsCollectible() ? true : false;
     m_throwOnOutOfMemoryWithinRange = true;
@@ -2251,11 +2313,6 @@ extern "C" PT_RUNTIME_FUNCTION GetRuntimeFunctionCallback(IN ULONG     ControlPc
     BEGIN_PRESERVE_LAST_ERROR;
 
 #ifdef ENABLE_CONTRACTS
-    // See comment in code:Thread::SwitchIn and SwitchOut.
-    Thread *pThread = GetThread();
-    if (!(pThread && pThread->HasThreadStateNC(Thread::TSNC_InTaskSwitch)))
-    {
-
     // Some 64-bit OOM tests use the hosting interface to re-enter the CLR via
     // RtlVirtualUnwind to track unique stacks at each failure point. RtlVirtualUnwind can
     // result in the EEJitManager taking a reader lock. This, in turn, results in a
@@ -2275,10 +2332,6 @@ extern "C" PT_RUNTIME_FUNCTION GetRuntimeFunctionCallback(IN ULONG     ControlPc
         prf = codeInfo.GetFunctionEntry();
 
     LOG((LF_EH, LL_INFO1000000, "GetRuntimeFunctionCallback(%p) returned %p\n", ControlPc, prf));
-
-#ifdef ENABLE_CONTRACTS
-    }
-#endif // ENABLE_CONTRACTS
 
     END_PRESERVE_LAST_ERROR;
 
@@ -2538,7 +2591,7 @@ CodeHeader* EEJitManager::allocCode(MethodDesc* pMD, size_t blockSize, size_t re
     // redirect the rejit jmp-stamp at the top of the method from the prestub to the
     // rejitted code, or to reinstate original code on a revert).
     else if ((g_pConfig->GenOptimizeType() != OPT_SIZE) ||
-        ReJitManager::IsReJITEnabled())
+        pMD->IsVersionableWithJumpStamp())
     {
         alignment = max(alignment, 8);
     }
@@ -3124,7 +3177,7 @@ TypeHandle EEJitManager::ResolveEHClause(EE_ILEXCEPTION_CLAUSE* pEHClause,
         }
         else
         {
-            // If we raced in here with aother thread and got held up on the lock, then we just need to return the
+            // If we raced in here with another thread and got held up on the lock, then we just need to return the
             // type handle that the other thread put into the clause.
             // The typeHnd we found and the typeHnd the racing thread found should always be the same
             _ASSERTE(typeHnd.AsPtr() == pEHClause->TypeHandle);
@@ -3637,7 +3690,6 @@ BOOL EEJitManager::JitCodeToMethodInfo(
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 
@@ -3680,7 +3732,6 @@ StubCodeBlockKind EEJitManager::GetStubCodeBlockKind(RangeSection * pRangeSectio
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 
@@ -3696,7 +3747,6 @@ TADDR EEJitManager::FindMethodCode(PCODE currentPC)
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 
@@ -3833,12 +3883,13 @@ void EEJitManager::NibbleMapSet(HeapList * pHp, TADDR pCode, BOOL bSet)
 #endif // !DACCESS_COMPILE
 
 #if defined(WIN64EXCEPTIONS)
+// Note: This returns the root unwind record (the one that describes the prolog)
+// in cases where there is fragmented unwind.
 PTR_RUNTIME_FUNCTION EEJitManager::LazyGetFunctionEntry(EECodeInfo * pCodeInfo)
 {
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 
@@ -3862,6 +3913,14 @@ PTR_RUNTIME_FUNCTION EEJitManager::LazyGetFunctionEntry(EECodeInfo * pCodeInfo)
 
         if (RUNTIME_FUNCTION__BeginAddress(pFunctionEntry) <= address && address < RUNTIME_FUNCTION__EndAddress(pFunctionEntry, baseAddress))
         {
+
+#if defined(EXCEPTION_DATA_SUPPORTS_FUNCTION_FRAGMENTS) && defined(_TARGET_ARM64_)
+            // If we might have fragmented unwind, and we're on ARM64, make sure
+            // to returning the root record, as the trailing records don't have
+            // prolog unwind codes.
+            pFunctionEntry = FindRootEntry(pFunctionEntry, baseAddress);
+#endif
+
             return pFunctionEntry;
         }
     }
@@ -4127,7 +4186,6 @@ ExecutionManager::FindCodeRange(PCODE currentPC, ScanFlag scanFlag)
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 
@@ -4148,7 +4206,6 @@ ExecutionManager::FindCodeRangeWithLock(PCODE currentPC)
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 
@@ -4177,7 +4234,6 @@ MethodDesc * ExecutionManager::GetCodeMethodDesc(PCODE currentPC)
         NOTHROW;
         GC_NOTRIGGER;
         FORBID_FAULT;
-        SO_TOLERANT;
     }
     CONTRACTL_END
 
@@ -4193,7 +4249,6 @@ BOOL ExecutionManager::IsManagedCode(PCODE currentPC)
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
     } CONTRACTL_END;
 
     if (currentPC == NULL)
@@ -4212,7 +4267,6 @@ BOOL ExecutionManager::IsManagedCodeWithLock(PCODE currentPC)
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
     } CONTRACTL_END;
 
     ReaderLockHolder rlh;
@@ -4225,7 +4279,6 @@ BOOL ExecutionManager::IsManagedCode(PCODE currentPC, HostCallPreference hostCal
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
     } CONTRACTL_END;
 
 #ifdef DACCESS_COMPILE
@@ -4256,7 +4309,6 @@ BOOL ExecutionManager::IsManagedCodeWorker(PCODE currentPC)
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
     } CONTRACTL_END;
 
     // This may get called for arbitrary code addresses. Note that the lock is
@@ -4381,7 +4433,6 @@ RangeSection* ExecutionManager::GetRangeSection(TADDR addr)
         NOTHROW;
         HOST_NOCALLS;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 
@@ -4506,7 +4557,6 @@ PTR_Module ExecutionManager::FindZapModule(TADDR currentData)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
         STATIC_CONTRACT_HOST_CALLS;
         SUPPORTS_DAC;
@@ -4537,7 +4587,6 @@ PTR_Module ExecutionManager::FindReadyToRunModule(TADDR currentData)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
         STATIC_CONTRACT_HOST_CALLS;
         SUPPORTS_DAC;
@@ -4571,7 +4620,6 @@ PTR_Module ExecutionManager::FindModuleForGCRefMap(TADDR currentData)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     }
     CONTRACTL_END;
@@ -4941,7 +4989,7 @@ PCODE ExecutionManager::jumpStub(MethodDesc* pMD, PCODE target,
 
     if (pLoaderAllocator == NULL)
     {
-        pLoaderAllocator = pMD->GetLoaderAllocatorForCode();
+        pLoaderAllocator = pMD->GetLoaderAllocator();
     }
     _ASSERTE(pLoaderAllocator != NULL);
 
@@ -5092,7 +5140,7 @@ PCODE ExecutionManager::getNextJumpStub(MethodDesc* pMD, PCODE target,
     }
 
     // allocJumpStubBlock will allocate from the LoaderCodeHeap for normal methods
-    // and will alocate from a HostCodeHeap for LCG methods.
+    // and will allocate from a HostCodeHeap for LCG methods.
     //
     // note that this can throw an OOM exception
 
@@ -5431,7 +5479,6 @@ BOOL NativeImageJitManager::JitCodeToMethodInfo(RangeSection * pRangeSection,
                                             EECodeInfo * pCodeInfo)
 {
     CONTRACTL {
-        SO_TOLERANT;
         NOTHROW;
         GC_NOTRIGGER;
         SUPPORTS_DAC;
@@ -5787,7 +5834,6 @@ StubCodeBlockKind NativeImageJitManager::GetStubCodeBlockKind(RangeSection * pRa
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -6121,7 +6167,6 @@ int NativeUnwindInfoLookupTable::LookupUnwindInfoForMethod(DWORD RelativePc,
                                                            int High)
 {
     CONTRACTL {
-        SO_TOLERANT;
         NOTHROW;
         GC_NOTRIGGER;
         SUPPORTS_DAC;
@@ -6716,7 +6761,6 @@ StubCodeBlockKind ReadyToRunJitManager::GetStubCodeBlockKind(RangeSection * pRan
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -6880,7 +6924,6 @@ BOOL ReadyToRunJitManager::JitCodeToMethodInfo(RangeSection * pRangeSection,
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 

@@ -608,7 +608,7 @@ DebuggerJitInfo * FrameInfo::GetJitInfoFromFrame()
         _ASSERTE(this->md != NULL);
         ji = g_pDebugger->GetJitInfo(this->md, (const BYTE*)GetControlPC(&(this->registers)));
         _ASSERTE(ji != NULL);
-        _ASSERTE(ji->m_fd == this->md);
+        _ASSERTE(ji->m_nativeCodeVersion.GetMethodDesc() == this->md);
     }
     EX_CATCH
     {
@@ -2141,7 +2141,9 @@ StackWalkAction DebuggerWalkStack(Thread *thread,
 
         result = g_pEEInterface->StackWalkFramesEx(thread, &data.regDisplay,
                                                    DebuggerWalkStackProc,
-                                                   &data, flags | HANDLESKIPPEDFRAMES | NOTIFY_ON_U2M_TRANSITIONS | ALLOW_ASYNC_STACK_WALK);
+                                                   &data,
+                                                   flags | HANDLESKIPPEDFRAMES | NOTIFY_ON_U2M_TRANSITIONS |
+                                                   ALLOW_ASYNC_STACK_WALK | SKIP_GSCOOKIE_CHECK);
     }
     else
     {

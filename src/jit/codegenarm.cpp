@@ -15,8 +15,6 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 #pragma hdrstop
 #endif
 
-#ifndef LEGACY_BACKEND // This file is ONLY used for the RyuJIT backend that uses the linear scan register allocator
-
 #ifdef _TARGET_ARM_
 #include "codegen.h"
 #include "lower.h"
@@ -80,7 +78,8 @@ void CodeGen::instGen_Set_Reg_To_Imm(emitAttr size, regNumber reg, ssize_t imm, 
 
     if (EA_IS_RELOC(size))
     {
-        genMov32RelocatableImmediate(size, imm, reg);
+        // TODO-CrossBitness: we wouldn't need the cast below if we had CodeGen::instGen_Set_Reg_To_Reloc_Imm.
+        genMov32RelocatableImmediate(size, (BYTE*)imm, reg);
     }
     else if (imm == 0)
     {
@@ -88,14 +87,16 @@ void CodeGen::instGen_Set_Reg_To_Imm(emitAttr size, regNumber reg, ssize_t imm, 
     }
     else
     {
-        if (arm_Valid_Imm_For_Mov(imm))
+        // TODO-CrossBitness: we wouldn't need the cast below if we had CodeGen::instGen_Set_Reg_To_Reloc_Imm.
+        const int val32 = (int)imm;
+        if (arm_Valid_Imm_For_Mov(val32))
         {
-            getEmitter()->emitIns_R_I(INS_mov, size, reg, imm, flags);
+            getEmitter()->emitIns_R_I(INS_mov, size, reg, val32, flags);
         }
         else // We have to use a movw/movt pair of instructions
         {
-            ssize_t imm_lo16 = (imm & 0xffff);
-            ssize_t imm_hi16 = (imm >> 16) & 0xffff;
+            const int imm_lo16 = val32 & 0xffff;
+            const int imm_hi16 = (val32 >> 16) & 0xffff;
 
             assert(arm_Valid_Imm_For_Mov(imm_lo16));
             assert(imm_hi16 != 0);
@@ -109,7 +110,7 @@ void CodeGen::instGen_Set_Reg_To_Imm(emitAttr size, regNumber reg, ssize_t imm, 
 
             if (getEmitter()->isLowRegister(reg) && (imm_hi16 == 0xffff) && ((imm_lo16 & 0x8000) == 0x8000))
             {
-                getEmitter()->emitIns_R_R(INS_sxth, EA_2BYTE, reg, reg);
+                getEmitter()->emitIns_R_R(INS_sxth, EA_4BYTE, reg, reg);
             }
             else
             {
@@ -121,7 +122,7 @@ void CodeGen::instGen_Set_Reg_To_Imm(emitAttr size, regNumber reg, ssize_t imm, 
         }
     }
 
-    regTracker.rsTrackRegIntCns(reg, imm);
+    regSet.verifyRegUsed(reg);
 }
 
 //------------------------------------------------------------------------
@@ -145,7 +146,7 @@ void CodeGen::genSetRegToConst(regNumber targetReg, var_types targetType, GenTre
             if (con->ImmedValNeedsReloc(compiler))
             {
                 instGen_Set_Reg_To_Imm(EA_HANDLE_CNS_RELOC, targetReg, cnsVal);
-                regTracker.rsTrackRegTrash(targetReg);
+                regSet.verifyRegUsed(targetReg);
             }
             else
             {
@@ -205,7 +206,7 @@ void CodeGen::genSetRegToConst(regNumber targetReg, var_types targetType, GenTre
 //    Mul and div are not handled here.
 //    See the assert below for the operators that are handled.
 
-void CodeGen::genCodeForBinary(GenTree* treeNode)
+void CodeGen::genCodeForBinary(GenTreeOp* treeNode)
 {
     const genTreeOps oper       = treeNode->OperGet();
     regNumber        targetReg  = treeNode->gtRegNum;
@@ -262,6 +263,7 @@ void CodeGen::genCodeForBinary(GenTree* treeNode)
 void CodeGen::genLclHeap(GenTree* tree)
 {
     assert(tree->OperGet() == GT_LCLHEAP);
+    assert(compiler->compLocallocUsed);
 
     GenTree* size = tree->gtOp.gtOp1;
     noway_assert((genActualType(size->gtType) == TYP_INT) || (genActualType(size->gtType) == TYP_I_IMPL));
@@ -270,40 +272,13 @@ void CodeGen::genLclHeap(GenTree* tree)
     // Also it used as temporary register in code generation
     // for storing allocation size
     regNumber   regCnt          = tree->gtRegNum;
-    regNumber   pspSymReg       = REG_NA;
     var_types   type            = genActualType(size->gtType);
     emitAttr    easz            = emitTypeSize(type);
     BasicBlock* endLabel        = nullptr;
-    BasicBlock* loop            = nullptr;
     unsigned    stackAdjustment = 0;
-
-#ifdef DEBUG
-    // Verify ESP
-    if (compiler->opts.compStackCheckOnRet)
-    {
-        noway_assert(compiler->lvaReturnEspCheck != 0xCCCCCCCC &&
-                     compiler->lvaTable[compiler->lvaReturnEspCheck].lvDoNotEnregister &&
-                     compiler->lvaTable[compiler->lvaReturnEspCheck].lvOnFrame);
-        getEmitter()->emitIns_S_R(INS_cmp, EA_PTRSIZE, REG_SPBASE, compiler->lvaReturnEspCheck, 0);
-
-        BasicBlock*  esp_check = genCreateTempLabel();
-        emitJumpKind jmpEqual  = genJumpKindForOper(GT_EQ, CK_SIGNED);
-        inst_JMP(jmpEqual, esp_check);
-        getEmitter()->emitIns(INS_BREAKPOINT);
-        genDefineTempLabel(esp_check);
-    }
-#endif
 
     noway_assert(isFramePointerUsed()); // localloc requires Frame Pointer to be established since SP changes
     noway_assert(genStackLevel == 0);   // Can't have anything on the stack
-
-    // Whether method has PSPSym.
-    bool hasPspSym;
-#if FEATURE_EH_FUNCLETS
-    hasPspSym = (compiler->lvaPSPSym != BAD_VAR_NUM);
-#else
-    hasPspSym = false;
-#endif
 
     // Check to 0 size allocations
     // size_t amount = 0;
@@ -326,24 +301,11 @@ void CodeGen::genLclHeap(GenTree* tree)
         genConsumeRegAndCopy(size, regCnt);
         endLabel = genCreateTempLabel();
         getEmitter()->emitIns_R_R(INS_TEST, easz, regCnt, regCnt);
-        emitJumpKind jmpEqual = genJumpKindForOper(GT_EQ, CK_SIGNED);
-        inst_JMP(jmpEqual, endLabel);
+        inst_JMP(EJ_eq, endLabel);
     }
 
     stackAdjustment = 0;
-#if FEATURE_EH_FUNCLETS
-    // If we have PSPsym, then need to re-locate it after localloc.
-    if (hasPspSym)
-    {
-        stackAdjustment += STACK_ALIGN;
 
-        // Save a copy of PSPSym
-        pspSymReg = tree->ExtractTempReg();
-        getEmitter()->emitIns_R_S(ins_Load(TYP_I_IMPL), EA_PTRSIZE, pspSymReg, compiler->lvaPSPSym, 0);
-    }
-#endif
-
-#if FEATURE_FIXED_OUT_ARGS
     // If we have an outgoing arg area then we must adjust the SP by popping off the
     // outgoing arg area. We will restore it right before we return from this method.
     if (compiler->lvaOutgoingArgSpaceSize > 0)
@@ -353,32 +315,34 @@ void CodeGen::genLclHeap(GenTree* tree)
         inst_RV_IV(INS_add, REG_SPBASE, compiler->lvaOutgoingArgSpaceSize, EA_PTRSIZE);
         stackAdjustment += compiler->lvaOutgoingArgSpaceSize;
     }
-#endif
 
     // Put aligned allocation size to regCnt
     if (size->IsCnsIntOrI())
     {
         // 'amount' is the total number of bytes to localloc to properly STACK_ALIGN
-        size_t amount = size->gtIntCon.gtIconVal;
-        amount        = AlignUp(amount, STACK_ALIGN);
+        target_size_t amount = (target_size_t)size->gtIntCon.gtIconVal;
+        amount               = AlignUp(amount, STACK_ALIGN);
 
-        // For small allocations we will generate up to four stp instructions
-        size_t cntStackAlignedWidthItems = (amount >> STACK_ALIGN_SHIFT);
-        if (cntStackAlignedWidthItems <= 4)
+        // For small allocations we will generate up to four push instructions (either 2 or 4, exactly,
+        // since STACK_ALIGN is 8, and REGSIZE_BYTES is 4).
+        static_assert_no_msg(STACK_ALIGN == (REGSIZE_BYTES * 2));
+        assert(amount % REGSIZE_BYTES == 0);
+        target_size_t pushCount = amount / REGSIZE_BYTES;
+        if (pushCount <= 4)
         {
             instGen_Set_Reg_To_Zero(EA_PTRSIZE, regCnt);
 
-            while (cntStackAlignedWidthItems != 0)
+            while (pushCount != 0)
             {
                 inst_IV(INS_push, (unsigned)genRegMask(regCnt));
-                cntStackAlignedWidthItems -= 1;
+                pushCount -= 1;
             }
 
             goto ALLOC_DONE;
         }
         else if (!compiler->info.compInitMem && (amount < compiler->eeGetPageSize())) // must be < not <=
         {
-            // Since the size is a page or less, simply adjust the SP value
+            // Since the size is less than a page, simply adjust the SP value.
             // The SP might already be in the guard page, must touch it BEFORE
             // the alloc, not after.
             getEmitter()->emitIns_R_R_I(INS_ldr, EA_4BYTE, regCnt, REG_SP, 0);
@@ -399,8 +363,8 @@ void CodeGen::genLclHeap(GenTree* tree)
     // Allocation
     if (compiler->info.compInitMem)
     {
-        // At this point 'regCnt' is set to the total number of bytes to locAlloc.
-        // Since we have to zero out the allocated memory AND ensure that RSP is always valid
+        // At this point 'regCnt' is set to the total number of bytes to localloc.
+        // Since we have to zero out the allocated memory AND ensure that the stack pointer is always valid
         // by tickling the pages, we will just push 0's on the stack.
 
         regNumber regTmp = tree->ExtractTempReg();
@@ -418,8 +382,7 @@ void CodeGen::genLclHeap(GenTree* tree)
         // Note that regCnt is the number of bytes to stack allocate.
         assert(genIsValidIntReg(regCnt));
         getEmitter()->emitIns_R_I(INS_sub, EA_PTRSIZE, regCnt, STACK_ALIGN, INS_FLAGS_SET);
-        emitJumpKind jmpNotEqual = genJumpKindForOper(GT_NE, CK_SIGNED);
-        inst_JMP(jmpNotEqual, loop);
+        inst_JMP(EJ_ne, loop);
     }
     else
     {
@@ -477,8 +440,7 @@ void CodeGen::genLclHeap(GenTree* tree)
         getEmitter()->emitIns_R_R_I(INS_sub, EA_PTRSIZE, regTmp, REG_SPBASE, compiler->eeGetPageSize());
 
         getEmitter()->emitIns_R_R(INS_cmp, EA_PTRSIZE, regTmp, regCnt);
-        emitJumpKind jmpLTU = genJumpKindForOper(GT_LT, CK_UNSIGNED);
-        inst_JMP(jmpLTU, done);
+        inst_JMP(EJ_lo, done);
 
         // Update SP to be at the next page of stack that we will tickle
         getEmitter()->emitIns_R_R(INS_mov, EA_PTRSIZE, REG_SPBASE, regTmp);
@@ -494,21 +456,13 @@ void CodeGen::genLclHeap(GenTree* tree)
     }
 
 ALLOC_DONE:
-    // Re-adjust SP to allocate PSPSym and out-going arg area
+    // Re-adjust SP to allocate out-going arg area
     if (stackAdjustment != 0)
     {
         assert((stackAdjustment % STACK_ALIGN) == 0); // This must be true for the stack to remain aligned
         assert(stackAdjustment > 0);
         getEmitter()->emitIns_R_R_I(INS_sub, EA_PTRSIZE, REG_SPBASE, REG_SPBASE, (int)stackAdjustment);
 
-#if FEATURE_EH_FUNCLETS
-        // Write PSPSym to its new location.
-        if (hasPspSym)
-        {
-            assert(genIsValidIntReg(pspSymReg));
-            getEmitter()->emitIns_S_R(ins_Store(TYP_I_IMPL), EA_PTRSIZE, pspSymReg, compiler->lvaPSPSym, 0);
-        }
-#endif
         // Return the stackalloc'ed address in result register.
         // regCnt = RSP + stackAdjustment.
         getEmitter()->emitIns_R_R_I(INS_add, EA_PTRSIZE, regCnt, REG_SPBASE, (int)stackAdjustment);
@@ -522,30 +476,6 @@ ALLOC_DONE:
 BAILOUT:
     if (endLabel != nullptr)
         genDefineTempLabel(endLabel);
-
-    // Write the lvaLocAllocSPvar stack frame slot
-    if (compiler->lvaLocAllocSPvar != BAD_VAR_NUM)
-    {
-        getEmitter()->emitIns_S_R(ins_Store(TYP_I_IMPL), EA_PTRSIZE, regCnt, compiler->lvaLocAllocSPvar, 0);
-    }
-
-#if STACK_PROBES
-    if (compiler->opts.compNeedStackProbes)
-    {
-        genGenerateStackProbe();
-    }
-#endif
-
-#ifdef DEBUG
-    // Update new ESP
-    if (compiler->opts.compStackCheckOnRet)
-    {
-        noway_assert(compiler->lvaReturnEspCheck != 0xCCCCCCCC &&
-                     compiler->lvaTable[compiler->lvaReturnEspCheck].lvDoNotEnregister &&
-                     compiler->lvaTable[compiler->lvaReturnEspCheck].lvOnFrame);
-        getEmitter()->emitIns_S_R(ins_Store(TYP_I_IMPL), EA_PTRSIZE, regCnt, compiler->lvaReturnEspCheck, 0);
-    }
-#endif
 
     genProduceReg(tree);
 }
@@ -583,7 +513,7 @@ void CodeGen::genJumpTable(GenTree* treeNode)
         BasicBlock* target = *jumpTable++;
         noway_assert(target->bbFlags & BBF_JMP_TARGET);
 
-        JITDUMP("            DD      L_M%03u_BB%02u\n", Compiler::s_compMethodsCount, target->bbNum);
+        JITDUMP("            DD      L_M%03u_" FMT_BB "\n", Compiler::s_compMethodsCount, target->bbNum);
 
         getEmitter()->emitDataGenData(i, target);
     }
@@ -765,7 +695,7 @@ void CodeGen::genCodeForCpObj(GenTreeObj* cpObjNode)
         sourceIsLocal = true;
     }
 
-    bool dstOnStack = dstAddr->OperIsLocalAddr();
+    bool dstOnStack = dstAddr->gtSkipReloadOrCopy()->OperIsLocalAddr();
 
 #ifdef DEBUG
     assert(!dstAddr->isContained());
@@ -898,7 +828,7 @@ void CodeGen::genCodeForShiftLong(GenTree* tree)
 
     assert(shiftBy->isContainedIntOrIImmed());
 
-    unsigned int count = shiftBy->AsIntConCommon()->IconValue();
+    unsigned count = (unsigned)shiftBy->AsIntConCommon()->IconValue();
 
     regNumber regResult = (oper == GT_LSH_HI) ? regHi : regLo;
 
@@ -1197,7 +1127,7 @@ void CodeGen::genCodeForCompare(GenTreeOp* tree)
     // Are we evaluating this into a register?
     if (targetReg != REG_NA)
     {
-        genSetRegToCond(targetReg, tree);
+        inst_SETCC(GenCondition::FromRelop(tree), tree->TypeGet(), targetReg);
         genProduceReg(tree);
     }
 }
@@ -1223,8 +1153,7 @@ void CodeGen::genCodeForReturnTrap(GenTreeOp* tree)
 
     BasicBlock* skipLabel = genCreateTempLabel();
 
-    emitJumpKind jmpEqual = genJumpKindForOper(GT_EQ, CK_SIGNED);
-    inst_JMP(jmpEqual, skipLabel);
+    inst_JMP(EJ_eq, skipLabel);
 
     // emit the call to the EE-helper that stops for GC (or other reasons)
 
@@ -1297,54 +1226,6 @@ void CodeGen::genCodeForStoreInd(GenTreeStoreInd* tree)
     }
 }
 
-//------------------------------------------------------------------------
-// genSetRegToCond: Generate code to materialize a condition into a register.
-//
-// Arguments:
-//   dstReg - The target register to set to 1 or 0
-//   tree - The GenTree Relop node that was used to set the Condition codes
-//
-// Return Value: none
-//
-// Preconditions:
-//    The condition codes must already have been appropriately set.
-//
-void CodeGen::genSetRegToCond(regNumber dstReg, GenTree* tree)
-{
-    // Emit code like that:
-    //   ...
-    //   beq True
-    //   bvs True    ; this second branch is typically absent
-    //   movs rD, #0
-    //   b Next
-    // True:
-    //   movs rD, #1
-    // Next:
-    //   ...
-
-    emitJumpKind jumpKind[2];
-    bool         branchToTrueLabel[2];
-    genJumpKindsForTree(tree, jumpKind, branchToTrueLabel);
-
-    BasicBlock* labelTrue = genCreateTempLabel();
-    getEmitter()->emitIns_J(emitter::emitJumpKindToIns(jumpKind[0]), labelTrue);
-
-    if (jumpKind[1] != EJ_NONE)
-    {
-        getEmitter()->emitIns_J(emitter::emitJumpKindToIns(jumpKind[1]), labelTrue);
-    }
-
-    getEmitter()->emitIns_R_I(INS_mov, emitActualTypeSize(tree->gtType), dstReg, 0);
-
-    BasicBlock* labelNext = genCreateTempLabel();
-    getEmitter()->emitIns_J(INS_b, labelNext);
-
-    genDefineTempLabel(labelTrue);
-    getEmitter()->emitIns_R_I(INS_mov, emitActualTypeSize(tree->gtType), dstReg, 1);
-    genDefineTempLabel(labelNext);
-}
-
-//------------------------------------------------------------------------
 // genLongToIntCast: Generate code for long to int casts.
 //
 // Arguments:
@@ -1396,17 +1277,14 @@ void CodeGen::genLongToIntCast(GenTree* cast)
             BasicBlock* success = genCreateTempLabel();
 
             inst_RV_RV(INS_tst, loSrcReg, loSrcReg, TYP_INT, EA_4BYTE);
-            emitJumpKind JmpNegative = genJumpKindForOper(GT_LT, CK_LOGICAL);
-            inst_JMP(JmpNegative, allOne);
+            inst_JMP(EJ_mi, allOne);
             inst_RV_RV(INS_tst, hiSrcReg, hiSrcReg, TYP_INT, EA_4BYTE);
-            emitJumpKind jmpNotEqualL = genJumpKindForOper(GT_NE, CK_LOGICAL);
-            genJumpToThrowHlpBlk(jmpNotEqualL, SCK_OVERFLOW);
+            genJumpToThrowHlpBlk(EJ_ne, SCK_OVERFLOW);
             inst_JMP(EJ_jmp, success);
 
             genDefineTempLabel(allOne);
             inst_RV_IV(INS_cmp, hiSrcReg, -1, EA_4BYTE);
-            emitJumpKind jmpNotEqualS = genJumpKindForOper(GT_NE, CK_SIGNED);
-            genJumpToThrowHlpBlk(jmpNotEqualS, SCK_OVERFLOW);
+            genJumpToThrowHlpBlk(EJ_ne, SCK_OVERFLOW);
 
             genDefineTempLabel(success);
         }
@@ -1415,13 +1293,11 @@ void CodeGen::genLongToIntCast(GenTree* cast)
             if ((srcType == TYP_ULONG) && (dstType == TYP_INT))
             {
                 inst_RV_RV(INS_tst, loSrcReg, loSrcReg, TYP_INT, EA_4BYTE);
-                emitJumpKind JmpNegative = genJumpKindForOper(GT_LT, CK_LOGICAL);
-                genJumpToThrowHlpBlk(JmpNegative, SCK_OVERFLOW);
+                genJumpToThrowHlpBlk(EJ_mi, SCK_OVERFLOW);
             }
 
             inst_RV_RV(INS_tst, hiSrcReg, hiSrcReg, TYP_INT, EA_4BYTE);
-            emitJumpKind jmpNotEqual = genJumpKindForOper(GT_NE, CK_LOGICAL);
-            genJumpToThrowHlpBlk(jmpNotEqual, SCK_OVERFLOW);
+            genJumpToThrowHlpBlk(EJ_ne, SCK_OVERFLOW);
         }
     }
 
@@ -1601,7 +1477,7 @@ void CodeGen::genEmitHelperCall(unsigned helper, int argSize, emitAttr retSize, 
         else
         {
             getEmitter()->emitIns_R_AI(INS_ldr, EA_PTR_DSP_RELOC, callTargetReg, (ssize_t)pAddr);
-            regTracker.rsTrackRegTrash(callTargetReg);
+            regSet.verifyRegUsed(callTargetReg);
         }
 
         getEmitter()->emitIns_Call(emitter::EC_INDIR_R, compiler->eeFindHelper(helper),
@@ -1611,74 +1487,20 @@ void CodeGen::genEmitHelperCall(unsigned helper, int argSize, emitAttr retSize, 
                                    BAD_IL_OFFSET, // ilOffset
                                    callTargetReg, // ireg
                                    REG_NA, 0, 0,  // xreg, xmul, disp
-                                   false,         // isJump
-                                   emitter::emitNoGChelper(helper),
-                                   (CorInfoHelpFunc)helper == CORINFO_HELP_PROF_FCN_LEAVE);
+                                   false          // isJump
+                                   );
     }
     else
     {
         getEmitter()->emitIns_Call(emitter::EC_FUNC_TOKEN, compiler->eeFindHelper(helper),
                                    INDEBUG_LDISASM_COMMA(nullptr) addr, argSize, retSize, gcInfo.gcVarPtrSetCur,
                                    gcInfo.gcRegGCrefSetCur, gcInfo.gcRegByrefSetCur, BAD_IL_OFFSET, REG_NA, REG_NA, 0,
-                                   0,     /* ilOffset, ireg, xreg, xmul, disp */
-                                   false, /* isJump */
-                                   emitter::emitNoGChelper(helper),
-                                   (CorInfoHelpFunc)helper == CORINFO_HELP_PROF_FCN_LEAVE);
+                                   0,    /* ilOffset, ireg, xreg, xmul, disp */
+                                   false /* isJump */
+                                   );
     }
 
-    regTracker.rsTrashRegSet(RBM_CALLEE_TRASH);
-}
-
-//------------------------------------------------------------------------
-// genStoreLongLclVar: Generate code to store a non-enregistered long lclVar
-//
-// Arguments:
-//    treeNode - A TYP_LONG lclVar node.
-//
-// Return Value:
-//    None.
-//
-// Assumptions:
-//    'treeNode' must be a TYP_LONG lclVar node for a lclVar that has NOT been promoted.
-//    Its operand must be a GT_LONG node.
-//
-void CodeGen::genStoreLongLclVar(GenTree* treeNode)
-{
-    emitter* emit = getEmitter();
-
-    GenTreeLclVarCommon* lclNode = treeNode->AsLclVarCommon();
-    unsigned             lclNum  = lclNode->gtLclNum;
-    LclVarDsc*           varDsc  = &(compiler->lvaTable[lclNum]);
-    assert(varDsc->TypeGet() == TYP_LONG);
-    assert(!varDsc->lvPromoted);
-    GenTree* op1 = treeNode->gtOp.gtOp1;
-    noway_assert(op1->OperGet() == GT_LONG || op1->OperGet() == GT_MUL_LONG);
-    genConsumeRegs(op1);
-
-    if (op1->OperGet() == GT_LONG)
-    {
-        // Definitions of register candidates will have been lowered to 2 int lclVars.
-        assert(!treeNode->gtHasReg());
-
-        GenTree* loVal = op1->gtGetOp1();
-        GenTree* hiVal = op1->gtGetOp2();
-
-        noway_assert((loVal->gtRegNum != REG_NA) && (hiVal->gtRegNum != REG_NA));
-
-        emit->emitIns_S_R(ins_Store(TYP_INT), EA_4BYTE, loVal->gtRegNum, lclNum, 0);
-        emit->emitIns_S_R(ins_Store(TYP_INT), EA_4BYTE, hiVal->gtRegNum, lclNum, genTypeSize(TYP_INT));
-    }
-    else if (op1->OperGet() == GT_MUL_LONG)
-    {
-        assert((op1->gtFlags & GTF_MUL_64RSLT) != 0);
-
-        GenTreeMultiRegOp* mul = op1->AsMultiRegOp();
-
-        // Stack store
-        getEmitter()->emitIns_S_R(ins_Store(TYP_INT), emitTypeSize(TYP_INT), mul->gtRegNum, lclNum, 0);
-        getEmitter()->emitIns_S_R(ins_Store(TYP_INT), emitTypeSize(TYP_INT), mul->gtOtherReg, lclNum,
-                                  genTypeSize(TYP_INT));
-    }
+    regSet.verifyRegistersUsed(RBM_CALLEE_TRASH);
 }
 
 //------------------------------------------------------------------------
@@ -1702,5 +1524,3 @@ void CodeGen::genCodeForMulLong(GenTreeMultiRegOp* node)
 }
 
 #endif // _TARGET_ARM_
-
-#endif // !LEGACY_BACKEND

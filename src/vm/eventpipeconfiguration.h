@@ -13,9 +13,8 @@ class EventPipeSessionProvider;
 class EventPipeEvent;
 class EventPipeEventInstance;
 class EventPipeProvider;
-struct EventPipeProviderConfiguration;
 class EventPipeSession;
-class EventPipeSessionProvider;
+enum class EventPipeSessionType;
 
 enum class EventPipeEventLevel
 {
@@ -30,7 +29,6 @@ enum class EventPipeEventLevel
 class EventPipeConfiguration
 {
 public:
-
     EventPipeConfiguration();
     ~EventPipeConfiguration();
 
@@ -38,7 +36,7 @@ public:
     void Initialize();
 
     // Create a new provider.
-    EventPipeProvider* CreateProvider(const SString &providerName, EventPipeCallback pCallbackFunction, void *pCallbackData);
+    EventPipeProvider *CreateProvider(const SString &providerName, EventPipeCallback pCallbackFunction, void *pCallbackData);
 
     // Delete a provider.
     void DeleteProvider(EventPipeProvider *pProvider);
@@ -50,10 +48,15 @@ public:
     bool UnregisterProvider(EventPipeProvider &provider);
 
     // Get the provider with the specified provider ID if it exists.
-    EventPipeProvider* GetProvider(const SString &providerID);
+    EventPipeProvider *GetProvider(const SString &providerID);
 
     // Create a new session.
-    EventPipeSession* CreateSession(unsigned int circularBufferSizeInMB, EventPipeProviderConfiguration *pProviders, unsigned int numProviders);
+    EventPipeSession *CreateSession(
+        EventPipeSessionType sessionType,
+        unsigned int circularBufferSizeInMB,
+        const EventPipeProviderConfiguration *pProviders,
+        uint32_t numProviders,
+        uint64_t multiFileTraceLengthInSeconds = 0);
 
     // Delete a session.
     void DeleteSession(EventPipeSession *pSession);
@@ -77,7 +80,7 @@ public:
     void EnableRundown(EventPipeSession *pSession);
 
     // Get the event used to write metadata to the event stream.
-    EventPipeEventInstance* BuildEventMetadataEvent(EventPipeEventInstance &sourceInstance, unsigned int metdataId);
+    EventPipeEventInstance *BuildEventMetadataEvent(EventPipeEventInstance &sourceInstance, unsigned int metdataId);
 
     // Delete deferred providers.
     void DeleteDeferredProviders();
@@ -92,12 +95,11 @@ public:
     }
 
 private:
-
     // Get the provider without taking the lock.
-    EventPipeProvider* GetProviderNoLock(const SString &providerID);
+    EventPipeProvider *GetProviderNoLock(const SString &providerID);
 
     // Get the enabled provider.
-    EventPipeSessionProvider* GetSessionProvider(EventPipeSession *pSession, EventPipeProvider *pProvider);
+    EventPipeSessionProvider *GetSessionProvider(EventPipeSession *pSession, EventPipeProvider *pProvider);
 
     // The one and only EventPipe session.
     EventPipeSession *m_pSession;
@@ -106,7 +108,7 @@ private:
     Volatile<bool> m_enabled;
 
     // The list of event pipe providers.
-    SList<SListElem<EventPipeProvider*>> *m_pProviderList;
+    SList<SListElem<EventPipeProvider *>> *m_pProviderList;
 
     // The provider used to write configuration events to the event stream.
     EventPipeProvider *m_pConfigProvider;
@@ -116,7 +118,7 @@ private:
 
     // The provider name for the configuration event pipe provider.
     // This provider is used to emit configuration events.
-    const static WCHAR* s_configurationProviderName;
+    const static WCHAR *s_configurationProviderName;
 
     // True if rundown is enabled.
     Volatile<bool> m_rundownEnabled;

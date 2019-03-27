@@ -29,6 +29,16 @@ namespace System.Reflection
 
         #endregion
 
+        private sealed class ManifestResourceStream : UnmanagedMemoryStream
+        {
+            private RuntimeAssembly _manifestAssembly;
+
+            internal unsafe ManifestResourceStream(RuntimeAssembly manifestAssembly, byte* pointer, long length, long capacity, FileAccess access) : base(pointer, length, capacity, access)
+            {
+                _manifestAssembly = manifestAssembly;
+            }
+        }
+
         internal object SyncRoot
         {
             get
@@ -53,33 +63,23 @@ namespace System.Reflection
             }
         }
 
-        private const String s_localFilePrefix = "file:";
+        private const string s_localFilePrefix = "file:";
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void GetCodeBase(RuntimeAssembly assembly,
                                                bool copiedName,
                                                StringHandleOnStack retString);
 
-        internal String GetCodeBase(bool copiedName)
+        internal string GetCodeBase(bool copiedName)
         {
-            String codeBase = null;
+            string codeBase = null;
             GetCodeBase(GetNativeHandle(), copiedName, JitHelpers.GetStringHandleOnStack(ref codeBase));
             return codeBase;
         }
 
-        public override String CodeBase
-        {
-            get
-            {
-                String codeBase = GetCodeBase(false);
-                return codeBase;
-            }
-        }
+        public override string CodeBase => GetCodeBase(false);
 
-        internal RuntimeAssembly GetNativeHandle()
-        {
-            return this;
-        }
+        internal RuntimeAssembly GetNativeHandle() => this;
 
         // If the assembly is copied before it is loaded, the codebase will be set to the
         // actual file loaded if copiedName is true. If it is false, then the original code base
@@ -88,7 +88,7 @@ namespace System.Reflection
         {
             AssemblyName an = new AssemblyName();
 
-            String codeBase = GetCodeBase(copiedName);
+            string codeBase = GetCodeBase(copiedName);
 
             an.Init(GetSimpleName(),
                     GetPublicKey(),
@@ -101,15 +101,12 @@ namespace System.Reflection
                     GetFlags() | AssemblyNameFlags.PublicKey,
                     null); // strong name key pair
 
-            PortableExecutableKinds pek;
-            ImageFileMachine ifm;
-
             Module manifestModule = ManifestModule;
             if (manifestModule != null)
             {
                 if (manifestModule.MDStreamVersion > 0x10000)
                 {
-                    ManifestModule.GetPEKind(out pek, out ifm);
+                    ManifestModule.GetPEKind(out PortableExecutableKinds pek, out ImageFileMachine ifm);
                     an.SetProcArchIndex(pek, ifm);
                 }
             }
@@ -119,7 +116,7 @@ namespace System.Reflection
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void GetFullName(RuntimeAssembly assembly, StringHandleOnStack retString);
 
-        public override String FullName
+        public override string FullName
         {
             get
             {
@@ -154,20 +151,20 @@ namespace System.Reflection
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void GetType(RuntimeAssembly assembly,
-                                                        String name,
+                                                        string name,
                                                         bool throwOnError,
                                                         bool ignoreCase,
                                                         ObjectHandleOnStack type,
                                                         ObjectHandleOnStack keepAlive);
 
-        public override Type GetType(String name, bool throwOnError, bool ignoreCase)
+        public override Type GetType(string name, bool throwOnError, bool ignoreCase)
         {
             // throw on null strings regardless of the value of "throwOnError"
             if (name == null)
                 throw new ArgumentNullException(nameof(name));
 
             RuntimeType type = null;
-            Object keepAlive = null;
+            object keepAlive = null;
             GetType(GetNativeHandle(), name, throwOnError, ignoreCase, JitHelpers.GetObjectHandleOnStack(ref type), JitHelpers.GetObjectHandleOnStack(ref keepAlive));
             GC.KeepAlive(keepAlive);
 
@@ -188,9 +185,13 @@ namespace System.Reflection
         {
             get
             {
-                List<RuntimeType> rtTypes = new List<RuntimeType>();
-
                 RuntimeModule[] modules = GetModulesInternal(true, false);
+                if (modules.Length == 1)
+                {
+                    return modules[0].GetDefinedTypes();
+                }
+
+                List<RuntimeType> rtTypes = new List<RuntimeType>();
 
                 for (int i = 0; i < modules.Length; i++)
                 {
@@ -201,19 +202,45 @@ namespace System.Reflection
             }
         }
 
+        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetIsCollectible(RuntimeAssembly assembly);
+
+        public override bool IsCollectible => GetIsCollectible(GetNativeHandle());
+
+        // GetResource will return a pointer to the resources in memory.
+        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
+        private static extern unsafe byte* GetResource(RuntimeAssembly assembly,
+                                                       string resourceName,
+                                                       out uint length);
+
         // Load a resource based on the NameSpace of the type.
-        [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod
-        public override Stream GetManifestResourceStream(Type type, String name)
+        public override Stream GetManifestResourceStream(Type type, string name)
         {
-            StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
-            return GetManifestResourceStream(type, name, false, ref stackMark);
+            if (type == null && name == null)
+                throw new ArgumentNullException(nameof(type));
+
+            string nameSpace = type?.Namespace;
+
+            char c = Type.Delimiter;
+            string resourceName = nameSpace != null && name != null ?
+                string.Concat(nameSpace, new ReadOnlySpan<char>(ref c, 1), name) :
+                string.Concat(nameSpace, name);
+
+            return GetManifestResourceStream(resourceName);
         }
 
-        [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod
-        public override Stream GetManifestResourceStream(String name)
+        public unsafe override Stream GetManifestResourceStream(string name)
         {
-            StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
-            return GetManifestResourceStream(name, ref stackMark, false);
+            uint length = 0;
+            byte* pbInMemoryResource = GetResource(GetNativeHandle(), name, out length);
+
+            if (pbInMemoryResource != null)
+            {
+                return new ManifestResourceStream(this, pbInMemoryResource, length, length, FileAccess.Read);
+            }
+
+            return null;
         }
 
         // ISerializable implementation
@@ -232,12 +259,12 @@ namespace System.Reflection
             }
         }
 
-        public override Object[] GetCustomAttributes(bool inherit)
+        public override object[] GetCustomAttributes(bool inherit)
         {
             return CustomAttribute.GetCustomAttributes(this, typeof(object) as RuntimeType);
         }
 
-        public override Object[] GetCustomAttributes(Type attributeType, bool inherit)
+        public override object[] GetCustomAttributes(Type attributeType, bool inherit)
         {
             if (attributeType == null)
                 throw new ArgumentNullException(nameof(attributeType));
@@ -268,17 +295,7 @@ namespace System.Reflection
             return CustomAttributeData.GetCustomAttributesInternal(this);
         }
 
-        // Wrapper function to wrap the typical use of InternalLoad.
-        internal static RuntimeAssembly InternalLoad(String assemblyString,
-                                                     ref StackCrawlMark stackMark)
-        {
-            return InternalLoad(assemblyString, ref stackMark, IntPtr.Zero);
-        }
-
-        [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod
-        internal static RuntimeAssembly InternalLoad(String assemblyString,
-                                                     ref StackCrawlMark stackMark,
-                                                     IntPtr pPrivHostBinder)
+        internal static RuntimeAssembly InternalLoad(string assemblyString, ref StackCrawlMark stackMark)
         {
             RuntimeAssembly assembly;
             AssemblyName an = CreateAssemblyName(assemblyString, out assembly);
@@ -289,14 +306,12 @@ namespace System.Reflection
                 return assembly;
             }
 
-            return InternalLoadAssemblyName(an, null, ref stackMark,
-                                            pPrivHostBinder,
-                                            true  /*thrownOnFileNotFound*/);
+            return InternalLoadAssemblyName(an, ref stackMark);
         }
 
         // Creates AssemblyName. Fills assembly if AssemblyResolve event has been raised.
         internal static AssemblyName CreateAssemblyName(
-            String assemblyString,
+            string assemblyString,
             out RuntimeAssembly assemblyFromResolveEvent)
         {
             if (assemblyString == null)
@@ -314,32 +329,17 @@ namespace System.Reflection
             return an;
         }
 
-        // Wrapper function to wrap the typical use of InternalLoadAssemblyName.
-        internal static RuntimeAssembly InternalLoadAssemblyName(
-            AssemblyName assemblyRef,
-            RuntimeAssembly reqAssembly,
-            ref StackCrawlMark stackMark,
-            bool throwOnFileNotFound,
-            IntPtr ptrLoadContextBinder = default(IntPtr))
+        internal static RuntimeAssembly InternalLoadAssemblyName(AssemblyName assemblyRef, ref StackCrawlMark stackMark, IntPtr ptrLoadContextBinder = default)
         {
-            return InternalLoadAssemblyName(assemblyRef, reqAssembly, ref stackMark, IntPtr.Zero, true /*throwOnError*/, ptrLoadContextBinder);
-        }
-
-        internal static RuntimeAssembly InternalLoadAssemblyName(
-            AssemblyName assemblyRef,
-            RuntimeAssembly reqAssembly,
-            ref StackCrawlMark stackMark,
-            IntPtr pPrivHostBinder,
-            bool throwOnFileNotFound,
-            IntPtr ptrLoadContextBinder = default(IntPtr))
-        {
-            if (assemblyRef == null)
-                throw new ArgumentNullException(nameof(assemblyRef));
-
-            if (assemblyRef.CodeBase != null)
+#if FEATURE_APPX
+            if (ApplicationModel.IsUap)
             {
-                AppDomain.CheckLoadFromSupported();
+                if (assemblyRef.CodeBase != null)
+                {
+                    throw new NotSupportedException(SR.Format(SR.NotSupported_AppX, "Assembly.LoadFrom"));
+                }
             }
+#endif
 
             assemblyRef = (AssemblyName)assemblyRef.Clone();
             if (assemblyRef.ProcessorArchitecture != ProcessorArchitecture.None)
@@ -348,21 +348,18 @@ namespace System.Reflection
                 assemblyRef.ProcessorArchitecture = ProcessorArchitecture.None;
             }
 
-            String codeBase = VerifyCodeBase(assemblyRef.CodeBase);
+            string codeBase = VerifyCodeBase(assemblyRef.CodeBase);
 
-            return nLoad(assemblyRef, codeBase, reqAssembly, ref stackMark,
-                pPrivHostBinder,
-                throwOnFileNotFound, ptrLoadContextBinder);
+            return nLoad(assemblyRef, codeBase, null, ref stackMark, true, ptrLoadContextBinder);
         }
 
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
         private static extern RuntimeAssembly nLoad(AssemblyName fileName,
-                                                    String codeBase,
-                                                    RuntimeAssembly locationHint,
+                                                    string codeBase,
+                                                    RuntimeAssembly assemblyContext,
                                                     ref StackCrawlMark stackMark,
-                                                    IntPtr pPrivHostBinder,
                                                     bool throwOnFileNotFound,
-                                                    IntPtr ptrLoadContextBinder = default(IntPtr));
+                                                    IntPtr ptrLoadContextBinder);
 
         public override bool ReflectionOnly
         {
@@ -375,9 +372,9 @@ namespace System.Reflection
         // Returns the module in this assembly with name 'name'
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        private static extern void GetModule(RuntimeAssembly assembly, String name, ObjectHandleOnStack retModule);
+        private static extern void GetModule(RuntimeAssembly assembly, string name, ObjectHandleOnStack retModule);
 
-        public override Module GetModule(String name)
+        public override Module GetModule(string name)
         {
             Module retModule = null;
             GetModule(GetNativeHandle(), name, JitHelpers.GetObjectHandleOnStack(ref retModule));
@@ -386,7 +383,7 @@ namespace System.Reflection
 
         // Returns the file in the File table of the manifest that matches the
         // given name.  (Name should not include path.)
-        public override FileStream GetFile(String name)
+        public override FileStream GetFile(string name)
         {
             RuntimeModule m = (RuntimeModule)GetModule(name);
             if (m == null)
@@ -414,22 +411,12 @@ namespace System.Reflection
 
         // Returns the names of all the resources
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
-        private static extern String[] GetManifestResourceNames(RuntimeAssembly assembly);
+        private static extern string[] GetManifestResourceNames(RuntimeAssembly assembly);
 
         // Returns the names of all the resources
-        public override String[] GetManifestResourceNames()
+        public override string[] GetManifestResourceNames()
         {
             return GetManifestResourceNames(GetNativeHandle());
-        }
-
-        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        private static extern void GetExecutingAssembly(StackCrawlMarkHandle stackMark, ObjectHandleOnStack retAssembly);
-
-        internal static RuntimeAssembly GetExecutingAssembly(ref StackCrawlMark stackMark)
-        {
-            RuntimeAssembly retAssembly = null;
-            GetExecutingAssembly(JitHelpers.GetStackCrawlMarkHandle(ref stackMark), JitHelpers.GetObjectHandleOnStack(ref retAssembly));
-            return retAssembly;
         }
 
         // Returns the names of all the resources
@@ -443,21 +430,17 @@ namespace System.Reflection
 
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern int GetManifestResourceInfo(RuntimeAssembly assembly,
-                                                          String resourceName,
+                                                          string resourceName,
                                                           ObjectHandleOnStack assemblyRef,
-                                                          StringHandleOnStack retFileName,
-                                                          StackCrawlMarkHandle stackMark);
+                                                          StringHandleOnStack retFileName);
 
-        [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod
-        public override ManifestResourceInfo GetManifestResourceInfo(String resourceName)
+        public override ManifestResourceInfo GetManifestResourceInfo(string resourceName)
         {
             RuntimeAssembly retAssembly = null;
-            String fileName = null;
-            StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
+            string fileName = null;
             int location = GetManifestResourceInfo(GetNativeHandle(), resourceName,
                                                    JitHelpers.GetObjectHandleOnStack(ref retAssembly),
-                                                   JitHelpers.GetStringHandleOnStack(ref fileName),
-                                                   JitHelpers.GetStackCrawlMarkHandle(ref stackMark));
+                                                   JitHelpers.GetStringHandleOnStack(ref fileName));
 
             if (location == -1)
                 return null;
@@ -469,11 +452,11 @@ namespace System.Reflection
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void GetLocation(RuntimeAssembly assembly, StringHandleOnStack retString);
 
-        public override String Location
+        public override string Location
         {
             get
             {
-                String location = null;
+                string location = null;
 
                 GetLocation(GetNativeHandle(), JitHelpers.GetStringHandleOnStack(ref location));
 
@@ -484,11 +467,11 @@ namespace System.Reflection
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void GetImageRuntimeVersion(RuntimeAssembly assembly, StringHandleOnStack retString);
 
-        public override String ImageRuntimeVersion
+        public override string ImageRuntimeVersion
         {
             get
             {
-                String s = null;
+                string s = null;
                 GetImageRuntimeVersion(GetNativeHandle(), JitHelpers.GetStringHandleOnStack(ref s));
                 return s;
             }
@@ -502,7 +485,7 @@ namespace System.Reflection
             }
         }
 
-        public override Int64 HostContext
+        public override long HostContext
         {
             get
             {
@@ -510,7 +493,7 @@ namespace System.Reflection
             }
         }
 
-        private static String VerifyCodeBase(String codebase)
+        private static string VerifyCodeBase(string codebase)
         {
             if (codebase == null)
                 return null;
@@ -538,61 +521,6 @@ namespace System.Reflection
 #endif // PLATFORM_WINDOWS
         }
 
-        internal Stream GetManifestResourceStream(
-            Type type,
-            String name,
-            bool skipSecurityCheck,
-            ref StackCrawlMark stackMark)
-        {
-            StringBuilder sb = new StringBuilder();
-            if (type == null)
-            {
-                if (name == null)
-                    throw new ArgumentNullException(nameof(type));
-            }
-            else
-            {
-                String nameSpace = type.Namespace;
-                if (nameSpace != null)
-                {
-                    sb.Append(nameSpace);
-                    if (name != null)
-                        sb.Append(Type.Delimiter);
-                }
-            }
-
-            if (name != null)
-                sb.Append(name);
-
-            return GetManifestResourceStream(sb.ToString(), ref stackMark, skipSecurityCheck);
-        }
-
-        // GetResource will return a pointer to the resources in memory.
-        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
-        private static extern unsafe byte* GetResource(RuntimeAssembly assembly,
-                                                       String resourceName,
-                                                       out ulong length,
-                                                       StackCrawlMarkHandle stackMark,
-                                                       bool skipSecurityCheck);
-
-        internal unsafe Stream GetManifestResourceStream(String name, ref StackCrawlMark stackMark, bool skipSecurityCheck)
-        {
-            ulong length = 0;
-            byte* pbInMemoryResource = GetResource(GetNativeHandle(), name, out length, JitHelpers.GetStackCrawlMarkHandle(ref stackMark), skipSecurityCheck);
-
-            if (pbInMemoryResource != null)
-            {
-                //Console.WriteLine("Creating an unmanaged memory stream of length "+length);
-                if (length > Int64.MaxValue)
-                    throw new NotImplementedException(SR.NotImplemented_ResourcesLongerThanInt64Max);
-
-                return new UnmanagedMemoryStream(pbInMemoryResource, (long)length, (long)length, FileAccess.Read);
-            }
-
-            //Console.WriteLine("GetManifestResourceStream: Blob "+name+" not found...");
-            return null;
-        }
-
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void GetVersion(RuntimeAssembly assembly,
                                               out int majVer,
@@ -612,7 +540,7 @@ namespace System.Reflection
 
         internal CultureInfo GetLocale()
         {
-            String locale = null;
+            string locale = null;
 
             GetLocale(GetNativeHandle(), JitHelpers.GetStringHandleOnStack(ref locale));
 
@@ -636,7 +564,7 @@ namespace System.Reflection
         [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void GetSimpleName(RuntimeAssembly assembly, StringHandleOnStack retSimpleName);
 
-        internal String GetSimpleName()
+        internal string GetSimpleName()
         {
             string name = null;
             GetSimpleName(GetNativeHandle(), JitHelpers.GetStringHandleOnStack(ref name));
@@ -670,7 +598,7 @@ namespace System.Reflection
         }
 
         // This method is called by the VM.
-        private RuntimeModule OnModuleResolveEvent(String moduleName)
+        private RuntimeModule OnModuleResolveEvent(string moduleName)
         {
             ModuleResolveEventHandler moduleResolve = _ModuleResolve;
             if (moduleResolve == null)
@@ -686,40 +614,24 @@ namespace System.Reflection
             return null;
         }
 
-        [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod  
         public override Assembly GetSatelliteAssembly(CultureInfo culture)
         {
-            StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
-            return InternalGetSatelliteAssembly(culture, null, ref stackMark);
+            return GetSatelliteAssembly(culture, null);
         }
 
         // Useful for binding to a very specific version of a satellite assembly
-        [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod  
         public override Assembly GetSatelliteAssembly(CultureInfo culture, Version version)
-        {
-            StackCrawlMark stackMark = StackCrawlMark.LookForMyCaller;
-            return InternalGetSatelliteAssembly(culture, version, ref stackMark);
-        }
-
-        [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod  
-        internal Assembly InternalGetSatelliteAssembly(CultureInfo culture,
-                                                       Version version,
-                                                       ref StackCrawlMark stackMark)
         {
             if (culture == null)
                 throw new ArgumentNullException(nameof(culture));
 
-
-            String name = GetSimpleName() + ".resources";
-            return InternalGetSatelliteAssembly(name, culture, version, true, ref stackMark);
+            return InternalGetSatelliteAssembly(culture, version, true);
         }
 
-        [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod  
-        internal RuntimeAssembly InternalGetSatelliteAssembly(String name,
-                                                              CultureInfo culture,
-                                                              Version version,
-                                                              bool throwOnFileNotFound,
-                                                              ref StackCrawlMark stackMark)
+        [System.Security.DynamicSecurityMethod] // Methods containing StackCrawlMark local var has to be marked DynamicSecurityMethod
+        internal Assembly InternalGetSatelliteAssembly(CultureInfo culture,
+                                                       Version version,
+                                                       bool throwOnFileNotFound)
         {
             AssemblyName an = new AssemblyName();
 
@@ -732,15 +644,21 @@ namespace System.Reflection
                 an.Version = version;
 
             an.CultureInfo = culture;
-            an.Name = name;
+            an.Name = GetSimpleName() + ".resources";
 
-            RuntimeAssembly retAssembly = nLoad(an, null, this, ref stackMark,
-                                IntPtr.Zero,
-                                throwOnFileNotFound);
+            // This stack crawl mark is never used because the requesting assembly is explicitly specified,
+            // so the value could be anything.
+            StackCrawlMark unused = default;
+            RuntimeAssembly retAssembly = nLoad(an, null, this, ref unused, throwOnFileNotFound, IntPtr.Zero);
 
-            if (retAssembly == this || (retAssembly == null && throwOnFileNotFound))
+            if (retAssembly == this)
             {
-                throw new FileNotFoundException(String.Format(culture, SR.IO_FileNotFound_FileName, an.Name));
+                retAssembly = null;
+            }
+
+            if (retAssembly == null && throwOnFileNotFound)
+            {
+                throw new FileNotFoundException(SR.Format(culture, SR.IO_FileNotFound_FileName, an.Name));
             }
 
             return retAssembly;

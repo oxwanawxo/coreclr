@@ -18,6 +18,14 @@
 #undef Sleep
 #endif // Sleep
 
+#ifdef HAS_SYSTEM_YIELDPROCESSOR
+// YieldProcessor is defined to Dont_Use_YieldProcessor. Restore it to the system-default implementation for the GC.
+#undef YieldProcessor
+#define YieldProcessor System_YieldProcessor
+#endif
+
+#define NUMA_NODE_UNDEFINED UINT32_MAX
+
 // Critical section used by the GC
 class CLRCriticalSection
 {
@@ -194,7 +202,7 @@ public:
     //  size    - size of the virtual memory range
     // Return:
     //  true if it has succeeded, false if it has failed
-    static bool VirtualCommit(void *address, size_t size);
+    static bool VirtualCommit(void *address, size_t size, uint32_t node = NUMA_NODE_UNDEFINED);
 
     // Decomit virtual memory range.
     // Parameters:
@@ -339,10 +347,14 @@ public:
     // Get the physical memory that this process can use.
     // Return:
     //  non zero if it has succeeded, 0 if it has failed
+    //  *is_restricted is set to true if asked and running in restricted.
     // Remarks:
     //  If a process runs with a restricted memory limit, it returns the limit. If there's no limit 
     //  specified, it returns amount of actual physical memory.
-    static uint64_t GetPhysicalMemoryLimit();
+    //
+    // PERF TODO: Requires more work to not treat the restricted case to be special. 
+    // To be removed before 3.0 ships.
+    static uint64_t GetPhysicalMemoryLimit(bool* is_restricted=NULL);
 
     // Get memory status
     // Parameters:
@@ -391,6 +403,19 @@ public:
     // Return:
     //  Number of processors on the machine
     static uint32_t GetTotalProcessorCount();
+
+    // Is NUMA support available
+    static bool CanEnableGCNumaAware();
+
+    // Gets the NUMA node for the processor
+    static bool GetNumaProcessorNode(PPROCESSOR_NUMBER proc_no, uint16_t *node_no);
+
+    // Are CPU groups enabled
+    static bool CanEnableGCCPUGroups();
+
+    // Get the CPU group for the specified processor
+    static void GetGroupForProcessor(uint16_t processor_number, uint16_t* group_number, uint16_t* group_processor_number);
+
 };
 
 #endif // __GCENV_OS_H__

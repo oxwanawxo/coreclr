@@ -79,15 +79,6 @@ public:
 #endif //_DEBUG
     };  // struct bmtGenericsInfo
 
-
-    // information for Thread and Context Static. Filled by InitializedFieldDesc and used when
-    // setting up a MethodTable
-    struct bmtContextStaticInfo
-    {
-    
-        inline bmtContextStaticInfo() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
-    };
-
     MethodTableBuilder(
         MethodTable *       pHalfBakedMT,
         EEClass *           pHalfBakedClass,
@@ -100,7 +91,6 @@ public:
     {
         LIMITED_METHOD_CONTRACT;
         SetBMTData(
-            NULL,
             NULL,
             NULL,
             NULL,
@@ -230,7 +220,6 @@ private:
     BOOL HasExplicitSize() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->HasExplicitSize(); } 
 
 #ifdef _DEBUG
-    BOOL IsAppDomainAgilityDone() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsAppDomainAgilityDone(); } 
     LPCUTF8 GetDebugClassName() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->GetDebugClassName(); } 
 #endif // _DEBUG
     Assembly *GetAssembly() { WRAPPER_NO_CONTRACT; return GetModule()->GetAssembly(); }
@@ -1879,8 +1868,8 @@ private:
         // Counts instance fields
         DWORD dwNumInstanceFields;
 
-        // Counts both regular statics and thread statics. Currently RVA and
-        // context statics get lumped in with "regular statics".
+        // Counts both regular statics and thread statics. Currently RVA
+        // get lumped in with "regular statics".
         DWORD dwNumStaticFields;
         DWORD dwNumStaticObjRefFields;
         DWORD dwNumStaticBoxedFields;
@@ -2097,16 +2086,20 @@ private:
         {
             bmtMethodHandle declMethod;
             bmtMDMethod *   pImplMethod;
+            mdToken         declToken;
 
             Entry(bmtMDMethod *   pImplMethodIn,
-                  bmtMethodHandle declMethodIn)
+                  bmtMethodHandle declMethodIn,
+                  mdToken declToken)
               : declMethod(declMethodIn),
-                pImplMethod(pImplMethodIn)
+                pImplMethod(pImplMethodIn),
+                declToken(declToken)
               {}
 
             Entry()
               : declMethod(),
-                pImplMethod(NULL)
+                pImplMethod(NULL),
+                declToken()
               {}
         };
 
@@ -2140,6 +2133,7 @@ private:
         AddMethodImpl(
             bmtMDMethod * pImplMethod,
             bmtMethodHandle declMethod,
+            mdToken declToken,
             StackingAllocator * pStackingAllocator);
 
         //-----------------------------------------------------------------------------------------
@@ -2148,6 +2142,13 @@ private:
         GetDeclarationMethod(
             DWORD i)
             { LIMITED_METHOD_CONTRACT; _ASSERTE(i < pIndex); return rgEntries[i].declMethod; }
+
+        //-----------------------------------------------------------------------------------------
+        // Get the decl method for a particular methodimpl entry.
+        mdToken
+        GetDeclarationToken(
+            DWORD i)
+            { LIMITED_METHOD_CONTRACT; _ASSERTE(i < pIndex); return rgEntries[i].declToken; }
 
         //-----------------------------------------------------------------------------------------
         // Get the impl method for a particular methodimpl entry.
@@ -2213,7 +2214,6 @@ private:
     bmtMethodImplInfo *bmtMethodImpl;
     const bmtGenericsInfo *bmtGenerics;
     bmtEnumFieldInfo *bmtEnumFields;
-    bmtContextStaticInfo *bmtCSInfo;
 
     void SetBMTData(
         LoaderAllocator *bmtAllocator,
@@ -2230,8 +2230,7 @@ private:
         bmtGCSeriesInfo *bmtGCSeries,
         bmtMethodImplInfo *bmtMethodImpl,
         const bmtGenericsInfo *bmtGenerics,
-        bmtEnumFieldInfo *bmtEnumFields,
-        bmtContextStaticInfo *bmtCSInfo);
+        bmtEnumFieldInfo *bmtEnumFields);
 
     // --------------------------------------------------------------------------------------------
     // Returns the parent bmtRTType pointer. Can be null if no parent exists.
@@ -2586,7 +2585,6 @@ private:
         MethodTable***,
         bmtMethAndFieldDescs*,
         bmtFieldPlacement*,
-        bmtContextStaticInfo*,
         unsigned * totalDeclaredSize);
 
     // --------------------------------------------------------------------------------------------
@@ -2734,6 +2732,7 @@ private:
         bmtMDMethod *       pImplMethod,
         DWORD               cSlots,
         DWORD *             rgSlots,
+        mdToken *           rgTokens,
         RelativePointer<MethodDesc *> *       rgDeclMD);
 
     // --------------------------------------------------------------------------------------------
@@ -2815,11 +2814,6 @@ private:
     NeedsNativeCodeSlot(bmtMDMethod * pMDMethod);
 
     // --------------------------------------------------------------------------------------------
-    // MethodTableBuilder version of code:MethodDesc::MayBeRemotingIntercepted. Used for MethodDesc layout.
-    BOOL
-    MayBeRemotingIntercepted(bmtMDMethod * pMDMethod);
-
-    // --------------------------------------------------------------------------------------------
     // Used to allocate and initialize the dictionary used with generic types.
     VOID
     AllocAndInitDictionary();
@@ -2856,7 +2850,7 @@ private:
     VOID HandleGCForValueClasses(
         MethodTable **);
 
-    BOOL HasDefaultInterfaceImplementation(MethodDesc *pIntfMD);
+    BOOL HasDefaultInterfaceImplementation(bmtRTType *pIntfType, MethodDesc *pIntfMD);
     VOID VerifyVirtualMethodsImplemented(MethodTable::MethodData * hMTData);
 
     VOID CheckForTypeEquivalence(
@@ -2954,10 +2948,7 @@ private:
                                 BOOL isIFace, 
                                 BOOL fDynamicStatics,
                                 BOOL fHasGenericsStaticsInfo,
-                                BOOL fNeedsRCWPerTypeData,
-                                BOOL fNeedsRemotableMethodInfo,
-                                BOOL fNeedsRemotingVtsInfo,
-                                BOOL fHasContextStatics
+                                BOOL fNeedsRCWPerTypeData
 #ifdef FEATURE_COMINTEROP
                                 , BOOL bHasDynamicInterfaceMap
 #endif

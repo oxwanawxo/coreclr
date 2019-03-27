@@ -95,6 +95,20 @@ public:
         DWORD     B;
         DWORD     C;
     };
+    struct Agnostic_CORINFO_METHODNAME_TOKENin
+    {
+        DWORDLONG ftn;
+        DWORD     className;
+        DWORD     namespaceName;
+        DWORD     enclosingClassName;
+    };
+    struct Agnostic_CORINFO_METHODNAME_TOKENout
+    {
+        DWORD methodName;
+        DWORD className;
+        DWORD namespaceName;
+        DWORD enclosingClassName;
+    };
     struct Agnostic_CORINFO_RESOLVED_TOKENin
     {
         DWORDLONG tokenContext;
@@ -173,6 +187,11 @@ public:
         DWORDLONG ppIndirection;
         DWORDLONG fieldAddress;
         DWORD     fieldValue;
+    };
+    struct Agnostic_GetStaticFieldCurrentClass
+    {
+        DWORDLONG classHandle;
+        bool      isSpeculative;
     };
     struct Agnostic_CORINFO_RESOLVED_TOKEN
     {
@@ -620,11 +639,13 @@ public:
     void recGetMethodNameFromMetadata(CORINFO_METHOD_HANDLE ftn,
                                       char*                 methodname,
                                       const char**          moduleName,
-                                      const char**          namespaceName);
-    void dmpGetMethodNameFromMetadata(DLDD key, DDD value);
+                                      const char**          namespaceName,
+                                      const char**          enclosingClassName);
+    void dmpGetMethodNameFromMetadata(Agnostic_CORINFO_METHODNAME_TOKENin key, Agnostic_CORINFO_METHODNAME_TOKENout value);
     const char* repGetMethodNameFromMetadata(CORINFO_METHOD_HANDLE ftn,
                                              const char**          className,
-                                             const char**          namespaceName);
+                                             const char**          namespaceName,
+                                             const char**          enclosingClassName);
 
     void recGetJitFlags(CORJIT_FLAGS* jitFlags, DWORD sizeInBytes, DWORD result);
     void dmpGetJitFlags(DWORD key, DD value);
@@ -695,6 +716,14 @@ public:
     void recGetClassSize(CORINFO_CLASS_HANDLE cls, unsigned result);
     void dmpGetClassSize(DWORDLONG key, DWORD val);
     unsigned repGetClassSize(CORINFO_CLASS_HANDLE cls);
+
+    void recGetHeapClassSize(CORINFO_CLASS_HANDLE cls, unsigned result);
+    void dmpGetHeapClassSize(DWORDLONG key, DWORD val);
+    unsigned repGetHeapClassSize(CORINFO_CLASS_HANDLE cls);
+
+    void recCanAllocateOnStack(CORINFO_CLASS_HANDLE cls, BOOL result);
+    void dmpCanAllocateOnStack(DWORDLONG key, DWORD val);
+    BOOL repCanAllocateOnStack(CORINFO_CLASS_HANDLE cls);
 
     void recGetClassNumInstanceFields(CORINFO_CLASS_HANDLE cls, unsigned result);
     void dmpGetClassNumInstanceFields(DWORDLONG key, DWORD value);
@@ -805,6 +834,10 @@ public:
     void dmpConstructStringLiteral(DLD key, DLD value);
     InfoAccessType repConstructStringLiteral(CORINFO_MODULE_HANDLE module, mdToken metaTok, void** ppValue);
 
+    void recConvertPInvokeCalliToCall(CORINFO_RESOLVED_TOKEN* pResolvedToken, bool fMustConvert, bool result);
+    void dmpConvertPInvokeCalliToCall(DLD key, DWORDLONG value);
+    bool repConvertPInvokeCalliToCall(CORINFO_RESOLVED_TOKEN* pResolvedToken, bool fMustConvert);
+
     void recEmptyStringLiteral(void** ppValue, InfoAccessType result);
     void dmpEmptyStringLiteral(DWORD key, DLD value);
     InfoAccessType repEmptyStringLiteral(void** ppValue);
@@ -845,9 +878,10 @@ public:
 
     void recGetNewHelper(CORINFO_RESOLVED_TOKEN* pResolvedToken,
                          CORINFO_METHOD_HANDLE   callerHandle,
+                         bool* pHasSideEffects,
                          CorInfoHelpFunc         result);
-    void dmpGetNewHelper(const Agnostic_GetNewHelper& key, DWORD value);
-    CorInfoHelpFunc repGetNewHelper(CORINFO_RESOLVED_TOKEN* pResolvedToken, CORINFO_METHOD_HANDLE callerHandle);
+    void dmpGetNewHelper(const Agnostic_GetNewHelper& key, DD value);
+    CorInfoHelpFunc repGetNewHelper(CORINFO_RESOLVED_TOKEN* pResolvedToken, CORINFO_METHOD_HANDLE callerHandle, bool * pHasSideEffects);
 
     void recEmbedGenericHandle(CORINFO_RESOLVED_TOKEN*       pResolvedToken,
                                BOOL                          fEmbedParent,
@@ -910,6 +944,10 @@ public:
     void recGetFieldAddress(CORINFO_FIELD_HANDLE field, void** ppIndirection, void* result, CorInfoType cit);
     void dmpGetFieldAddress(DWORDLONG key, const Agnostic_GetFieldAddress& value);
     void* repGetFieldAddress(CORINFO_FIELD_HANDLE field, void** ppIndirection);
+
+    void recGetStaticFieldCurrentClass(CORINFO_FIELD_HANDLE field, bool isSpeculative, CORINFO_CLASS_HANDLE result);
+    void dmpGetStaticFieldCurrentClass(DWORDLONG key, const Agnostic_GetStaticFieldCurrentClass& value);
+    CORINFO_CLASS_HANDLE repGetStaticFieldCurrentClass(CORINFO_FIELD_HANDLE field, bool* pIsSpeculative);
 
     void recGetClassGClayout(CORINFO_CLASS_HANDLE cls, BYTE* gcPtrs, unsigned len, unsigned result);
     void dmpGetClassGClayout(DWORDLONG key, const Agnostic_GetClassGClayout& value);
@@ -1023,6 +1061,11 @@ public:
     void dmpGetFieldName(DWORDLONG key, DD value);
     const char* repGetFieldName(CORINFO_FIELD_HANDLE ftn, const char** moduleName);
 
+    void recCanInlineTypeCheck(CORINFO_CLASS_HANDLE         cls,
+                               CorInfoInlineTypeCheckSource source,
+                               CorInfoInlineTypeCheck       result);
+    void dmpCanInlineTypeCheck(DLD key, DWORD value);
+    CorInfoInlineTypeCheck repCanInlineTypeCheck(CORINFO_CLASS_HANDLE cls, CorInfoInlineTypeCheckSource source);
     void recCanInlineTypeCheckWithObjectVTable(CORINFO_CLASS_HANDLE cls, BOOL result);
     void dmpCanInlineTypeCheckWithObjectVTable(DWORDLONG key, DWORD value);
     BOOL repCanInlineTypeCheckWithObjectVTable(CORINFO_CLASS_HANDLE cls);
@@ -1161,6 +1204,10 @@ public:
     void dmpMergeClasses(DLDL key, DWORDLONG value);
     CORINFO_CLASS_HANDLE repMergeClasses(CORINFO_CLASS_HANDLE cls1, CORINFO_CLASS_HANDLE cls2);
 
+    void recIsMoreSpecificType(CORINFO_CLASS_HANDLE cls1, CORINFO_CLASS_HANDLE cls2, BOOL result);
+    void dmpIsMoreSpecificType(DLDL key, DWORD value);
+    BOOL repIsMoreSpecificType(CORINFO_CLASS_HANDLE cls1, CORINFO_CLASS_HANDLE cls2);
+
     void recGetCookieForPInvokeCalliSig(CORINFO_SIG_INFO* szMetaSig, void** ppIndirection, LPVOID result);
     void dmpGetCookieForPInvokeCalliSig(const GetCookieForPInvokeCalliSigValue& key, DLDL value);
     LPVOID repGetCookieForPInvokeCalliSig(CORINFO_SIG_INFO* szMetaSig, void** ppIndirection);
@@ -1271,21 +1318,41 @@ public:
     void dmpGetStringConfigValue(DWORD nameIndex, DWORD result);
     const wchar_t* repGetStringConfigValue(const wchar_t* name);
 
-    bool                                              wasEnviromentChanged();
-    static DenseLightWeightMap<Agnostic_Environment>* prevEnviroment;
+    struct Environment
+    {
+        Environment() : getIntConfigValue(nullptr), getStingConfigValue(nullptr)
+        {
+        }
+
+        LightWeightMap<MethodContext::Agnostic_ConfigIntInfo, DWORD>* getIntConfigValue;
+        LightWeightMap<DWORD, DWORD>*                                 getStingConfigValue;
+    };
+
+    Environment cloneEnvironment();
+
+    bool WasEnvironmentChanged(const Environment& prevEnv);
 
     CompileResult* cr;
     CompileResult* originalCR;
     int            index;
 
 private:
+    bool IsEnvironmentHeaderEqual(const Environment& prevEnv);
+    bool IsEnvironmentContentEqual(const Environment& prevEnv);
+
+    template <typename key, typename value>
+    static bool AreLWMHeadersEqual(LightWeightMap<key, value>* prev, LightWeightMap<key, value>* curr);
+    static bool IsIntConfigContentEqual(LightWeightMap<Agnostic_ConfigIntInfo, DWORD>* prev,
+                                        LightWeightMap<Agnostic_ConfigIntInfo, DWORD>* curr);
+    static bool IsStringContentEqual(LightWeightMap<DWORD, DWORD>* prev, LightWeightMap<DWORD, DWORD>* curr);
+
 #define LWM(map, key, value) LightWeightMap<key, value>* map;
 #define DENSELWM(map, value) DenseLightWeightMap<value>* map;
 #include "lwmlist.h"
 };
 
 // ********************* Please keep this up-to-date to ease adding more ***************
-// Highest packet number: 168
+// Highest packet number: 174
 // *************************************************************************************
 enum mcPackets
 {
@@ -1297,9 +1364,10 @@ enum mcPackets
     Packet_CanCast                    = 5,
     Retired8                          = 6,
     Packet_GetLazyStringLiteralHelper = 147, // Added 12/20/2013 - as a replacement for CanEmbedModuleHandleForHelper
-    Packet_CanGetCookieForPInvokeCalliSig                = 7,
-    Packet_CanGetVarArgsHandle                           = 8,
-    Packet_CanInline                                     = 9,
+    Packet_CanGetCookieForPInvokeCalliSig = 7,
+    Packet_CanGetVarArgsHandle            = 8,
+    Packet_CanInline                      = 9,
+    Packet_CanInlineTypeCheck = 173, // Added 11/15/2018 as a replacement for CanInlineTypeCheckWithObjectVTable
     Packet_CanInlineTypeCheckWithObjectVTable            = 10,
     Packet_CanSkipMethodVerification                     = 11,
     Packet_CanTailCall                                   = 12,
@@ -1311,13 +1379,14 @@ enum mcPackets
     Packet_CompareTypesForEquality                       = 164, // Added 10/4/17
     Packet_CompileMethod                                 = 143, // retired as 141 on 2013/07/09
     Packet_ConstructStringLiteral                        = 15,
+    Packet_ConvertPInvokeCalliToCall                     = 169, // Added 4/29/18
     Packet_EmbedClassHandle                              = 16,
     Packet_EmbedFieldHandle                              = 17,
     Packet_EmbedGenericHandle                            = 18,
     Packet_EmbedMethodHandle                             = 19,
     Packet_EmbedModuleHandle                             = 20,
     Packet_EmptyStringLiteral                            = 21,
-    Packet_Environment                                   = 136, // Deprecated 7/29/2017
+    Retired9                                             = 136,
     Packet_ErrorList                                     = 22,
     Packet_FilterException                               = 134,
     Packet_FindCallSiteSig                               = 23,
@@ -1353,6 +1422,8 @@ enum mcPackets
     Packet_GetTypeInstantiationArgument                  = 167, // Added 12/4/17
     Packet_GetClassNumInstanceFields                     = 46,
     Packet_GetClassSize                                  = 47,
+    Packet_GetHeapClassSize                              = 170, // Added 10/5/2018
+    Packet_CanAllocateOnStack                            = 171, // Added 10/5/2018
     Packet_GetIntConfigValue                             = 151, // Added 2/12/2015
     Packet_GetStringConfigValue                          = 152, // Added 2/12/2015
     Packet_GetCookieForPInvokeCalliSig                   = 48,
@@ -1361,6 +1432,7 @@ enum mcPackets
     Packet_GetEEInfo                                     = 50,
     Packet_GetEHinfo                                     = 51,
     Packet_GetFieldAddress                               = 52,
+    Packet_GetStaticFieldCurrentClass                    = 172, // Added 11/7/2018
     Packet_GetFieldClass                                 = 53,
     Packet_GetFieldInClass                               = 54,
     Packet_GetFieldInfo                                  = 55,
@@ -1426,6 +1498,7 @@ enum mcPackets
     Packet_IsValueClass                                  = 105,
     Packet_IsWriteBarrierHelperRequired                  = 106,
     Packet_MergeClasses                                  = 107,
+    Packet_IsMoreSpecificType                            = 174, // Added 2/14/2019
     Packet_PInvokeMarshalingRequired                     = 108,
     Packet_ResolveToken                                  = 109,
     Packet_ResolveVirtualMethod                          = 160, // Added 2/13/17

@@ -105,7 +105,6 @@ Compiler::fgWalkResult Compiler::gsMarkPtrsAndAssignGroups(GenTree** pTree, fgWa
     GenTree*             tree          = *pTree;
     ShadowParamVarInfo*  shadowVarInfo = pState->comp->gsShadowVarInfo;
     assert(shadowVarInfo);
-    bool     fIsBlk = false;
     unsigned lclNum;
 
     assert(!pState->isAssignSrc || pState->lvAssignDef != (unsigned)-1);
@@ -229,7 +228,7 @@ Compiler::fgWalkResult Compiler::gsMarkPtrsAndAssignGroups(GenTree** pTree, fgWa
 
         default:
             // Assignments - track assign groups and *p defs.
-            if (tree->OperIsAssignment())
+            if (tree->OperIs(GT_ASG))
             {
                 bool isLocVar;
                 bool isLocFld;

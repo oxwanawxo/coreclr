@@ -1,10 +1,10 @@
-#include "platformdefines.cpp"
+#include <platformdefines.h>
 #include <xplatform.h>
 
 inline char* CoStrDup(const char* str)
 {
 	size_t size = strlen(str) + 1;
-	char* dup = (char *)TP_CoTaskMemAlloc(size);
+	char* dup = (char *)CoreClrAlloc(size);
     if (dup != nullptr)
     {
         strcpy_s(dup, size, str);
@@ -54,7 +54,6 @@ typedef unsigned short WORD;
 typedef short SHORT;
 typedef float FLOAT;
 typedef double DOUBLE;
-typedef long INT_PTR;
 #endif
 
 struct INNER2 // size = 12 bytes
@@ -293,11 +292,11 @@ void ChangeCharSetUnicodeSequential(CharSetUnicodeSequential* p)
 #else
 	LPCWSTR strSource = u"change string";
 #endif
-	size_t len = wcslen(strSource);
-	LPCWSTR temp = (LPCWSTR)TP_CoTaskMemAlloc(sizeof(WCHAR)*(len+1));
+	size_t len = TP_slen(strSource);
+	LPCWSTR temp = (LPCWSTR)CoreClrAlloc(sizeof(WCHAR)*(len+1));
 	if(temp != NULL)
 	{
-		wcscpy_s((WCHAR*)temp, (len+1)*sizeof(WCHAR), strSource);
+		TP_scpy_s((WCHAR*)temp, (len+1), strSource);
 		p->f1 = temp;
 		p->f2 = L'n';
 	}
@@ -375,7 +374,7 @@ void ChangeNumberSequential(NumberSequential* p)
 
 bool IsCorrectNumberSequential(NumberSequential* p)
 {
-	if(p->i32 != (-0x7fffffff - 1) || p->ui32 != 0xffffffff || p->s1 != -0x8000 || p->us1 != 0xffff || p->b != 0 || 
+	if(p->i32 != (-0x7fffffff - 1) || p->ui32 != 0xffffffff || p->s1 != -0x8000 || p->us1 != 0xffff || p->b != 0 ||
 		p->sb != 0x7f ||p->i16 != -0x8000 || p->ui16 != 0xffff || p->i64 != -1234567890 ||
 		p->ui64 != 1234567890 || (p->sgl) != 32.0 || p->d != 3.2)
 	{
@@ -405,7 +404,7 @@ void ChangeS3(S3* p)
 {
 	p->flag = false;
 
-	/*TP_CoTaskMemFree((void *)p->str);*/
+	/*CoreClrFree((void *)p->str);*/
 	p->str = CoStrDup("change string");
 
     for(int i = 1;i<257;i++)
@@ -505,8 +504,8 @@ bool IsCorrectStringStructSequentialAnsi(StringStructSequentialAnsi* str)
 
 void ChangeStringStructSequentialAnsi(StringStructSequentialAnsi* str)
 {
-	char* newFirst = (char*)TP_CoTaskMemAlloc(sizeof(char)*513);
-	char* newLast = (char*)TP_CoTaskMemAlloc(sizeof(char)*513);
+	char* newFirst = (char*)CoreClrAlloc(sizeof(char)*513);
+	char* newLast = (char*)CoreClrAlloc(sizeof(char)*513);
 	for (int i = 0; i < 512; ++i)
 	{
 		newFirst[i] = 'b';
@@ -558,8 +557,8 @@ bool IsCorrectStringStructSequentialUnicode(StringStructSequentialUnicode* str)
 
 void ChangeStringStructSequentialUnicode(StringStructSequentialUnicode* str)
 {
-	WCHAR* newFirst = (WCHAR*)TP_CoTaskMemAlloc(sizeof(WCHAR)*257);
-	WCHAR* newLast = (WCHAR*)TP_CoTaskMemAlloc(sizeof(WCHAR)*257);
+	WCHAR* newFirst = (WCHAR*)CoreClrAlloc(sizeof(WCHAR)*257);
+	WCHAR* newLast = (WCHAR*)CoreClrAlloc(sizeof(WCHAR)*257);
 	for (int i = 0; i < 256; ++i)
 	{
 		newFirst[i] = L'b';
@@ -819,3 +818,64 @@ bool IsCorrectLongStructPack16Explicit(LongStructPack16Explicit* p)
 		return false;
 	return true;
 }
+
+struct HFA
+{
+    float f1;
+    float f2;
+    float f3;
+    float f4;
+};
+
+struct ManyInts
+{
+    int i1;
+    int i2;
+    int i3;
+    int i4;
+    int i5;
+    int i6;
+    int i7;
+    int i8;
+    int i9;
+    int i10;
+    int i11;
+    int i12;
+    int i13;
+    int i14;
+    int i15;
+    int i16;
+    int i17;
+    int i18;
+    int i19;
+    int i20;
+};
+
+struct MultipleBools
+{
+    BOOL b1;
+    BOOL b2;
+};
+
+struct IntWithInnerSequential
+{
+    int i1;
+    InnerSequential sequential;
+};
+
+struct SequentialWrapper
+{
+    InnerSequential sequential;
+};
+
+struct SequentialDoubleWrapper
+{
+    SequentialWrapper wrapper;
+};
+
+struct AggregateSequentialWrapper
+{
+    SequentialWrapper wrapper1;
+    InnerSequential sequential;
+    SequentialWrapper wrapper2;
+};

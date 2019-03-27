@@ -12,27 +12,32 @@
 ################################################################################
 
 
-import urllib
 import argparse
 import os
 import sys
 import tarfile
 import zipfile
 import subprocess
-import urllib2
 import shutil
+
+# Version specific imports
+
+if sys.version_info.major < 3:
+    import urllib
+else:
+    import urllib.request
 
 def expandPath(path):
     return os.path.abspath(os.path.expanduser(path))
 
 def del_rw(action, name, exc):
-    os.chmod(name, 0651)
+    os.chmod(name, 0o651)
     os.remove(name)
 
 def main(argv):
     parser = argparse.ArgumentParser()
     required = parser.add_argument_group('required arguments')
-    required.add_argument('-a', '--arch', type=str, 
+    required.add_argument('-a', '--arch', type=str,
             default=None, help='architecture to run jit-format on')
     required.add_argument('-o', '--os', type=str,
             default=None, help='operating system')
@@ -42,13 +47,13 @@ def main(argv):
     args, unknown = parser.parse_known_args(argv)
 
     if unknown:
-        print('Ignorning argument(s): ', ','.join(unknown))
+        print('Ignoring argument(s): ', ','.join(unknown))
 
     if args.coreclr is None:
         print('Specify --coreclr')
         return -1
     if args.os is None:
-        print('Specifiy --os')
+        print('Specify --os')
         return -1
     if args.arch is None:
         print('Specify --arch')
@@ -64,7 +69,7 @@ def main(argv):
 
     my_env = os.environ
 
-    # Download .Net CLI
+    # Download .NET CLI
 
     dotnetcliUrl = ""
     dotnetcliFilename = ""
@@ -83,30 +88,28 @@ def main(argv):
         if not os.path.isdir(dotnetcliPath):
             raise
 
-    print("Downloading .Net CLI")
+    print("Downloading .NET CLI")
     if platform == 'Linux':
-        dotnetcliUrl = "https://dotnetcli.azureedge.net/dotnet/Sdk/2.0.0/dotnet-sdk-2.0.0-linux-x64.tar.gz"
+        dotnetcliUrl = "https://dotnetcli.azureedge.net/dotnet/Sdk/2.1.402/dotnet-sdk-2.1.402-linux-x64.tar.gz"
         dotnetcliFilename = os.path.join(dotnetcliPath, 'dotnetcli-jitutils.tar.gz')
     elif platform == 'OSX':
-        dotnetcliUrl = "https://dotnetcli.azureedge.net/dotnet/Sdk/2.0.0/dotnet-sdk-2.0.0-macos-x64.tar.gz"
+        dotnetcliUrl = "https://dotnetcli.azureedge.net/dotnet/Sdk/2.1.402/dotnet-sdk-2.1.402-osx-x64.tar.gz"
         dotnetcliFilename = os.path.join(dotnetcliPath, 'dotnetcli-jitutils.tar.gz')
     elif platform == 'Windows_NT':
-        dotnetcliUrl = "https://dotnetcli.azureedge.net/dotnet/Sdk/2.0.0/dotnet-sdk-2.0.0-win-x64.zip"
+        dotnetcliUrl = "https://dotnetcli.azureedge.net/dotnet/Sdk/2.1.402/dotnet-sdk-2.1.402-win-x64.zip"
         dotnetcliFilename = os.path.join(dotnetcliPath, 'dotnetcli-jitutils.zip')
     else:
         print('Unknown os ', os)
         return -1
 
-    response = urllib2.urlopen(dotnetcliUrl)
-    request_url = response.geturl()
-    testfile = urllib.URLopener()
-    testfile.retrieve(request_url, dotnetcliFilename)
+    urlretrieve = urllib.urlretrieve if sys.version_info.major < 3 else urllib.request.urlretrieve
+    urlretrieve(dotnetcliUrl, dotnetcliFilename)
 
     if not os.path.isfile(dotnetcliFilename):
-        print("Did not download .Net CLI!")
+        print("Did not download .NET CLI!")
         return -1
 
-    # Install .Net CLI
+    # Install .NET CLI
 
     if platform == 'Linux' or platform == 'OSX':
         tar = tarfile.open(dotnetcliFilename)
@@ -124,7 +127,7 @@ def main(argv):
 
 
     if not os.path.isfile(os.path.join(dotnetcliPath, dotnet)):
-        print("Did not extract .Net CLI from download")
+        print("Did not extract .NET CLI from download")
         return -1
 
     # Download bootstrap
@@ -145,7 +148,7 @@ def main(argv):
     bootstrapUrl = "https://raw.githubusercontent.com/dotnet/jitutils/master/" + bootstrapFilename
 
     bootstrapPath = os.path.join(coreclr, bootstrapFilename)
-    testfile.retrieve(bootstrapUrl, bootstrapPath)
+    urlretrieve(bootstrapUrl, bootstrapPath)
 
     if not os.path.isfile(bootstrapPath):
         print("Did not download bootstrap!")
@@ -155,7 +158,7 @@ def main(argv):
 
     if platform == 'Linux' or platform == 'OSX':
         print("Making bootstrap executable")
-        os.chmod(bootstrapPath, 0751)
+        os.chmod(bootstrapPath, 0o751)
 
     print(bootstrapPath)
 
@@ -222,6 +225,17 @@ def main(argv):
         patchFile = open("format.patch", "w")
         proc = subprocess.Popen(["git", "diff", "--patch", "-U20"], env=my_env, stdout=patchFile)
         output,error = proc.communicate()
+
+    # shutdown the dotnet build servers before cleaning things up
+    proc = subprocess.Popen(["dotnet", "build-server", "shutdown"], env=my_env)
+    output,error = proc.communicate()
+
+    # shutdown all spurious dotnet processes using os shell
+    if platform == 'Linux' or platform == 'OSX':
+        subprocess.call(['killall', '-SIGTERM', '-qw', dotnet])
+    elif platform == 'Windows_NT':
+        utilpath = os.path.join(coreclr, 'tests\\scripts\\kill-all.cmd')
+        subprocess.call([utilpath, dotnet])
 
     if os.path.isdir(jitUtilsPath):
         print("Deleting " + jitUtilsPath)

@@ -23,7 +23,7 @@ namespace System.Collections.ObjectModel
     internal class ReadOnlyDictionary<TKey, TValue> : IDictionary<TKey, TValue>, IDictionary, IReadOnlyDictionary<TKey, TValue>
     {
         private readonly IDictionary<TKey, TValue> m_dictionary;
-        private Object m_syncRoot;
+        private object m_syncRoot;
         private KeyCollection m_keys;
         private ValueCollection m_values;
 
@@ -212,8 +212,7 @@ namespace System.Collections.ObjectModel
 
         IDictionaryEnumerator IDictionary.GetEnumerator()
         {
-            IDictionary d = m_dictionary as IDictionary;
-            if (d != null)
+            if (m_dictionary is IDictionary d)
             {
                 return d.GetEnumerator();
             }
@@ -294,15 +293,13 @@ namespace System.Collections.ObjectModel
                 ThrowHelper.ThrowArgumentException(ExceptionResource.Arg_ArrayPlusOffTooSmall);
             }
 
-            KeyValuePair<TKey, TValue>[] pairs = array as KeyValuePair<TKey, TValue>[];
-            if (pairs != null)
+            if (array is KeyValuePair<TKey, TValue>[] pairs)
             {
                 m_dictionary.CopyTo(pairs, index);
             }
             else
             {
-                DictionaryEntry[] dictEntryArray = array as DictionaryEntry[];
-                if (dictEntryArray != null)
+                if (array is DictionaryEntry[] dictEntryArray)
                 {
                     foreach (var item in m_dictionary)
                     {
@@ -343,14 +340,13 @@ namespace System.Collections.ObjectModel
             {
                 if (m_syncRoot == null)
                 {
-                    ICollection c = m_dictionary as ICollection;
-                    if (c != null)
+                    if (m_dictionary is ICollection c)
                     {
                         m_syncRoot = c.SyncRoot;
                     }
                     else
                     {
-                        System.Threading.Interlocked.CompareExchange<Object>(ref m_syncRoot, new Object(), null);
+                        System.Threading.Interlocked.CompareExchange<object>(ref m_syncRoot, new object(), null);
                     }
                 }
                 return m_syncRoot;
@@ -426,7 +422,7 @@ namespace System.Collections.ObjectModel
         public sealed class KeyCollection : ICollection<TKey>, ICollection, IReadOnlyCollection<TKey>
         {
             private readonly ICollection<TKey> m_collection;
-            private Object m_syncRoot;
+            private object m_syncRoot;
 
             internal KeyCollection(ICollection<TKey> collection)
             {
@@ -513,14 +509,13 @@ namespace System.Collections.ObjectModel
                 {
                     if (m_syncRoot == null)
                     {
-                        ICollection c = m_collection as ICollection;
-                        if (c != null)
+                        if (m_collection is ICollection c)
                         {
                             m_syncRoot = c.SyncRoot;
                         }
                         else
                         {
-                            System.Threading.Interlocked.CompareExchange<Object>(ref m_syncRoot, new Object(), null);
+                            System.Threading.Interlocked.CompareExchange<object>(ref m_syncRoot, new object(), null);
                         }
                     }
                     return m_syncRoot;
@@ -535,7 +530,7 @@ namespace System.Collections.ObjectModel
         public sealed class ValueCollection : ICollection<TValue>, ICollection, IReadOnlyCollection<TValue>
         {
             private readonly ICollection<TValue> m_collection;
-            private Object m_syncRoot;
+            private object m_syncRoot;
 
             internal ValueCollection(ICollection<TValue> collection)
             {
@@ -622,14 +617,13 @@ namespace System.Collections.ObjectModel
                 {
                     if (m_syncRoot == null)
                     {
-                        ICollection c = m_collection as ICollection;
-                        if (c != null)
+                        if (m_collection is ICollection c)
                         {
                             m_syncRoot = c.SyncRoot;
                         }
                         else
                         {
-                            System.Threading.Interlocked.CompareExchange<Object>(ref m_syncRoot, new Object(), null);
+                            System.Threading.Interlocked.CompareExchange<object>(ref m_syncRoot, new object(), null);
                         }
                     }
                     return m_syncRoot;
@@ -674,15 +668,13 @@ namespace System.Collections.ObjectModel
             }
 
             // Easy out if the ICollection<T> implements the non-generic ICollection
-            ICollection nonGenericCollection = collection as ICollection;
-            if (nonGenericCollection != null)
+            if (collection is ICollection nonGenericCollection)
             {
                 nonGenericCollection.CopyTo(array, index);
                 return;
             }
 
-            T[] items = array as T[];
-            if (items != null)
+            if (array is T[] items)
             {
                 collection.CopyTo(items, index);
             }

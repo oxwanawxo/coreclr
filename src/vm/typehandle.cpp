@@ -42,7 +42,6 @@
 void TypeHandle::NormalizeUnsharedArrayMT()
 {
     WRAPPER_NO_CONTRACT;
-    STATIC_CONTRACT_SO_TOLERANT; // @TODO: This is probably incorrect
 
     if (IsNull() || IsTypeDesc())
         return;
@@ -61,8 +60,6 @@ void TypeHandle::NormalizeUnsharedArrayMT()
     CorElementType kind = AsMethodTable()->GetInternalCorElementType();
     unsigned rank = AsMethodTable()->GetRank();
 
-    // @todo  This should be turned into a probe with a hard SO when we have one
-    CONTRACT_VIOLATION(SOToleranceViolation);
     // == FailIfNotLoadedOrNotRestored
     TypeHandle arrayType = ClassLoader::LoadArrayTypeThrowing(  elemType, 
                                                                 kind,
@@ -194,9 +191,7 @@ Module *TypeHandle::GetDefiningModuleForOpenType() const
     SUPPORTS_DAC;
 
     Module* returnValue = NULL;
-   
-    INTERIOR_STACK_PROBE_NOTHROW_CHECK_THREAD(goto Exit;);
-    
+
     if (IsGenericVariable())
     { 
         PTR_TypeVarTypeDesc pTyVar = dac_cast<PTR_TypeVarTypeDesc>(AsTypeDesc());
@@ -213,15 +208,12 @@ Module *TypeHandle::GetDefiningModuleForOpenType() const
         returnValue = GetMethodTable()->GetDefiningModuleForOpenType();
     }
 Exit:
-    ;
-    END_INTERIOR_STACK_PROBE;
 
     return returnValue;
 }
 
 BOOL TypeHandle::ContainsGenericVariables(BOOL methodOnly /*=FALSE*/) const
 {
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_NOTHROW;
     SUPPORTS_DAC;
 
@@ -405,7 +397,6 @@ PTR_LoaderAllocator TypeHandle::GetLoaderAllocator() const
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
     STATIC_CONTRACT_FORBID_FAULT;
-    STATIC_CONTRACT_SO_INTOLERANT;
     STATIC_CONTRACT_SUPPORTS_DAC;
 
     if (IsTypeDesc())
@@ -486,12 +477,6 @@ BOOL TypeHandle::IsAbstract() const
     WRAPPER_NO_CONTRACT;
     PREFIX_ASSUME(GetMethodTable() != NULL);
     return GetMethodTable()->IsAbstract();
-}
-
-DWORD TypeHandle::IsTransparentProxy() const
-{
-    WRAPPER_NO_CONTRACT;
-    return FALSE;
 }
 
 bool TypeHandle::IsHFA() const
@@ -732,9 +717,6 @@ BOOL TypeHandle::CanCastTo(TypeHandle type, TypeHandlePairList *pVisited)  const
     if (type.IsTypeDesc())
         return(false);
 
-    if (AsMethodTable()->IsTransparentProxy())
-        return (false);
-        
     return AsMethodTable()->CanCastToClassOrInterface(type.AsMethodTable(), pVisited);
 }
 
@@ -752,9 +734,6 @@ TypeHandle::CastResult TypeHandle::CanCastToNoGC(TypeHandle type)  const
     if (type.IsTypeDesc())
         return(CannotCast);
 
-    if (AsMethodTable()->IsTransparentProxy())
-        return (CannotCast);
-        
     return AsMethodTable()->CanCastToClassOrInterfaceNoGC(type.AsMethodTable());
 }
 #include <optdefault.h>
@@ -767,18 +746,14 @@ void TypeHandle::GetName(SString &result) const
     {
         THROWS;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         INJECT_FAULT(COMPlusThrowOM(););
     }
     CONTRACTL_END
 
-    INTERIOR_STACK_PROBE_NOTHROW_CHECK_THREAD(goto Exit;);
-    {
-
     if (IsTypeDesc())
     {
         AsTypeDesc()->GetName(result);
-        goto Exit;
+        return;
     }
 
     AsMethodTable()->_GetFullyQualifiedNameForClass(result);
@@ -787,10 +762,6 @@ void TypeHandle::GetName(SString &result) const
     Instantiation inst = GetInstantiation();
     if (!inst.IsEmpty())
         TypeString::AppendInst(result, inst);
-    }
-Exit:
-    ;
-    END_INTERIOR_STACK_PROBE;
 }
 
 TypeHandle TypeHandle::GetParent()  const
@@ -798,7 +769,6 @@ TypeHandle TypeHandle::GetParent()  const
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
     STATIC_CONTRACT_FORBID_FAULT;
-    STATIC_CONTRACT_SO_TOLERANT;
 
     if (IsTypeDesc())
         return(AsTypeDesc()->GetParent());
@@ -1077,114 +1047,6 @@ BOOL TypeHandle::IsFnPtrType() const
             (GetSignatureCorElementType() == ELEMENT_TYPE_FNPTR));
 }
 
-// Is this type part of an assembly loaded for introspection?
-BOOL 
-TypeHandle::IsIntrospectionOnly() const
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END
-    
-#ifndef DACCESS_COMPILE
-    if (IsFnPtrType())
-    {
-        return AsFnPtrType()->IsIntrospectionOnly();
-    }
-    else if (HasTypeParam())
-    {
-        return GetTypeParam().IsIntrospectionOnly();
-    }
-    else
-    {
-        return GetModule()->IsIntrospectionOnly();
-    }
-#else //DACCESS_COMPILE
-    return FALSE;
-#endif //DACCESS_COMPILE
-} // TypeHandle::IsIntrospectionOnly
-
-// Checks this type and its components for "IsIntrospectionOnly"
-BOOL
-TypeHandle::ContainsIntrospectionOnlyTypes() const
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END
-
-#ifndef DACCESS_COMPILE
-    if (IsFnPtrType())
-    {
-        return AsFnPtrType()->ContainsIntrospectionOnlyTypes();
-    }
-    else if (HasTypeParam())
-    {
-        return GetTypeParam().ContainsIntrospectionOnlyTypes();
-    }
-    else if (IsTypeDesc())
-    {
-        return GetModule()->IsIntrospectionOnly();
-    }
-    else
-    {
-        return AsMethodTable()->ContainsIntrospectionOnlyTypes();
-    }
-#else //DACCESS_COMPILE
-    return FALSE;
-#endif //DACCESS_COMPILE
-} // TypeHandle::ContainsIntrospectionOnlyTypes
-
-// Is this type part of an assembly loaded for introspection?
-BOOL 
-TypeKey::IsIntrospectionOnly()
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END
-    
-#ifndef DACCESS_COMPILE
-    switch (m_kind)
-    {
-        case ELEMENT_TYPE_CLASS:
-            return u.asClass.m_pModule->IsIntrospectionOnly();
-
-        case ELEMENT_TYPE_ARRAY:
-        case ELEMENT_TYPE_SZARRAY:
-        case ELEMENT_TYPE_PTR:
-        case ELEMENT_TYPE_BYREF:
-            return TypeHandle::FromTAddr(u.asParamType.m_paramType).IsIntrospectionOnly();
-
-        case ELEMENT_TYPE_FNPTR:
-            // Return TRUE if any return/arguments type was loaded for introspection only
-            for (DWORD i = 0; i <= u.asFnPtr.m_numArgs; i++)
-            {
-                if (u.asFnPtr.m_pRetAndArgTypes[i].IsIntrospectionOnly())
-                {
-                    return TRUE;
-                }
-            }
-            // None of return/arguments types was loaded for introspection only
-            return FALSE;
-            
-        default:
-            UNREACHABLE_MSG("Corrupted typekey");
-    }
-#else //DACCESS_COMPILE
-    return FALSE;
-#endif //DACCESS_COMPILE
-} // TypeKey::IsIntrospectionOnly
-
 BOOL TypeHandle::IsRestored_NoLogging() const
 { 
     LIMITED_METHOD_CONTRACT;
@@ -1362,7 +1224,6 @@ OBJECTREF TypeHandle::GetManagedClassObject() const
 
     if (!IsTypeDesc())
     {
-        _ASSERT(AsMethodTable()->IsTransparentProxy() == false);
         return AsMethodTable()->GetManagedClassObject();
     }
     else
@@ -1397,7 +1258,6 @@ OBJECTREF TypeHandle::GetManagedClassObjectFast() const
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_TOLERANT;
 
         FORBID_FAULT;
     }
@@ -1442,101 +1302,6 @@ OBJECTREF TypeHandle::GetManagedClassObjectFast() const
 
 #endif // #ifndef DACCESS_COMPILE
 
-#if defined(_DEBUG)
-
-BOOL TypeHandle::IsAppDomainAgile() const
-{
-    LIMITED_METHOD_CONTRACT;
-
-    if (!IsTypeDesc())
-    {
-        MethodTable *pMT = AsMethodTable();
-        return pMT->GetClass()->IsAppDomainAgile();
-    }
-    else if (IsArray())
-    {
-        TypeHandle th = AsArray()->GetArrayElementTypeHandle();
-        return th.IsArrayOfElementsAppDomainAgile();
-    }
-    else
-    {
-        // <TODO>@todo: consider other types of type handles agile?</TODO>
-        return FALSE;
-    }
-}
-
-BOOL TypeHandle::IsCheckAppDomainAgile() const
-{
-    LIMITED_METHOD_CONTRACT;
-
-    if (!IsTypeDesc())
-    {
-        MethodTable *pMT = AsMethodTable();
-        return pMT->GetClass()->IsCheckAppDomainAgile();
-    }
-    else if (IsArray())
-    {
-        TypeHandle th = AsArray()->GetArrayElementTypeHandle();  
-        return th.IsArrayOfElementsCheckAppDomainAgile();
-    }
-    else
-    {
-        // <TODO>@todo: consider other types of type handles agile?</TODO>
-        return FALSE;
-    }
-}
-
-BOOL TypeHandle::IsArrayOfElementsAppDomainAgile() const
-{
-    LIMITED_METHOD_CONTRACT;
-
-    if (!IsTypeDesc())
-    {
-        MethodTable *pMT = AsMethodTable();
-        return (pMT->GetClass()->IsSealed()) && pMT->GetClass()->IsAppDomainAgile();
-    }
-    else
-    if (IsArray())
-    {
-        return AsArray()->GetArrayElementTypeHandle().IsArrayOfElementsAppDomainAgile();
-    }
-    else
-    {
-        // I'm not sure how to prove a typedesc is sealed, so
-        // just bail and return FALSE here rather than recursing.
-
-        return FALSE;
-    }
-}
-
-BOOL TypeHandle::IsArrayOfElementsCheckAppDomainAgile() const
-{
-    LIMITED_METHOD_CONTRACT;
-
-    if (!IsTypeDesc())
-    {
-        MethodTable *pMT = AsMethodTable();
-        return (pMT->GetClass()->IsAppDomainAgile()
-                && (pMT->GetClass()->IsSealed()) == 0)
-          || pMT->GetClass()->IsCheckAppDomainAgile();
-    }
-    else
-    if (IsArray())
-    {
-        return AsArray()->GetArrayElementTypeHandle().IsArrayOfElementsCheckAppDomainAgile();
-    }
-    else
-    {
-        // I'm not sure how to prove a typedesc is sealed, so
-        // just bail and return FALSE here rather than recursing.
-
-        return FALSE;
-    }
-}
-
-#endif // defined(_DEBUG)
-
-
 BOOL TypeHandle::IsByRef()  const
 { 
     LIMITED_METHOD_CONTRACT;
@@ -1578,16 +1343,6 @@ CorElementType TypeHandle::GetInternalCorElementType()  const
         return AsTypeDesc()->GetInternalCorElementType();
     else
         return AsMethodTable()->GetInternalCorElementType();
-}
-
-BOOL TypeHandle::IsDomainNeutral() const
-{
-    LIMITED_METHOD_CONTRACT;
-
-    if (IsTypeDesc()) 
-        return AsTypeDesc()->IsDomainNeutral();
-    else
-        return AsMethodTable()->IsDomainNeutral();
 }
 
 BOOL TypeHandle::HasInstantiation()  const
@@ -1831,7 +1586,6 @@ BOOL TypeHandle::SatisfiesClassConstraints() const
         THROWS;
         GC_TRIGGERS;
         MODE_ANY;
-        SO_INTOLERANT;
 
         INJECT_FAULT(COMPlusThrowOM());
     }
@@ -1843,8 +1597,6 @@ BOOL TypeHandle::SatisfiesClassConstraints() const
     Instantiation typicalInst;
     SigTypeContext typeContext;
     TypeHandle thParent;
-    
-    INTERIOR_STACK_PROBE_CHECK_THREAD;
 
     //TODO: cache (positive?) result in methodtable using, say, enum_flag2_UNUSEDxxx
     
@@ -1853,14 +1605,12 @@ BOOL TypeHandle::SatisfiesClassConstraints() const
    
     if (!thParent.IsNull() && !thParent.SatisfiesClassConstraints()) 
     {
-        returnValue = FALSE;
-        goto Exit;
+        return FALSE;
     }
     
     if (!HasInstantiation()) 
     {
-        returnValue = TRUE;
-        goto Exit;
+        return TRUE;
     }
 
     classInst = GetInstantiation(); 
@@ -1872,9 +1622,9 @@ BOOL TypeHandle::SatisfiesClassConstraints() const
     typicalInst = thCanonical.GetInstantiation();
 
     SigTypeContext::InitTypeContext(*this, &typeContext);
-    
+
     for (DWORD i = 0; i < classInst.GetNumArgs(); i++)
-    {   
+    {
         TypeHandle thArg = classInst[i];
         _ASSERTE(!thArg.IsNull());
 
@@ -1886,23 +1636,16 @@ BOOL TypeHandle::SatisfiesClassConstraints() const
 
         if (!tyvar->SatisfiesConstraints(&typeContext, thArg)) 
         {
-            returnValue = FALSE;
-            goto Exit;
+            return FALSE;
         }
+    }
 
-    }    
-    returnValue = TRUE;
-Exit:    
-    ;
-    END_INTERIOR_STACK_PROBE;
-    
-    return returnValue;
+    return TRUE;
 }
 
 TypeKey TypeHandle::GetTypeKey() const
 {
     LIMITED_METHOD_CONTRACT;
-    STATIC_CONTRACT_SO_TOLERANT;
     PRECONDITION(!IsGenericVariable());
 
     if (IsTypeDesc())
@@ -2071,7 +1814,6 @@ CHECK TypeHandle::CheckFullyLoaded()
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;

@@ -484,7 +484,7 @@ INT32 QCALLTYPE COMModule::GetMemberRefOfMethodInfo(QCall::ModuleHandle pModule,
     BEGIN_QCALL;
     
     if (!pMeth)  
-        COMPlusThrow(kArgumentNullException, W("ArgumentNull_Obj"));
+        COMPlusThrow(kArgumentNullException);
 
     // Otherwise, we want to return memberref token.
     if (pMeth->IsArray())
@@ -815,7 +815,7 @@ void QCALLTYPE COMModule::GetType(QCall::ModuleHandle pModule, LPCWSTR wszName, 
     BOOL prohibitAsmQualifiedName = TRUE;
 
     // Load the class from this assembly (fail if it is in a different one).
-    retTypeHandle = TypeName::GetTypeManaged(wszName, pAssembly, bThrowOnError, bIgnoreCase, pAssembly->IsIntrospectionOnly(), prohibitAsmQualifiedName, NULL, FALSE, (OBJECTREF*)keepAlive.m_ppObject);
+    retTypeHandle = TypeName::GetTypeManaged(wszName, pAssembly, bThrowOnError, bIgnoreCase, prohibitAsmQualifiedName, NULL, FALSE, (OBJECTREF*)keepAlive.m_ppObject);
 
     // Verify that it's in 'this' module
     // But, if it's in a different assembly than expected, that's okay, because
@@ -1081,13 +1081,6 @@ Object* GetTypesInner(Module* pModule)
         pMT = curClass.GetMethodTable();
         PREFIX_ASSUME(pMT != NULL);
 
-        if (pMT->IsTransparentProxy())
-        {
-            // Don't expose transparent proxy
-            _ASSERTE(bSystemAssembly);
-            continue;
-        }
-
         // Get the COM+ Class object
         OBJECTREF refCurClass = pMT->GetManagedClassObject();
         _ASSERTE("GetManagedClassObject failed." && refCurClass != NULL);
@@ -1146,7 +1139,6 @@ static VOID __stdcall DReleaseTarget(IUnknown *punk)
         NOTHROW;
         GC_TRIGGERS;
         MODE_PREEMPTIVE;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 

@@ -185,7 +185,7 @@ size_t DisAssembler::disCchAddrMember(
                 const char* name           = disGetMethodFullName(absoluteTarget);
                 if (name != nullptr)
                 {
-                    swprintf_s(wz, cchMax, W("%p %S"), dspAddr(absoluteTarget), name);
+                    swprintf_s(wz, cchMax, W("%zx %S"), dspAddr(absoluteTarget), name);
                     retval = 1;
                     break;
                 }
@@ -270,7 +270,7 @@ size_t DisAssembler::disCchAddrMember(
                 const char* name           = disGetMethodFullName(absoluteTarget);
                 if (name != nullptr)
                 {
-                    swprintf_s(wz, cchMax, W("%p %S"), dspAddr(absoluteTarget), name);
+                    swprintf_s(wz, cchMax, W("%zx %S"), dspAddr(absoluteTarget), name);
                     retval = 1;
                     break;
                 }
@@ -428,7 +428,7 @@ size_t DisAssembler::disCchFixupMember(
                 const char* name = disGetMethodFullName(targetAddr);
                 if (name != nullptr)
                 {
-                    swprintf_s(wz, cchMax, W("%p %S"), dspAddr(targetAddr), name);
+                    swprintf_s(wz, cchMax, W("%zx %S"), dspAddr(targetAddr), name);
                     break;
                 }
             }
@@ -533,7 +533,7 @@ size_t DisAssembler::disCchFixupMember(
                 const char* name = disGetMethodFullName(targetAddr);
                 if (name != nullptr)
                 {
-                    swprintf_s(wz, cchMax, W("%p %S"), dspAddr(targetAddr), name);
+                    swprintf_s(wz, cchMax, W("%zx %S"), dspAddr(targetAddr), name);
                     break;
                 }
             }
@@ -864,7 +864,6 @@ AddrToMethodHandleMap* DisAssembler::GetAddrToMethodHandleMap()
 {
     if (disAddrToMethodHandleMap == nullptr)
     {
-        assert(disComp->getAllocator() != nullptr);
         disAddrToMethodHandleMap = new (disComp->getAllocator()) AddrToMethodHandleMap(disComp->getAllocator());
     }
     return disAddrToMethodHandleMap;
@@ -877,7 +876,6 @@ AddrToMethodHandleMap* DisAssembler::GetHelperAddrToMethodHandleMap()
 {
     if (disHelperAddrToMethodHandleMap == nullptr)
     {
-        assert(disComp->getAllocator() != nullptr);
         disHelperAddrToMethodHandleMap = new (disComp->getAllocator()) AddrToMethodHandleMap(disComp->getAllocator());
     }
     return disHelperAddrToMethodHandleMap;
@@ -890,7 +888,6 @@ AddrToAddrMap* DisAssembler::GetRelocationMap()
 {
     if (disRelocationMap == nullptr)
     {
-        assert(disComp->getAllocator() != nullptr);
         disRelocationMap = new (disComp->getAllocator()) AddrToAddrMap(disComp->getAllocator());
     }
     return disRelocationMap;

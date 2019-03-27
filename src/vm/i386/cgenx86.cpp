@@ -105,9 +105,6 @@ void GetSpecificCpuInfo(CORINFO_CPU * cpuInfo)
     _ASSERTE(tempVal.dwCPUType);
     
 #ifdef _DEBUG
-    {
-        SO_NOT_MAINLINE_REGION();
-
     /* Set Family+Model+Stepping string (eg., x690 for Banias, or xF30 for P4 Prescott)
      * instead of Family only
      */
@@ -120,15 +117,11 @@ void GetSpecificCpuInfo(CORINFO_CPU * cpuInfo)
         assert((configCpuFamily & 0xFFF) == configCpuFamily);
         tempVal.dwCPUType = (tempVal.dwCPUType & 0xFFFF0000) | configCpuFamily;
     }
-    }
 #endif
 
     tempVal.dwFeatures = GetSpecificCpuFeaturesAsm(&tempVal.dwExtendedFeatures);  // written in ASM & doesn't participate in contracts
 
 #ifdef _DEBUG
-    {
-        SO_NOT_MAINLINE_REGION();
-
     /* Set the 32-bit feature mask
      */
     
@@ -138,7 +131,6 @@ void GetSpecificCpuInfo(CORINFO_CPU * cpuInfo)
     if (configCpuFeatures != cpuFeaturesDefault)
     {
         tempVal.dwFeatures = configCpuFeatures;
-    }
     }
 #endif
 
@@ -910,7 +902,6 @@ WORD GetUnpatchedCodeData(LPCBYTE pAddr)
         GC_NOTRIGGER;
         PRECONDITION(CORDebuggerAttached());
         PRECONDITION(CheckPointer(pAddr));
-        SO_TOLERANT;
     } CONTRACT_END;
 
     // Ordering is because x86 is little-endien.
@@ -1048,7 +1039,7 @@ Stub *GenerateInitPInvokeFrameHelper()
 #ifdef MDA_SUPPORTED
 
 //-----------------------------------------------------------------------------
-Stub *NDirectMethodDesc::GenerateStubForMDA(LPVOID pNativeTarget, Stub *pInnerStub, BOOL fCalledByStub)
+Stub *NDirectMethodDesc::GenerateStubForMDA(LPVOID pNativeTarget, Stub *pInnerStub)
 {
     STANDARD_VM_CONTRACT;
 
@@ -1079,17 +1070,7 @@ Stub *NDirectMethodDesc::GenerateStubForMDA(LPVOID pNativeTarget, Stub *pInnerSt
     if (IsVarArgs())
     {
         // Re-push the return address as an argument to GetStackSizeForVarArgCall()
-        if (fCalledByStub)
-        {
-            // We will be called by another stub that doesn't know the stack size,
-            // so we need to skip a frame to get to the managed caller.
-            sl.X86EmitIndexRegLoad(kEAX, kEBP, 0);
-            sl.X86EmitIndexPush(kEAX, 4);
-        }
-        else
-        {
-            sl.X86EmitIndexPush(kEBP, 4);
-        }
+        sl.X86EmitIndexPush(kEBP, 4);
 
         // This will return the number of stack arguments (in DWORDs)
         sl.X86EmitCall(sl.NewExternalCodeLabel((LPVOID)GetStackSizeForVarArgCall), 4);
@@ -1490,7 +1471,6 @@ BOOL DoesSlotCallPrestub(PCODE pCode)
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         PRECONDITION(pCode != NULL);
         PRECONDITION(pCode != GetPreStubEntryPoint());
     } CONTRACTL_END;
@@ -1563,7 +1543,7 @@ EXTERN_C PVOID STDCALL VirtualMethodFixupWorker(Object * pThisPtr,  CORCOMPILE_V
     _ASSERTE(pThisPtr != NULL);
     VALIDATEOBJECT(pThisPtr);
 
-    MethodTable * pMT = pThisPtr->GetTrueMethodTable();
+    MethodTable * pMT = pThisPtr->GetMethodTable();
 
     WORD slotNumber = pThunk->slotNum;
     _ASSERTE(slotNumber != (WORD)-1);
@@ -1572,10 +1552,21 @@ EXTERN_C PVOID STDCALL VirtualMethodFixupWorker(Object * pThisPtr,  CORCOMPILE_V
 
     if (!DoesSlotCallPrestub(pCode))
     {
-        // Skip fixup precode jump for better perf
-        PCODE pDirectTarget = Precode::TryToSkipFixupPrecode(pCode);
-        if (pDirectTarget != NULL)
-            pCode = pDirectTarget;
+        MethodDesc *pMD = MethodTable::GetMethodDescForSlotAddress(pCode);
+        if (pMD->IsVersionableWithVtableSlotBackpatch())
+        {
+            // The entry point for this method needs to be versionable, so use a FuncPtrStub similarly to what is done in
+            // MethodDesc::GetMultiCallableAddrOfCode()
+            GCX_COOP();
+            pCode = pMD->GetLoaderAllocator()->GetFuncPtrStubs()->GetFuncPtrStub(pMD);
+        }
+        else
+        {
+            // Skip fixup precode jump for better perf
+            PCODE pDirectTarget = Precode::TryToSkipFixupPrecode(pCode);
+            if (pDirectTarget != NULL)
+                pCode = pDirectTarget;
+        }
 
         INT64 oldValue = *(INT64*)pThunk;
         BYTE* pOldValue = (BYTE*)&oldValue;

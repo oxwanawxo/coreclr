@@ -201,7 +201,6 @@ public:
     // i.e. are domain-bound.  If any of the parts are domain-bound
     // then they will all belong to the same domain.
     PTR_BaseDomain GetDomain();
-    BOOL IsDomainNeutral();
 
     PTR_LoaderAllocator GetLoaderAllocator()
     {
@@ -351,7 +350,6 @@ public:
       , m_pCCWTemplate(NULL)
 #endif // FEATURE_COMINTEROP
     {
-        STATIC_CONTRACT_SO_TOLERANT;
         WRAPPER_NO_CONTRACT;
         INDEBUG(Verify());
     }
@@ -651,15 +649,8 @@ public:
     }
 
 #ifndef DACCESS_COMPILE
-    
     // Returns TRUE if all return and argument types are externally visible.
     BOOL IsExternallyVisible() const;
-    // Returns TRUE if any of return or argument types is part of an assembly loaded for introspection.
-    BOOL IsIntrospectionOnly() const;
-    // Returns TRUE if any of return or argument types is part of an assembly loaded for introspection.
-    // Instantiations of generic types are also recursively checked.
-    BOOL ContainsIntrospectionOnlyTypes() const;
-    
 #endif //DACCESS_COMPILE
 
 #ifdef FEATURE_PREJIT

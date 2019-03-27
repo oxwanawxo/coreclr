@@ -380,7 +380,7 @@ def build_perfharness(coreclrRepo, sandboxDir, extension, dotnetEnv):
         dotnetEnv (str{}): environment for dotnet
     """
     # Confirm dotnet works
-    dotnet = os.path.join(coreclrRepo, 'Tools', 'dotnetcli', 'dotnet' + extension)
+    dotnet = os.path.join(coreclrRepo, '.dotnet', 'dotnet' + extension)
     runArgs = [dotnet,
             '--info'
             ]
@@ -418,13 +418,11 @@ def main(args):
     coreclrPerf, assemblyName, arch, operatingSystem, configuration, jitName, optLevel, runType, outputDir, stabilityPrefix, isScenarioTest, benchviewPath, isPgoOptimized, benchviewGroup, hasWarmupRun, collectionFlags, isLibrary, uploadToBenchview, better, sliceNumber, sliceConfigFile = validate_args(args)
 
     platform = sys.platform
-    python = 'py'
+    python = sys.executable
     if platform == 'linux' or platform == 'linux2':
         platform = 'Linux'
-        python = 'python3'
     elif platform == 'darwin':
         platform = 'OSX'
-        python = 'python3'
     elif platform == 'win32':
         platform = "Windows_NT"
     else:
@@ -455,10 +453,11 @@ def main(args):
     build_perfharness(coreclrRepo, sandboxDir, extension, myEnv)
 
     # Set up environment for running tests
-    if optLevel == 'min_opts':
+    if optLevel == 'min_opt':
         myEnv['COMPlus_JITMinOpts'] = '1'
-    elif optLevel == 'tiered':
-        myEnv['COMPLUS_TieredCompilation'] = '1'
+        myEnv['COMPlus_TieredCompilation'] = '0'
+    elif optLevel == 'full_opt':
+        myEnv['COMPlus_TieredCompilation'] = '0'
 
     if not 'XUNIT_PERFORMANCE_MAX_ITERATION' in myEnv:
         myEnv['XUNIT_PERFORMANCE_MAX_ITERATION'] = '21'

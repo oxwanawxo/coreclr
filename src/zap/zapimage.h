@@ -478,7 +478,7 @@ private:
         static BOOL Equals(key_t k1, key_t k2);
         static COUNT_T Hash(key_t k);
 
-        static const element_t Null() { LIMITED_METHOD_CONTRACT; return NULL; }
+        static element_t Null() { LIMITED_METHOD_CONTRACT; return NULL; }
         static bool IsNull(const element_t &e) { LIMITED_METHOD_CONTRACT; return e == NULL; }
     };
 
@@ -596,6 +596,7 @@ private:
     void OutputTypesTableForReadyToRun(IMDInternalImport * pMDImport);
     void OutputInliningTableForReadyToRun();
     void OutputProfileDataForReadyToRun();
+    void OutputManifestMetadataForReadyToRun();
 
     void CopyDebugDirEntry();
     void CopyWin32VersionResource();
@@ -666,7 +667,7 @@ public:
 
     void AllocateVirtualSections();
 
-    HANDLE SaveImage(LPCWSTR wszOutputFileName, CORCOMPILE_NGEN_SIGNATURE * pNativeImageSig);
+    HANDLE SaveImage(LPCWSTR wszOutputFileName, LPCWSTR wszDllPath, CORCOMPILE_NGEN_SIGNATURE * pNativeImageSig);
 
     void Preload();
     void LinkPreload();
@@ -691,6 +692,7 @@ public:
     }
 
     static void __stdcall TryCompileMethodStub(LPVOID pContext, CORINFO_METHOD_HANDLE hStub, CORJIT_FLAGS jitFlags);
+    static DWORD EncodeModuleHelper(LPVOID compileContext, CORINFO_MODULE_HANDLE referencedModule);
 
     BOOL IsVTableGapMethod(mdMethodDef md);
 

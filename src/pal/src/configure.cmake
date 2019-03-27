@@ -37,15 +37,20 @@ check_include_files(sys/prctl.h HAVE_PRCTL_H)
 check_include_files(numa.h HAVE_NUMA_H)
 check_include_files(pthread_np.h HAVE_PTHREAD_NP_H)
 check_include_files("sys/auxv.h;asm/hwcap.h" HAVE_AUXV_HWCAP_H)
-check_include_files("libintl.h" HAVE_LIBINTL_H)
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL FreeBSD AND NOT CMAKE_SYSTEM_NAME STREQUAL NetBSD)
-  set(CMAKE_REQUIRED_FLAGS "-ldl")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL Darwin)
+  check_include_files("libintl.h" HAVE_LIBINTL_H)
 endif()
-check_include_files(lttng/tracepoint.h HAVE_LTTNG_TRACEPOINT_H)
-if(NOT CMAKE_SYSTEM_NAME STREQUAL FreeBSD AND NOT CMAKE_SYSTEM_NAME STREQUAL NetBSD)
-  unset(CMAKE_REQUIRED_FLAGS)
-endif()
+
+set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
+
+check_cxx_source_compiles("
+#include <lttng/tracepoint.h>
+int main(int argc, char **argv) {
+  return 0;
+}" HAVE_LTTNG_TRACEPOINT_H)
+
+set(CMAKE_REQUIRED_LIBRARIES)
 
 check_include_files(sys/sysctl.h HAVE_SYS_SYSCTL_H)
 check_include_files(gnu/lib-names.h HAVE_GNU_LIBNAMES_H)
@@ -125,7 +130,6 @@ set(CMAKE_EXTRA_INCLUDE_FILES asm/ptrace.h)
 check_type_size("struct pt_regs" PT_REGS)
 set(CMAKE_EXTRA_INCLUDE_FILES)
 set(CMAKE_EXTRA_INCLUDE_FILES signal.h)
-check_type_size(siginfo_t SIGINFO_T)
 set(CMAKE_EXTRA_INCLUDE_FILES)
 set(CMAKE_EXTRA_INCLUDE_FILES ucontext.h)
 check_type_size(ucontext_t UCONTEXT_T)
@@ -823,6 +827,32 @@ int main(void) {
   }
   exit(1);
 }" HAVE_COMPATIBLE_EXP)
+set(CMAKE_REQUIRED_LIBRARIES)
+set(CMAKE_REQUIRED_LIBRARIES m)
+check_cxx_source_runs("
+#include <math.h>
+#include <stdlib.h>
+
+int main(void) {
+  if (FP_ILOGB0 != -2147483648) {
+    exit(1);
+  }
+
+  exit(0);
+}" HAVE_COMPATIBLE_ILOGB0)
+set(CMAKE_REQUIRED_LIBRARIES)
+set(CMAKE_REQUIRED_LIBRARIES m)
+check_cxx_source_runs("
+#include <math.h>
+#include <stdlib.h>
+
+int main(void) {
+  if (FP_ILOGBNAN != 2147483647) {
+    exit(1);
+  }
+
+  exit(0);
+}" HAVE_COMPATIBLE_ILOGBNAN)
 set(CMAKE_REQUIRED_LIBRARIES)
 set(CMAKE_REQUIRED_LIBRARIES m)
 check_cxx_source_runs("

@@ -25,17 +25,18 @@ Object Inspection                  Examining code and stacks
 -----------------------------      -----------------------------
 DumpObj (do)                       Threads
 DumpArray (da)                     ThreadState
-DumpStackObjects (dso)             IP2MD
-DumpHeap                           U
-DumpVC                             DumpStack
-GCRoot                             EEStack
-ObjSize                            CLRStack
-FinalizeQueue                      GCInfo
-PrintException (pe)                EHInfo
-TraverseHeap                       BPMD 
-Watch                              COMState
-                                   StopOnCatch
-                                   SuppressJitOptimization
+DumpAsync                          IP2MD
+DumpDelegate                       U
+DumpStackObjects (dso)             DumpStack
+DumpHeap                           EEStack
+DumpVC                             CLRStack
+GCRoot                             GCInfo
+ObjSize                            EHInfo
+FinalizeQueue                      BPMD
+PrintException (pe)                COMState 
+TraverseHeap                       StopOnCatch
+Watch                              SuppressJitOptimization
+                                   
 
 Examining CLR data structures      Diagnostic Utilities
 -----------------------------      -----------------------------
@@ -340,7 +341,23 @@ The arguments in detail:
 	    5b9a628c  4000002        4         System.Int32   instance        8 y
 	    5b9a628c  4000003        8         System.Int32   instance       12 z
 
+\\
 
+COMMAND: dumpasync.
+!DumpAsync [-addr <Object Address>]
+           [-mt <MethodTable address>]
+           [-type <partial type name>]
+           [-tasks]
+           [-completed]
+           [-fields]
+           [-stacks]
+           [-roots]
+
+!DumpAsync traverses the garbage collected heap, looking for objects representing
+async state machines as created when an async method's state is transferred to the
+heap.  This command recognizes async state machines defined as "async void", "async Task",
+"async Task<T>", "async ValueTask", and "async ValueTask<T>".  It also optionally supports
+any other tasks.
 \\
 
 COMMAND: dumpstackobjects.
@@ -357,6 +374,19 @@ on by default because very often in a debugging scenario, you are
 interested in objects with invalid fields.
 
 The abbreviation !dso can be used for brevity.
+\\
+
+COMMAND: dumpdelegate.
+!DumpDelegate <delegate address>
+
+!DumpDelegate finds and outputs the one or more method descriptors associated with a delegate object.
+
+For example:
+
+	0:000> !dumpdelegate
+    Target           Method           Name
+    000001461bacb0d8 00007ffc5c894b80 ConsoleApp16.Program.InstanceMethod()
+    000001461bacb098 00007ffc5c894b68 ConsoleApp16.Program.StaticMethod()
 \\
 
 COMMAND: dumpheap.
@@ -1178,8 +1208,8 @@ method of my application. How can I do this?"
      see the breakpoint listed.
 
 You can specify breakpoints by file and line number if:
-   a) You have some version of .Net Framework installed on your machine. Any OS from
-      Vista onwards should have .Net Framework installed by default.
+   a) You have some version of .NET Framework installed on your machine. Any OS from
+      Vista onwards should have .NET Framework installed by default.
    b) You have PDBs for the managed modules that need breakpoints, and your symbol
       path points to those PDBs.
 This is often easier than module and method name syntax. For example:

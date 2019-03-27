@@ -45,7 +45,6 @@
 //       GC_NOTRIGGER
 //       MODE_ANY
 //       CANNOT_TAKE_LOCK
-//       SO_NOT_MAINLINE
 //       (EE_THREAD_(NOT)_REQUIRED are unenforced and are thus optional.  If you wish
 //       to specify these, EE_THREAD_NOT_REQUIRED is preferred.)
 //   Note that the preferred contracts in this file are DIFFERENT than the preferred
@@ -331,7 +330,6 @@ static ClassID NonGenericTypeHandleToClassID(TypeHandle th)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
@@ -510,7 +508,6 @@ void * STDMETHODCALLTYPE ModuleILHeap::Alloc(ULONG cb)
         // Yay!
         MODE_ANY;
 
-        SO_NOT_MAINLINE;
     } 
     CONTRACTL_END;
 
@@ -687,7 +684,7 @@ void __stdcall GarbageCollectionStartedCallback(int generation, BOOL induced)
 
     // Notify the profiler of start of the collection
     {
-        BEGIN_PIN_PROFILER(CORProfilerTrackGC());
+        BEGIN_PIN_PROFILER(CORProfilerTrackGC() || CORProfilerTrackBasicGC());
         BOOL generationCollected[COR_PRF_GC_LARGE_OBJECT_HEAP+1];
         if (generation == COR_PRF_GC_GEN_2)
             generation = COR_PRF_GC_LARGE_OBJECT_HEAP;
@@ -721,7 +718,7 @@ void __stdcall GarbageCollectionFinishedCallback()
 #ifdef PROFILING_SUPPORTED
     // Notify the profiler of end of the collection
     {
-        BEGIN_PIN_PROFILER(CORProfilerTrackGC());
+        BEGIN_PIN_PROFILER(CORProfilerTrackGC() || CORProfilerTrackBasicGC());
         g_profControlBlock.pProfInterface->GarbageCollectionFinished();
         END_PIN_PROFILER();
     }
@@ -861,7 +858,7 @@ void __stdcall UpdateGenerationBounds()
 
 #ifdef PROFILING_SUPPORTED
     // Notify the profiler of start of the collection
-    if (CORProfilerTrackGC())
+    if (CORProfilerTrackGC() || CORProfilerTrackBasicGC())
     {
         // generate a new generation table
         GenerationTable *newGenerationTable = new (nothrow) GenerationTable();
@@ -1106,7 +1103,6 @@ bool HeapWalkHelper(Object * pBO, void * pvContext)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_INTOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -1273,7 +1269,6 @@ void ScanRootsHelper(Object* pObj, Object ** ppRoot, ScanContext *pSC, uint32_t 
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_INTOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -1467,7 +1462,6 @@ HRESULT ProfToEEInterfaceImpl::SetEventMask(DWORD dwEventMask)
 
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -1500,7 +1494,6 @@ HRESULT ProfToEEInterfaceImpl::SetEventMask2(DWORD dwEventsLow, DWORD dwEventsHi
 
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -1535,7 +1528,6 @@ HRESULT ProfToEEInterfaceImpl::GetHandleFromThread(ThreadID threadId, HANDLE *ph
         // Yay!
         CANNOT_TAKE_LOCK;
     
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -1582,7 +1574,6 @@ HRESULT ProfToEEInterfaceImpl::GetObjectSize(ObjectID objectId, ULONG *pcSize)
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -1647,7 +1638,6 @@ HRESULT ProfToEEInterfaceImpl::GetObjectSize2(ObjectID objectId, SIZE_T *pcSize)
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -1710,7 +1700,6 @@ HRESULT ProfToEEInterfaceImpl::IsArrayClass(
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -1833,7 +1822,6 @@ HRESULT ProfToEEInterfaceImpl::GetThreadInfo(ThreadID threadId, DWORD *pdwWin32T
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -1875,7 +1863,6 @@ HRESULT ProfToEEInterfaceImpl::GetCurrentThreadID(ThreadID *pThreadId)
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -1927,7 +1914,6 @@ HRESULT GetFunctionInfoInternal(LPCBYTE ip, EECodeInfo * pCodeInfo)
         CAN_TAKE_LOCK;
         CANNOT_RETAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         // If this is called asynchronously (from a hijacked thread, as with F1), it must not re-enter the
         // host (SQL).  Corners will be cut to ensure this is the case
@@ -1976,7 +1962,6 @@ HRESULT GetFunctionFromIPInternal(LPCBYTE ip, EECodeInfo * pCodeInfo, BOOL failO
         MODE_ANY;
         EE_THREAD_NOT_REQUIRED;
         CAN_TAKE_LOCK;
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -2027,7 +2012,6 @@ HRESULT ProfToEEInterfaceImpl::GetFunctionFromIP(LPCBYTE ip, FunctionID * pFunct
         // this function was called.  
         CANNOT_RETAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         // If this is called asynchronously (from a hijacked thread, as with F1), it must not re-enter the
         // host (SQL).  Corners will be cut to ensure this is the case
@@ -2089,7 +2073,6 @@ HRESULT ProfToEEInterfaceImpl::GetFunctionFromIP2(LPCBYTE ip, FunctionID * pFunc
         // Grabbing the rejitid requires entering the rejit manager's hash table & lock,
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -2154,7 +2137,6 @@ HRESULT ProfToEEInterfaceImpl::GetTokenAndMetaDataFromFunction(
         // PEFile::GetRWImporter and GetReadablePublicMetaDataInterface take locks
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -2256,7 +2238,6 @@ HRESULT GetCodeInfoFromCodeStart(
         // appropriate jit manager.
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         // If this is called asynchronously (from a hijacked thread, as with F1), it must not re-enter the
         // host (SQL).  Corners will be cut to ensure this is the case
@@ -2415,7 +2396,6 @@ HRESULT ProfToEEInterfaceImpl::GetCodeInfo(FunctionID functionId, LPCBYTE * pSta
         // (See locking contract comment in GetCodeInfoHelper.)
         CANNOT_RETAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         // If this is called asynchronously (from a hijacked thread, as with F1), it must not re-enter the
         // host (SQL).  Corners will be cut to ensure this is the case
@@ -2502,7 +2482,6 @@ HRESULT ProfToEEInterfaceImpl::GetCodeInfo2(FunctionID functionId,
         // (See locking contract comment in GetCodeInfoHelper.)
         CANNOT_RETAKE_LOCK;
 
-        SO_NOT_MAINLINE;
         
         // If this is called asynchronously (from a hijacked thread, as with F1), it must not re-enter the
         // host (SQL).  Corners will be cut to ensure this is the case
@@ -2570,7 +2549,6 @@ HRESULT ProfToEEInterfaceImpl::GetCodeInfo3(FunctionID functionId,
         // We need to access the rejitmanager, which means taking locks
         CAN_TAKE_LOCK;
         
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pcCodeInfos, NULL_OK));
         PRECONDITION(CheckPointer(codeInfos, NULL_OK));
@@ -2645,7 +2623,6 @@ HRESULT ProfToEEInterfaceImpl::GetEventMask(DWORD * pdwEvents)
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -2683,7 +2660,6 @@ HRESULT ProfToEEInterfaceImpl::GetEventMask2(DWORD *pdwEventsLow, DWORD *pdwEven
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -2710,7 +2686,6 @@ void ProfToEEInterfaceImpl::MethodTableCallback(void* context, void* objectUNSAF
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_NOT_MAINLINE;
         MODE_ANY;
     } 
     CONTRACTL_END;
@@ -2749,7 +2724,6 @@ HRESULT ProfToEEInterfaceImpl::EnumModuleFrozenObjects(ModuleID moduleID,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -2812,7 +2786,6 @@ HRESULT ProfToEEInterfaceImpl::GetArrayObjectInfo(ObjectID objectId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -2877,12 +2850,11 @@ HRESULT ProfToEEInterfaceImpl::GetArrayObjectInfoHelper(Object * pObj,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
     // Must have an array.
-    MethodTable * pMT = pObj->GetTrueMethodTable();
+    MethodTable * pMT = pObj->GetMethodTable();
     if (!pMT->IsArray())
     {
         return E_INVALIDARG;
@@ -2940,7 +2912,6 @@ HRESULT ProfToEEInterfaceImpl::GetBoxClassLayout(ClassID classId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -3002,7 +2973,6 @@ HRESULT ProfToEEInterfaceImpl::GetThreadAppDomain(ThreadID threadId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -3078,7 +3048,6 @@ HRESULT ProfToEEInterfaceImpl::GetRVAStaticAddress(ClassID classId,
         // FieldDesc::GetStaticAddress takes a lock
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -3132,8 +3101,7 @@ HRESULT ProfToEEInterfaceImpl::GetRVAStaticAddress(ClassID classId,
     //
     if(!pFieldDesc->IsStatic() ||
        !pFieldDesc->IsRVA() ||
-       pFieldDesc->IsThreadStatic() || 
-       pFieldDesc->IsContextStatic())
+       pFieldDesc->IsThreadStatic())
     {
         return E_INVALIDARG;
     }
@@ -3205,7 +3173,6 @@ HRESULT ProfToEEInterfaceImpl::GetAppDomainStaticAddress(ClassID classId,
         // FieldDesc::GetStaticAddress & FieldDesc::GetBaseInDomain take locks
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -3271,8 +3238,7 @@ HRESULT ProfToEEInterfaceImpl::GetAppDomainStaticAddress(ClassID classId,
     //
     if(!pFieldDesc->IsStatic() ||
        pFieldDesc->IsRVA() ||
-       pFieldDesc->IsThreadStatic() ||
-       pFieldDesc->IsContextStatic())
+       pFieldDesc->IsThreadStatic())
     {
         return E_INVALIDARG;
     }
@@ -3353,7 +3319,6 @@ HRESULT ProfToEEInterfaceImpl::GetThreadStaticAddress(ClassID classId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -3430,7 +3395,6 @@ HRESULT ProfToEEInterfaceImpl::GetThreadStaticAddress2(ClassID classId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -3494,8 +3458,7 @@ HRESULT ProfToEEInterfaceImpl::GetThreadStaticAddress2(ClassID classId,
     //
     if(!pFieldDesc->IsStatic() ||
        !pFieldDesc->IsThreadStatic() ||
-       pFieldDesc->IsRVA() ||
-       pFieldDesc->IsContextStatic())
+       pFieldDesc->IsRVA())
     {
         return E_INVALIDARG;
     }
@@ -3516,7 +3479,7 @@ HRESULT ProfToEEInterfaceImpl::GetThreadStaticAddress2(ClassID classId,
     //
     // Store the result and return
     //
-    PTR_VOID pAddress = (void *)(((Thread *)threadId)->GetStaticFieldAddrNoCreate(pFieldDesc, pAppDomain));
+    PTR_VOID pAddress = (void *)(((Thread *)threadId)->GetStaticFieldAddrNoCreate(pFieldDesc));
     if (pAddress == NULL)
     {
         return E_INVALIDARG;
@@ -3540,9 +3503,7 @@ HRESULT ProfToEEInterfaceImpl::GetThreadStaticAddress2(ClassID classId,
  *    pAddress - location for storing the resulting address location.
  *
  * Returns:
- *    S_OK on success,
- *    E_INVALIDARG if not a context static,
- *    CORPROF_E_DATAINCOMPLETE if not yet initialized.
+ *    E_NOTIMPL
  *
  */
 HRESULT ProfToEEInterfaceImpl::GetContextStaticAddress(ClassID classId,
@@ -3564,7 +3525,6 @@ HRESULT ProfToEEInterfaceImpl::GetContextStaticAddress(ClassID classId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -3619,7 +3579,6 @@ HRESULT ProfToEEInterfaceImpl::GetAppDomainsContainingModule(ModuleID moduleId,
         // (See comment above GC_TRIGGERS.)
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -3699,7 +3658,6 @@ HRESULT ProfToEEInterfaceImpl::GetStaticFieldInfo(ClassID classId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -3739,11 +3697,6 @@ HRESULT ProfToEEInterfaceImpl::GetStaticFieldInfo(ClassID classId,
     }
 
     *pFieldInfo = COR_PRF_FIELD_NOT_A_STATIC;
-
-    if (pFieldDesc->IsContextStatic())
-    {
-        *pFieldInfo = (COR_PRF_STATIC_TYPE)(*pFieldInfo | COR_PRF_FIELD_CONTEXT_STATIC);
-    }
 
     if (pFieldDesc->IsRVA())
     {
@@ -3811,7 +3764,6 @@ HRESULT ProfToEEInterfaceImpl::GetClassIDInfo2(ClassID classId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pParentClassId, NULL_OK));
         PRECONDITION(CheckPointer(pModuleId, NULL_OK));
@@ -3982,7 +3934,6 @@ HRESULT ProfToEEInterfaceImpl::GetModuleInfo(ModuleID     moduleId,
         // Yay!
         EE_THREAD_NOT_REQUIRED;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer((Module *)moduleId, NULL_OK));
         PRECONDITION(CheckPointer(ppBaseLoadAddress,  NULL_OK));
@@ -4129,7 +4080,6 @@ HRESULT ProfToEEInterfaceImpl::GetModuleInfo2(ModuleID     moduleId,
         // Yay!
         EE_THREAD_NOT_REQUIRED;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer((Module *)moduleId, NULL_OK));
         PRECONDITION(CheckPointer(ppBaseLoadAddress,  NULL_OK));
@@ -4288,7 +4238,6 @@ HRESULT ProfToEEInterfaceImpl::GetModuleMetaData(ModuleID    moduleId,
         // GetReadablePublicMetaDataInterface take locks
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -4378,15 +4327,17 @@ HRESULT ProfToEEInterfaceImpl::GetILFunctionBody(ModuleID    moduleId,
         // PEFile::CheckLoaded & Module::GetDynamicIL both take a lock
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
-    PROFILER_TO_CLR_ENTRYPOINT_SYNC((LF_CORPROF, 
-                                     LL_INFO1000, 
-                                     "**PROF: GetILFunctionBody 0x%p, 0x%08x.\n",
-                                     moduleId, 
-                                     methodId));    
+    
+    PROFILER_TO_CLR_ENTRYPOINT_ASYNC_EX(
+        kP2EEAllowableAfterAttach,
+        (LF_CORPROF, 
+         LL_INFO1000, 
+         "**PROF: GetILFunctionBody 0x%p, 0x%08x.\n",
+         moduleId, 
+         methodId));    
 
     Module *    pModule;                // Working pointer for real class.
     ULONG       RVA;                    // Return RVA of the method body.
@@ -4505,12 +4456,11 @@ HRESULT ProfToEEInterfaceImpl::GetILFunctionBodyAllocator(ModuleID         modul
         // (see GC_TRIGGERS comment)
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
     
     PROFILER_TO_CLR_ENTRYPOINT_SYNC_EX(
-        kP2EETriggers,
+        kP2EEAllowableAfterAttach | kP2EETriggers,
         (LF_CORPROF, 
         LL_INFO1000, 
         "**PROF: GetILFunctionBodyAllocator 0x%p.\n", 
@@ -4560,12 +4510,11 @@ HRESULT ProfToEEInterfaceImpl::SetILFunctionBody(ModuleID    moduleId,
         // Module::SetDynamicIL & PEFile::CheckLoaded & PEFile::GetEmitter take locks
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
     PROFILER_TO_CLR_ENTRYPOINT_SYNC_EX(
-        kP2EETriggers,
+        kP2EEAllowableAfterAttach | kP2EETriggers,
         (LF_CORPROF, 
          LL_INFO1000, 
          "**PROF: SetILFunctionBody 0x%p, 0x%08x.\n",
@@ -4631,12 +4580,11 @@ HRESULT ProfToEEInterfaceImpl::SetILInstrumentedCodeMap(FunctionID functionId,
         // Debugger::SetILInstrumentedCodeMap takes a lock when it calls Debugger::GetOrCreateMethodInfo
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
     PROFILER_TO_CLR_ENTRYPOINT_SYNC_EX(
-        kP2EETriggers,
+        kP2EEAllowableAfterAttach | kP2EETriggers,
         (LF_CORPROF, 
          LL_INFO1000, 
          "**PROF: SetILInstrumentedCodeMap 0x%p, %d.\n",
@@ -4705,7 +4653,6 @@ HRESULT ProfToEEInterfaceImpl::ForceGC()
         // mother of all locks: the thread store lock.
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -4797,7 +4744,6 @@ HRESULT ProfToEEInterfaceImpl::GetThreadContext(ThreadID threadId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -4816,7 +4762,7 @@ HRESULT ProfToEEInterfaceImpl::GetThreadContext(ThreadID threadId,
     Thread *pThread = reinterpret_cast<Thread *>(threadId);
 
     // Get the context for the Thread* provided
-    Context *pContext = pThread->GetContext();
+    AppDomain *pContext = pThread->GetDomain(); // Context is same as AppDomain in CoreCLR
     _ASSERTE(pContext);
 
     // If there's no current context, return incomplete info
@@ -4851,7 +4797,6 @@ HRESULT ProfToEEInterfaceImpl::GetClassIDInfo(ClassID classId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
     
@@ -4951,7 +4896,6 @@ HRESULT ProfToEEInterfaceImpl::GetFunctionInfo(FunctionID functionId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5032,7 +4976,6 @@ HRESULT ProfToEEInterfaceImpl::GetILToNativeMapping(FunctionID functionId,
         // Debugger::AcquireDebuggerLock
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5069,7 +5012,6 @@ HRESULT ProfToEEInterfaceImpl::GetILToNativeMapping2(FunctionID functionId,
         // Debugger::AcquireDebuggerLock
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5159,7 +5101,6 @@ HRESULT ProfToEEInterfaceImpl::GetClassFromObject(ObjectID objectId,
         // Object::GetTypeHandle takes a lock
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5214,7 +5155,6 @@ HRESULT ProfToEEInterfaceImpl::GetClassFromToken(ModuleID    moduleId,
         // ClassLoader::LoadTypeDefOrRefThrowing takes a lock
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5311,7 +5251,6 @@ HRESULT ProfToEEInterfaceImpl::GetClassFromTokenAndTypeArgs(ModuleID moduleID,
         // ClassLoader::LoadGenericInstantiationThrowing takes a lock
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
         
@@ -5450,7 +5389,6 @@ HRESULT ProfToEEInterfaceImpl::GetFunctionFromToken(ModuleID moduleId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5542,7 +5480,6 @@ HRESULT ProfToEEInterfaceImpl::GetFunctionFromTokenAndTypeArgs(ModuleID moduleID
         // MethodDesc::FindOrCreateAssociatedMethodDesc enters a Crst
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5656,7 +5593,6 @@ HRESULT ProfToEEInterfaceImpl::GetAppDomainInfo(AppDomainID appDomainId,
         // AppDomain::GetFriendlyNameForDebugger takes a lock
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5702,8 +5638,6 @@ HRESULT ProfToEEInterfaceImpl::GetAppDomainInfo(AppDomainID appDomainId,
     LPCWSTR szFriendlyName;
     if (pDomain == SystemDomain::System())
         szFriendlyName = g_pwBaseLibrary;
-    else if (pDomain == SharedDomain::GetDomain())
-        szFriendlyName = W("EE Shared Assembly Repository");
     else
         szFriendlyName = ((AppDomain*)pDomain)->GetFriendlyNameForDebugger();
 
@@ -5771,7 +5705,6 @@ HRESULT ProfToEEInterfaceImpl::GetAssemblyInfo(AssemblyID    assemblyId,
         // PEAssembly::GetSimpleName() enters a lock via use of the metadata interface
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5874,7 +5807,6 @@ HRESULT ProfToEEInterfaceImpl::SetEnterLeaveFunctionHooks(FunctionEnter * pFuncE
 
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5911,7 +5843,6 @@ HRESULT ProfToEEInterfaceImpl::SetEnterLeaveFunctionHooks2(FunctionEnter2 * pFun
 
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5949,7 +5880,6 @@ HRESULT ProfToEEInterfaceImpl::SetEnterLeaveFunctionHooks3(FunctionEnter3 * pFun
 
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -5990,7 +5920,6 @@ HRESULT ProfToEEInterfaceImpl::SetEnterLeaveFunctionHooks3WithInfo(FunctionEnter
 
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -6029,7 +5958,6 @@ HRESULT ProfToEEInterfaceImpl::SetFunctionIDMapper(FunctionIDMapper *pFunc)
         // Yay!
         CANNOT_TAKE_LOCK;
     
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
     
@@ -6062,7 +5990,6 @@ HRESULT ProfToEEInterfaceImpl::SetFunctionIDMapper2(FunctionIDMapper2 *pFunc, vo
         // Yay!
         CANNOT_TAKE_LOCK;
     
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
     
@@ -6131,7 +6058,6 @@ HRESULT ProfToEEInterfaceImpl::GetFunctionInfo2(FunctionID funcId,
         // this function was called.  
         CANNOT_RETAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pClassId, NULL_OK));
         PRECONDITION(CheckPointer(pModuleId, NULL_OK));
@@ -6351,7 +6277,6 @@ HRESULT ProfToEEInterfaceImpl::IsFunctionDynamic(FunctionID functionId, BOOL *is
         // this function was called.  
         CANNOT_RETAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(isDynamic, NULL_OK));
     }
@@ -6427,7 +6352,6 @@ HRESULT ProfToEEInterfaceImpl::GetFunctionFromIP3(LPCBYTE ip, FunctionID * pFunc
         // Grabbing the rejitid requires entering the rejit manager's hash table & lock,
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -6509,7 +6433,6 @@ HRESULT ProfToEEInterfaceImpl::GetDynamicFunctionInfo(FunctionID functionId,
         // this function was called.  
         CANNOT_RETAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pModuleId, NULL_OK));
         PRECONDITION(CheckPointer(ppvSig, NULL_OK));
@@ -6637,7 +6560,6 @@ HRESULT ProfToEEInterfaceImpl::GetNativeCodeStartAddresses(FunctionID functionID
         EE_THREAD_NOT_REQUIRED;
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pcCodeStartAddresses, NULL_OK));
         PRECONDITION(CheckPointer(codeStartAddresses, NULL_OK));
@@ -6739,7 +6661,6 @@ HRESULT ProfToEEInterfaceImpl::GetILToNativeMapping3(UINT_PTR pNativeCodeStartAd
         MODE_ANY;
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pcMap, NULL_OK));
         PRECONDITION(CheckPointer(map, NULL_OK));
@@ -6805,7 +6726,6 @@ HRESULT ProfToEEInterfaceImpl::GetCodeInfo4(UINT_PTR pNativeCodeStartAddress,
         EE_THREAD_NOT_REQUIRED;
         CAN_TAKE_LOCK;
         
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pcCodeInfos, NULL_OK));
         PRECONDITION(CheckPointer(codeInfos, NULL_OK));
@@ -6864,7 +6784,6 @@ HRESULT ProfToEEInterfaceImpl::GetStringLayout(ULONG *pBufferLengthOffset,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pBufferLengthOffset, NULL_OK));
         PRECONDITION(CheckPointer(pStringLengthOffset, NULL_OK));
@@ -6912,7 +6831,6 @@ HRESULT ProfToEEInterfaceImpl::GetStringLayout2(ULONG *pStringLengthOffset,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pStringLengthOffset, NULL_OK));
         PRECONDITION(CheckPointer(pBufferOffset,  NULL_OK));
@@ -6962,7 +6880,6 @@ HRESULT ProfToEEInterfaceImpl::GetStringLayoutHelper(ULONG *pBufferLengthOffset,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pBufferLengthOffset, NULL_OK));
         PRECONDITION(CheckPointer(pStringLengthOffset, NULL_OK));
@@ -7032,7 +6949,6 @@ HRESULT ProfToEEInterfaceImpl::GetClassLayout(ClassID classID,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(rFieldOffset, NULL_OK));
         PRECONDITION(CheckPointer(pcFieldOffset));
@@ -7185,7 +7101,6 @@ StackWalkAction ProfilerStackWalkCallback(CrawlFrame *pCf, PROFILER_STACK_WALK_D
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;  // throw is RIGHT out... the throw at minimum allocates the thrown object which we *must* not do
         GC_NOTRIGGER; // the stack is not necessarily crawlable at this state !!!) we must not induce a GC 
     } 
@@ -7732,7 +7647,6 @@ HRESULT ProfToEEInterfaceImpl::DoStackSnapshot(ThreadID thread,
         // this function was called.  
         CANNOT_RETAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -7754,7 +7668,7 @@ HRESULT ProfToEEInterfaceImpl::DoStackSnapshot(ThreadID thread,
         contextSize));
    
     HRESULT hr = E_UNEXPECTED;
-    // (hr assignment is to appease the rotor compiler; we won't actually return without explicitly setting hr again)
+    // (hr assignment is to appease the compiler; we won't actually return without explicitly setting hr again)
     
     Thread *pThreadToSnapshot = NULL;
     Thread * pCurrentThread = GetThreadNULLOk();
@@ -8274,7 +8188,6 @@ HRESULT ProfToEEInterfaceImpl::GetGenerationBounds(ULONG cObjectRanges,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pcObjectRanges));
         PRECONDITION(cObjectRanges <= 0 || ranges != NULL);
@@ -8331,7 +8244,6 @@ HRESULT ProfToEEInterfaceImpl::GetNotifiedExceptionClauseInfo(COR_PRF_EX_CLAUSE_
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pinfo));
     }
@@ -8405,7 +8317,6 @@ HRESULT ProfToEEInterfaceImpl::GetObjectGeneration(ObjectID objectId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(objectId != NULL);
         PRECONDITION(CheckPointer(range));
@@ -8473,7 +8384,6 @@ HRESULT ProfToEEInterfaceImpl::GetReJITIDs(
         // The rejit tables use a lock
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(pcReJitIds, NULL_OK));
         PRECONDITION(CheckPointer(reJitIds, NULL_OK));
@@ -8481,10 +8391,12 @@ HRESULT ProfToEEInterfaceImpl::GetReJITIDs(
     }
     CONTRACTL_END;
 
-    PROFILER_TO_CLR_ENTRYPOINT_SYNC((LF_CORPROF, 
-                                    LL_INFO1000, 
-                                    "**PROF: GetReJITIDs 0x%p.\n", 
-                                     functionId));     
+    PROFILER_TO_CLR_ENTRYPOINT_SYNC_EX(
+        kP2EEAllowableAfterAttach,
+        (LF_CORPROF, 
+        LL_INFO1000, 
+        "**PROF: GetReJITIDs 0x%p.\n", 
+         functionId));     
 
     if (functionId == 0)
     {
@@ -8519,7 +8431,6 @@ HRESULT ProfToEEInterfaceImpl::RequestReJIT(ULONG       cFunctions,   // in
         // We need to suspend the runtime, this takes a lot of locks!
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(moduleIds, NULL_OK));
         PRECONDITION(CheckPointer(methodIds, NULL_OK));
@@ -8527,7 +8438,7 @@ HRESULT ProfToEEInterfaceImpl::RequestReJIT(ULONG       cFunctions,   // in
     CONTRACTL_END;
 
     PROFILER_TO_CLR_ENTRYPOINT_SYNC_EX(
-        kP2EETriggers,
+        kP2EETriggers | kP2EEAllowableAfterAttach,
         (LF_CORPROF, 
          LL_INFO1000, 
          "**PROF: RequestReJIT.\n"));
@@ -8575,7 +8486,6 @@ HRESULT ProfToEEInterfaceImpl::RequestRevert(ULONG       cFunctions,  // in
         // The rejit manager requires a lock to iterate through methods to revert
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(moduleIds, NULL_OK));
         PRECONDITION(CheckPointer(methodIds, NULL_OK));
@@ -8584,7 +8494,7 @@ HRESULT ProfToEEInterfaceImpl::RequestRevert(ULONG       cFunctions,  // in
     CONTRACTL_END;
 
     PROFILER_TO_CLR_ENTRYPOINT_SYNC_EX(
-        kP2EETriggers,
+        kP2EEAllowableAfterAttach | kP2EETriggers,
         (LF_CORPROF, 
          LL_INFO1000, 
          "**PROF: RequestRevert.\n"));
@@ -8632,7 +8542,6 @@ HRESULT ProfToEEInterfaceImpl::EnumJITedFunctions(ICorProfilerFunctionEnum ** pp
         // the JIT data structures.
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(ppEnum, NULL_OK));
 
@@ -8687,7 +8596,6 @@ HRESULT ProfToEEInterfaceImpl::EnumJITedFunctions2(ICorProfilerFunctionEnum ** p
         // Gathering RejitIDs also takes a lock.
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(ppEnum, NULL_OK));
 
@@ -8745,7 +8653,6 @@ HRESULT ProfToEEInterfaceImpl::EnumModules(ICorProfilerModuleEnum ** ppEnum)
         // (See comment above GC_TRIGGERS.)
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(ppEnum, NULL_OK));
 
@@ -8819,7 +8726,6 @@ HRESULT ProfToEEInterfaceImpl::GetRuntimeInformation(USHORT * pClrInstanceId,
         // Yay!
         CANNOT_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -8882,8 +8788,6 @@ HRESULT ProfToEEInterfaceImpl::RequestProfilerDetach(DWORD dwExpectedCompletionM
 
         // Crst is used in ProfilingAPIDetach::RequestProfilerDetach
         CAN_TAKE_LOCK;
-
-        SO_NOT_MAINLINE;    
     }
     CONTRACTL_END;
 
@@ -8958,7 +8862,6 @@ HRESULT ProfilingGetFunctionEnter3Info(FunctionID functionId,                   
         // ProfileArgIterator::ProfileArgIterator may take locks
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
     }
     CONTRACTL_END;
@@ -9100,7 +9003,6 @@ HRESULT ProfToEEInterfaceImpl::GetFunctionEnter3Info(FunctionID functionId,     
         // ProfilingGetFunctionEnter3Info may take locks
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
     }
     CONTRACTL_END;
@@ -9155,7 +9057,6 @@ HRESULT ProfilingGetFunctionLeave3Info(FunctionID functionId,                   
         // ProfileArgIterator::ProfileArgIterator may take locks
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -9260,7 +9161,6 @@ HRESULT ProfToEEInterfaceImpl::GetFunctionLeave3Info(FunctionID functionId,     
         // ProfilingGetFunctionLeave3Info may take locks
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
     }
     CONTRACTL_END;
@@ -9313,7 +9213,6 @@ HRESULT ProfilingGetFunctionTailcall3Info(FunctionID functionId,                
         // ProfileArgIterator::ProfileArgIterator may take locks
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
     }
     CONTRACTL_END;
@@ -9394,7 +9293,6 @@ HRESULT ProfToEEInterfaceImpl::GetFunctionTailcall3Info(FunctionID functionId,  
         // ProfilingGetFunctionTailcall3Info may take locks
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
 
     }
     CONTRACTL_END;
@@ -9431,7 +9329,6 @@ HRESULT ProfToEEInterfaceImpl::EnumThreads(
         // Need to acquire the thread store lock
         CAN_TAKE_LOCK;
         
-        SO_NOT_MAINLINE;
 
         PRECONDITION(CheckPointer(ppEnum, NULL_OK));
 
@@ -9493,7 +9390,6 @@ HRESULT ProfToEEInterfaceImpl::InitializeCurrentThread()
         // May take thread store lock and OS APIs may also take locks
         CAN_TAKE_LOCK;
         
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
     
@@ -9538,7 +9434,6 @@ HRESULT ProfToEEInterfaceImpl::EnumNgenModuleMethodsInliningThisMethod(
         NOTHROW;
         GC_TRIGGERS; 
         MODE_ANY;
-        SO_NOT_MAINLINE;
         CAN_TAKE_LOCK;
         PRECONDITION(CheckPointer(ppEnum));
     }
@@ -9626,7 +9521,6 @@ HRESULT ProfToEEInterfaceImpl::GetInMemorySymbolsLength(
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -9695,7 +9589,6 @@ HRESULT ProfToEEInterfaceImpl::ReadInMemorySymbols(
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -9768,13 +9661,12 @@ HRESULT ProfToEEInterfaceImpl::ApplyMetaData(
     CONTRACTL
     {
         NOTHROW;
-        GC_NOTRIGGER;
+        GC_TRIGGERS;
         MODE_ANY;
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
-    PROFILER_TO_CLR_ENTRYPOINT_SYNC_EX(kP2EEAllowableAfterAttach, (LF_CORPROF, LL_INFO1000, "**PROF: ApplyMetaData.\n"));
+    PROFILER_TO_CLR_ENTRYPOINT_SYNC_EX(kP2EEAllowableAfterAttach | kP2EETriggers, (LF_CORPROF, LL_INFO1000, "**PROF: ApplyMetaData.\n"));
 
     if (moduleId == NULL)
     {
@@ -9817,7 +9709,6 @@ void __stdcall ProfilerManagedToUnmanagedTransitionMD(MethodDesc *pMD,
         NOTHROW;
         GC_TRIGGERS;
         MODE_PREEMPTIVE;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -9853,7 +9744,6 @@ void __stdcall ProfilerUnmanagedToManagedTransitionMD(MethodDesc *pMD,
         NOTHROW;
         GC_TRIGGERS;
         MODE_PREEMPTIVE;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -10107,7 +9997,6 @@ HCIMPL2(EXTERN_C void, ProfileEnter, UINT_PTR clientData, void * platformSpecifi
     {
         FunctionIDOrClientID functionIDOrClientID;
         functionIDOrClientID.clientID = clientData;
-        REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
         g_profControlBlock.pProfInterface->GetEnter3WithInfoHook()(
             functionIDOrClientID, 
             (COR_PRF_ELT_INFO)&eltInfo);
@@ -10137,7 +10026,6 @@ HCIMPL2(EXTERN_C void, ProfileEnter, UINT_PTR clientData, void * platformSpecifi
         //
         if (CORProfilerELT2FastPathEnterEnabled())
         {
-            REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
             g_profControlBlock.pProfInterface->GetEnter2Hook()(
                 functionId,
                 clientData, 
@@ -10194,7 +10082,6 @@ HCIMPL2(EXTERN_C void, ProfileEnter, UINT_PTR clientData, void * platformSpecifi
         HRESULT hr = ProfilingGetFunctionEnter3Info(functionId, (COR_PRF_ELT_INFO)&eltInfo, &frameInfo, &ulArgInfoSize, pArgumentInfo);
 
         _ASSERTE(hr == S_OK);
-        REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
         g_profControlBlock.pProfInterface->GetEnter2Hook()(functionId, clientData, frameInfo, pArgumentInfo);
 
         goto LExit;
@@ -10219,7 +10106,6 @@ HCIMPL2(EXTERN_C void, ProfileEnter, UINT_PTR clientData, void * platformSpecifi
     // Everett ELT
     //
     {
-        REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
         g_profControlBlock.pProfInterface->GetEnterHook()((FunctionID)clientData);
     }
 
@@ -10283,7 +10169,6 @@ HCIMPL2(EXTERN_C void, ProfileLeave, UINT_PTR clientData, void * platformSpecifi
     {
         FunctionIDOrClientID functionIDOrClientID;
         functionIDOrClientID.clientID = clientData;
-        REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
         g_profControlBlock.pProfInterface->GetLeave3WithInfoHook()(
             functionIDOrClientID, 
             (COR_PRF_ELT_INFO)&eltInfo);
@@ -10313,7 +10198,6 @@ HCIMPL2(EXTERN_C void, ProfileLeave, UINT_PTR clientData, void * platformSpecifi
         //
         if (CORProfilerELT2FastPathLeaveEnabled())
         {
-            REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
             g_profControlBlock.pProfInterface->GetLeave2Hook()(
                 functionId,
                 clientData, 
@@ -10331,7 +10215,6 @@ HCIMPL2(EXTERN_C void, ProfileLeave, UINT_PTR clientData, void * platformSpecifi
         HRESULT hr = ProfilingGetFunctionLeave3Info(functionId, (COR_PRF_ELT_INFO)&eltInfo, &frameInfo, &argumentRange);
         _ASSERTE(hr == S_OK);
 
-        REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
         g_profControlBlock.pProfInterface->GetLeave2Hook()(functionId, clientData, frameInfo, &argumentRange);
         goto LExit;
     }
@@ -10354,7 +10237,6 @@ HCIMPL2(EXTERN_C void, ProfileLeave, UINT_PTR clientData, void * platformSpecifi
     // Everett ELT
     //
     {
-        REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
         g_profControlBlock.pProfInterface->GetLeaveHook()((FunctionID)clientData);
     }
 
@@ -10419,7 +10301,6 @@ HCIMPL2(EXTERN_C void, ProfileTailcall, UINT_PTR clientData, void * platformSpec
     {
         FunctionIDOrClientID functionIDOrClientID;
         functionIDOrClientID.clientID = clientData;
-        REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
         g_profControlBlock.pProfInterface->GetTailcall3WithInfoHook()(
             functionIDOrClientID, 
             (COR_PRF_ELT_INFO)&eltInfo);
@@ -10449,7 +10330,6 @@ HCIMPL2(EXTERN_C void, ProfileTailcall, UINT_PTR clientData, void * platformSpec
         //
         if (CORProfilerELT2FastPathTailcallEnabled())
         {
-            REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
             g_profControlBlock.pProfInterface->GetTailcall2Hook()(
                 functionId,
                 clientData, 
@@ -10465,7 +10345,6 @@ HCIMPL2(EXTERN_C void, ProfileTailcall, UINT_PTR clientData, void * platformSpec
         HRESULT hr = ProfilingGetFunctionTailcall3Info(functionId, (COR_PRF_ELT_INFO)&eltInfo, &frameInfo);
         _ASSERTE(hr == S_OK);
 
-        REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
         g_profControlBlock.pProfInterface->GetTailcall2Hook()(functionId, clientData, frameInfo);
         goto LExit;
     }
@@ -10487,10 +10366,7 @@ HCIMPL2(EXTERN_C void, ProfileTailcall, UINT_PTR clientData, void * platformSpec
     //
     // Everett ELT
     //
-    {
-        REMOVE_STACK_GUARD_FOR_PROFILER_CALL;
-        g_profControlBlock.pProfInterface->GetTailcallHook()((FunctionID)clientData);
-    }
+    g_profControlBlock.pProfInterface->GetTailcallHook()((FunctionID)clientData);
 
 LExit:
 

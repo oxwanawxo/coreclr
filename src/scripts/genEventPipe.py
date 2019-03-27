@@ -3,7 +3,7 @@ from genEventing import *
 from genLttngProvider import *
 import os
 import xml.dom.minidom as DOM
-from utilities import open_for_update
+from utilities import open_for_update, parseExclusionList
 
 stdprolog_cpp = """// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
@@ -73,7 +73,7 @@ def generateMethodSignatureWrite(eventName, template, extern):
     return ''.join(sig_pieces)
 
 def generateClrEventPipeWriteEventsImpl(
-        providerName, eventNodes, allTemplates, extern):
+        providerName, eventNodes, allTemplates, extern, exclusionList):
     providerPrettyName = providerName.replace("Windows-", '')
     providerPrettyName = providerPrettyName.replace("Microsoft-", '')
     providerPrettyName = providerPrettyName.replace('-', '_')
@@ -153,8 +153,14 @@ def generateClrEventPipeWriteEventsImpl(
         eventLevel = eventLevel.replace("win:", "EventPipeEventLevel::")
         taskName = eventNode.getAttribute('task')
 
-        initEvent = """    EventPipeEvent%s = EventPipeProvider%s->AddEvent(%s,%s,%s,%s);
-""" % (eventName, providerPrettyName, eventValue, eventKeywordsMask, eventVersion, eventLevel)
+        needStack = "true"
+        for nostackentry in exclusionList.nostack:
+            tokens = nostackentry.split(':')
+            if tokens[2] == eventName:
+                needStack = "false"
+
+        initEvent = """    EventPipeEvent%s = EventPipeProvider%s->AddEvent(%s,%s,%s,%s,%s);
+""" % (eventName, providerPrettyName, eventValue, eventKeywordsMask, eventVersion, eventLevel, needStack)
 
         WriteEventImpl.append(initEvent)
     WriteEventImpl.append("}")
@@ -249,12 +255,8 @@ def generateEventPipeCmakeFile(etwmanifest, eventpipe_directory, extern):
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 include_directories(${CLR_DIR}/src/vm)
 
+add_library_clr(eventpipe STATIC
 """)
-        if extern: cmake_file.write("add_library")
-        else: cmake_file.write("add_library_clr")
-        cmake_file.write("""(eventpipe
-    STATIC\n""")
-
         for providerNode in tree.getElementsByTagName('provider'):
             providerName = providerNode.getAttribute('name')
             providerName = providerName.replace("Windows-", '')
@@ -268,7 +270,7 @@ include_directories(${CLR_DIR}/src/vm)
         if extern: cmake_file.write("""
 
 # Install the static eventpipe library
-install(TARGETS eventpipe DESTINATION lib)
+_install(TARGETS eventpipe DESTINATION lib)
 """)
 
 def generateEventPipeHelperFile(etwmanifest, eventpipe_directory, extern):
@@ -388,7 +390,7 @@ bool WriteToBuffer(const char *str, char *&buffer, size_t& offset, size_t& size,
     helper.close()
 
 def generateEventPipeImplFiles(
-        etwmanifest, eventpipe_directory, extern):
+        etwmanifest, eventpipe_directory, extern, exclusionList):
     tree = DOM.parse(etwmanifest)
 
     # Find the src directory starting with the assumption that
@@ -464,11 +466,12 @@ bool WriteToBuffer(const T &value, char *&buffer, size_t& offset, size_t& size, 
                     providerName,
                     eventNodes,
                     allTemplates,
-                    extern) + "\n")
+                    extern,
+                    exclusionList) + "\n")
 
 
 def generateEventPipeFiles(
-        etwmanifest, intermediate, extern):
+        etwmanifest, intermediate, extern, exclusionList):
     eventpipe_directory = os.path.join(intermediate, eventpipe_dirname)
     tree = DOM.parse(etwmanifest)
 
@@ -491,7 +494,8 @@ def generateEventPipeFiles(
     generateEventPipeImplFiles(
         etwmanifest,
         eventpipe_directory,
-        extern
+        extern,
+        exclusionList
     )
 
 import argparse
@@ -506,6 +510,8 @@ def main(argv):
     required = parser.add_argument_group('required arguments')
     required.add_argument('--man', type=str, required=True,
                           help='full path to manifest containig the description of events')
+    required.add_argument('--exc',  type=str, required=True,
+                                    help='full path to exclusion list')
     required.add_argument('--intermediate', type=str, required=True,
                           help='full path to eventprovider  intermediate directory')
     required.add_argument('--nonextern', action='store_true',
@@ -516,10 +522,11 @@ def main(argv):
         return 1
 
     sClrEtwAllMan = args.man
+    exclusion_filename = args.exc
     intermediate = args.intermediate
     extern = not args.nonextern
 
-    generateEventPipeFiles(sClrEtwAllMan, intermediate, extern)
+    generateEventPipeFiles(sClrEtwAllMan, intermediate, extern, parseExclusionList(exclusion_filename))
 
 if __name__ == '__main__':
     return_code = main(sys.argv[1:])

@@ -51,7 +51,7 @@ const ULONG READWAITERS_MASK  = 0x003FF000;    // field that counts number of th
 const ULONG READWAITERS_INCR  = 0x00001000;    // amount to add to increment number of read waiters
 
 const ULONG WRITEWAITERS_MASK = 0xFFC00000;    // field that counts number of threads waiting to write
-const ULONG WRITEWAITERS_INCR = 0x00400000;    // amoun to add to increment number of write waiters
+const ULONG WRITEWAITERS_INCR = 0x00400000;    // amount to add to increment number of write waiters
 
 // ======================================================================================
 // Spinning support
@@ -232,25 +232,8 @@ HRESULT UTSemReadWrite::LockRead()
             }
             
             // Delay by approximately 2*i clock cycles (Pentium III).
-            // This is brittle code - future processors may of course execute this
-            // faster or slower, and future code generators may eliminate the loop altogether.
-            // The precise value of the delay is not critical, however, and I can't think
-            // of a better way that isn't machine-dependent.
-            int sum = 0;
-            
-            for (int delayCount = i; --delayCount; ) 
-            {
-                sum += delayCount;
-                YieldProcessor();           // indicate to the processor that we are spining 
-            }
-            
-            if (sum == 0)
-            {
-                // never executed, just to fool the compiler into thinking sum is live here,
-                // so that it won't optimize away the loop.
-                static char dummy;
-                dummy++;
-            }
+            YieldProcessorNormalizedForPreSkylakeCount(i);
+
             // exponential backoff: wait a factor longer in the next iteration
             i *= g_SpinConstants.dwBackoffFactor;
         } while (i < g_SpinConstants.dwMaximumDuration);
@@ -341,25 +324,8 @@ HRESULT UTSemReadWrite::LockWrite()
             }
             
             // Delay by approximately 2*i clock cycles (Pentium III).
-            // This is brittle code - future processors may of course execute this
-            // faster or slower, and future code generators may eliminate the loop altogether.
-            // The precise value of the delay is not critical, however, and I can't think
-            // of a better way that isn't machine-dependent.
-            int sum = 0;
-            
-            for (int delayCount = i; --delayCount; ) 
-            {
-                sum += delayCount;
-                YieldProcessor();           // indicate to the processor that we are spining 
-            }
-            
-            if (sum == 0)
-            {
-                // never executed, just to fool the compiler into thinking sum is live here,
-                // so that it won't optimize away the loop.
-                static char dummy;
-                dummy++;
-            }
+            YieldProcessorNormalizedForPreSkylakeCount(i);
+
             // exponential backoff: wait a factor longer in the next iteration
             i *= g_SpinConstants.dwBackoffFactor;
         } while (i < g_SpinConstants.dwMaximumDuration);

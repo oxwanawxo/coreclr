@@ -7,11 +7,11 @@
 
 #include "finalizerthread.h"
 #include "threadsuspend.h"
+#include "jithost.h"
 
 #ifdef FEATURE_COMINTEROP
 #include "runtimecallablewrapper.h"
 #endif
-
 
 #ifdef FEATURE_PROFAPI_ATTACH_DETACH 
 #include "profattach.h"
@@ -28,8 +28,6 @@ ULONGLONG FinalizerThread::LastHeapDumpTime = 0;
 
 Volatile<BOOL> g_TriggerHeapDump = FALSE;
 #endif // __linux__
-
-AppDomain * FinalizerThread::UnloadingAppDomain;
 
 CLREvent * FinalizerThread::hEventFinalizer = NULL;
 CLREvent * FinalizerThread::hEventFinalizerDone = NULL;
@@ -61,7 +59,7 @@ BOOL FinalizerThread::HaveExtraWorkForFinalizer()
 
 // This helper is here to avoid EH goo associated with DefineFullyQualifiedNameForStack being 
 // invoked when logging is off.
-__declspec(noinline)
+NOINLINE
 void LogFinalization(Object* obj)
 {
     STATIC_CONTRACT_NOTHROW;
@@ -93,7 +91,7 @@ void CallFinalizer(Object* obj)
         {
 
             _ASSERTE(obj->GetMethodTable() == pMT);
-            _ASSERTE(pMT->HasFinalizer() || pMT->IsTransparentProxy());
+            _ASSERTE(pMT->HasFinalizer());
 
             LogFinalization(obj);
             MethodTable::CallFinalizer(obj);
@@ -143,7 +141,7 @@ Object * FinalizerThread::DoOneFinalization(Object* fobj, Thread* pThread,int bi
 
     AppDomain* targetAppDomain = fobj->GetAppDomain();
     AppDomain* currentDomain = pThread->GetDomain();
-    if (! targetAppDomain || ! targetAppDomain->CanThreadEnter(pThread))
+    if (! targetAppDomain)
     {
         // if can't get into domain to finalize it, then it must be agile so finalize in current domain
         targetAppDomain = currentDomain;
@@ -151,48 +149,33 @@ Object * FinalizerThread::DoOneFinalization(Object* fobj, Thread* pThread,int bi
 
     if (targetAppDomain == currentDomain)
     {
-        if (!targetAppDomain->IsRudeUnload() ||
-            fobj->GetMethodTable()->HasCriticalFinalizer())
+        class ResetFinalizerStartTime
         {
-            class ResetFinalizerStartTime
+        public:
+            ResetFinalizerStartTime()
             {
-            public:
-                ResetFinalizerStartTime()
+                if (CLRHosted())
                 {
-                    if (CLRHosted())
-                    {
-                        g_ObjFinalizeStartTime = CLRGetTickCount64();
-                    }                    
-                }
-                ~ResetFinalizerStartTime()
-                {
-                    if (g_ObjFinalizeStartTime)
-                    {
-                        g_ObjFinalizeStartTime = 0;
-                    }
-                }
-            };
+                    g_ObjFinalizeStartTime = CLRGetTickCount64();
+                }                    
+            }
+            ~ResetFinalizerStartTime()
             {
-                ThreadLocaleHolder localeHolder;
-
+                if (g_ObjFinalizeStartTime)
                 {
-                    ResetFinalizerStartTime resetTime;
-                    CallFinalizer(fobj);
+                    g_ObjFinalizeStartTime = 0;
                 }
             }
-            pThread->InternalReset(FALSE);
+        };
+        {
+            ResetFinalizerStartTime resetTime;
+            CallFinalizer(fobj);
         }
+        pThread->InternalReset();
     } 
     else 
     {
-        if (! targetAppDomain->GetDefaultContext())
-        {
-            // Can no longer enter domain becuase the handle containing the context has been
-            // destroyed so just bail. Should only get this if are at the stage of nuking the
-            // handles in the domain if it's still open.
-            _ASSERTE(targetAppDomain->IsUnloading() && targetAppDomain->ShouldHaveFinalization());
-        }
-        else if (!currentDomain->IsDefaultDomain())
+        if (!currentDomain->IsDefaultDomain())
         {
             // this means we are in some other domain, so need to return back out through the DoADCallback
             // and handle the object from there in another domain.
@@ -207,15 +190,13 @@ Object * FinalizerThread::DoOneFinalization(Object* fobj, Thread* pThread,int bi
             args.bitToCheck = bitToCheck;
             GCPROTECT_BEGIN(args.fobj);
             {
-                ThreadLocaleHolder localeHolder;
-
                 _ASSERTE(pThreadTurnAround != NULL);
                 ManagedThreadBase::FinalizerAppDomain(targetAppDomain,
                                                       FinalizeAllObjects_Wrapper,
                                                       &args,
                                                       pThreadTurnAround);
             }
-            pThread->InternalReset(FALSE);
+            pThread->InternalReset();
             // process the object we got back or be done if we got back null
             pReturnObject = OBJECTREFToObject(args.fobj);
             GCPROTECT_END();
@@ -239,10 +220,6 @@ Object * FinalizerThread::FinalizeAllObjects(Object* fobj, int bitToCheck)
 
     if (fobj == NULL)
     {
-        if (AppDomain::HasWorkForFinalizerThread())
-        {
-            return NULL;
-        }
         fobj = GCHeapUtilities::GetGCHeap()->GetNextFinalizable();
     }
 
@@ -264,10 +241,6 @@ Object * FinalizerThread::FinalizeAllObjects(Object* fobj, int bitToCheck)
 
         if (fobj->GetHeader()->GetBits() & bitToCheck)
         {
-            if (AppDomain::HasWorkForFinalizerThread())
-            {
-                return NULL;
-            }
             fobj = GCHeapUtilities::GetGCHeap()->GetNextFinalizable();
         }
         else
@@ -281,10 +254,6 @@ Object * FinalizerThread::FinalizeAllObjects(Object* fobj, int bitToCheck)
 
             if (fobj == NULL)
             {
-                if (AppDomain::HasWorkForFinalizerThread())
-                {
-                    return NULL;
-                }
                 fobj = GCHeapUtilities::GetGCHeap()->GetNextFinalizable();
             }
         }
@@ -583,13 +552,9 @@ VOID FinalizerThread::FinalizerThreadWorker(void *args)
                 bPriorityBoosted = TRUE;
         }
 
-        GetFinalizerThread()->DisablePreemptiveGC();
+        JitHost::Reclaim();
 
-        // TODO: The following call causes 12 more classes loaded.
-        //if (!fNameSet) {
-        //    fNameSet = TRUE;
-        //    GetFinalizerThread()->SetName(L"FinalizerThread");
-        //}
+        GetFinalizerThread()->DisablePreemptiveGC();
 
 #ifdef _DEBUG
         // <TODO> workaround.  make finalization very lazy for gcstress 3 or 4.  
@@ -625,44 +590,9 @@ VOID FinalizerThread::FinalizerThreadWorker(void *args)
             GetFinalizerThread()->EEResetAbort(Thread::TAR_ALL);
         }
         FastInterlockExchange ((LONG*)&g_FinalizerIsRunning, TRUE);
-        AppDomain::EnableADUnloadWorkerForFinalizer();
 
-        do
-        {
-            FinalizeAllObjects(NULL, 0);
-            _ASSERTE(GetFinalizerThread()->GetDomain()->IsDefaultDomain());
-
-            if (AppDomain::HasWorkForFinalizerThread())
-            {
-                AppDomain::ProcessUnloadDomainEventOnFinalizeThread();                
-            }
-            else if (UnloadingAppDomain == NULL)
-                break;
-            else if (!GCHeapUtilities::GetGCHeap()->FinalizeAppDomain(UnloadingAppDomain, !!fRunFinalizersOnUnload))
-            {
-                break;
-            }
-            // Now schedule any objects from an unloading app domain for finalization 
-            // on the next pass (even if they are reachable.)
-            // Note that it may take several passes to complete the unload, if new objects are created during
-            // finalization.
-        }
-        while(TRUE);
-
-        if (UnloadingAppDomain != NULL)
-        {
-            SyncBlockCache::GetSyncBlockCache()->CleanupSyncBlocksInAppDomain(UnloadingAppDomain);
-            {
-                // Before we continue with AD unloading, mark the stage as
-                // FINALIZED under the SystemDomain lock so that this portion
-                // of unloading may be serialized with other parts of the CLR
-                // that require the AD stage to be < FINALIZED, in particular
-                // ETW's AD enumeration code used during its rundown events.
-                SystemDomain::LockHolder lh;
-                UnloadingAppDomain->SetFinalized(); // All finalizers have run except for FinalizableAndAgile objects
-            }
-            UnloadingAppDomain = NULL;
-        }
+        FinalizeAllObjects(NULL, 0);
+        _ASSERTE(GetFinalizerThread()->GetDomain()->IsDefaultDomain());
 
         FastInterlockExchange ((LONG*)&g_FinalizerIsRunning, FALSE);
         // We may still have the finalizer thread for abort.  If so the abort request is for previous finalizer method, not for next one.
@@ -904,7 +834,7 @@ void FinalizerThread::FinalizerThreadCreate()
     // actual thread terminates.
     GetFinalizerThread()->IncExternalCount();
 
-    if (GetFinalizerThread()->CreateNewThread(0, &FinalizerThreadStart, NULL, W("Finalizer")) )
+    if (GetFinalizerThread()->CreateNewThread(0, &FinalizerThreadStart, NULL, W(".NET Finalizer")) )
     {
         DWORD dwRet = GetFinalizerThread()->StartThread();
 
@@ -956,7 +886,6 @@ void FinalizerThread::FinalizerThreadWait(DWORD timeout)
         GCX_PREEMP();
 
         Thread *pThread = GetThread();
-        BOOL fADUnloadHelper = (pThread && pThread->HasThreadStateNC(Thread::TSNC_ADUnloadHelper));
 
         ULONGLONG startTime = CLRGetTickCount64();
         ULONGLONG endTime;
@@ -977,55 +906,23 @@ void FinalizerThread::FinalizerThreadWait(DWORD timeout)
             //----------------------------------------------------
             // Do appropriate wait and pump messages if necessary
             //----------------------------------------------------
-            //WaitForSingleObject(hEventFinalizerDone, INFINITE);
-
-            if (fADUnloadHelper)
-            {
-                timeout = GetEEPolicy()->GetTimeout(OPR_FinalizerRun);
-            }
 
             DWORD status = hEventFinalizerDone->Wait(timeout,TRUE);
             if (status != WAIT_TIMEOUT && !(g_FinalizerWaiterStatus & FWS_WaitInterrupt))
             {
                 return;
             }
-            if (!fADUnloadHelper)
+            // recalculate timeout
+            if (timeout != INFINITE)
             {
-                // recalculate timeout
-                if (timeout != INFINITE)
+                ULONGLONG curTime = CLRGetTickCount64();
+                if (curTime >= endTime)
                 {
-                    ULONGLONG curTime = CLRGetTickCount64();
-                    if (curTime >= endTime)
-                    {
-                        return;
-                    }
-                    else
-                    {
-                        timeout = (DWORD)(endTime - curTime);
-                    }
+                    return;
                 }
-            }
-            else
-            {
-                if (status == WAIT_TIMEOUT)
+                else
                 {
-                    ULONGLONG finalizeStartTime = GetObjFinalizeStartTime();
-                    if (finalizeStartTime || AppDomain::HasWorkForFinalizerThread())
-                    {
-                        if (CLRGetTickCount64() >= finalizeStartTime+timeout)
-                        {
-                            GCX_COOP();
-                            FinalizerThreadAbortOnTimeout();
-                        }
-                    }
-                }
-                if (endTime != MAXULONGLONG)
-                {
-                    ULONGLONG curTime = CLRGetTickCount64();
-                    if (curTime >= endTime)
-                    {
-                        return;
-                    }
+                    timeout = (DWORD)(endTime - curTime);
                 }
             }
         }

@@ -512,10 +512,6 @@ struct ProcessModIter
     AppDomainIterator m_domainIter;
     bool m_nextDomain;
     AppDomain::AssemblyIterator m_assemIter;
-    bool m_iterShared;
-#ifdef FEATURE_LOADER_OPTIMIZATION    
-    SharedDomain::SharedAssemblyIterator m_sharedIter;
-#endif
     Assembly* m_curAssem;
     Assembly::ModuleIterator m_modIter;
 
@@ -524,25 +520,23 @@ struct ProcessModIter
     {
         SUPPORTS_DAC;
         m_nextDomain = true;
-        m_iterShared = false;
         m_curAssem = NULL;
     }
     
     Assembly * NextAssem()
     {
         SUPPORTS_DAC;
-        while (!m_iterShared)
+        for (;;)
         {
             if (m_nextDomain)
             {
                 if (!m_domainIter.Next())
                 {
-                    m_iterShared = true;
                     break;
                 }
 
                 m_nextDomain = false;
-                
+
                 m_assemIter = m_domainIter.GetDomain()->IterateAssembliesEx((AssemblyIterationFlags)(
                     kIncludeLoaded | kIncludeExecution));
             }
@@ -553,30 +547,12 @@ struct ProcessModIter
                 m_nextDomain = true;
                 continue;
             }
-            
+
             // Note: DAC doesn't need to keep the assembly alive - see code:CollectibleAssemblyHolder#CAH_DAC
             CollectibleAssemblyHolder<Assembly *> pAssembly = pDomainAssembly->GetLoadedAssembly();
-            if (!pAssembly->IsDomainNeutral())
-            {
-                // We've found a domain-specific assembly, so this is a unique element in the Assembly 
-                // iteration.
-                return pAssembly;
-            }
-
-            // Found a shared assembly, which may be duplicated
-            // across app domains.  Ignore it now and let
-            // it get picked up in the shared iteration where
-            // it'll only occur once.
+            return pAssembly;
         }
-#ifdef FEATURE_LOADER_OPTIMIZATION
-        if (!m_sharedIter.Next())
-        {
-            return NULL;
-        }
-        return m_sharedIter.GetAssembly();
-#else
         return NULL;
-#endif
     }
 
     Module* NextModule(void)
@@ -862,7 +838,8 @@ class ClrDataAccess
       public ISOSDacInterface2,
       public ISOSDacInterface3,
       public ISOSDacInterface4,
-      public ISOSDacInterface5
+      public ISOSDacInterface5,
+      public ISOSDacInterface6
 {
 public:
     ClrDataAccess(ICorDebugDataTarget * pTarget, ICLRDataTarget * pLegacyTarget=0);
@@ -1207,6 +1184,9 @@ public:
 
     // ISOSDacInterface5
     virtual HRESULT STDMETHODCALLTYPE GetTieredVersions(CLRDATA_ADDRESS methodDesc, int rejitId, struct DacpTieredVersionData *nativeCodeAddrs, int cNativeCodeAddrs, int *pcNativeCodeAddrs);
+
+    // ISOSDacInterface6
+    virtual HRESULT STDMETHODCALLTYPE GetMethodTableCollectibleData(CLRDATA_ADDRESS mt, struct DacpMethodTableCollectibleData *data);
 
     //
     // ClrDataAccess.
@@ -2005,7 +1985,7 @@ private:
         mCurr = &mHead;
         
         // Walk the stack, set mEnumerated to true to ensure we don't do it again.
-        unsigned int flagsStackWalk = ALLOW_INVALID_OBJECTS|ALLOW_ASYNC_STACK_WALK;
+        unsigned int flagsStackWalk = ALLOW_INVALID_OBJECTS|ALLOW_ASYNC_STACK_WALK|SKIP_GSCOOKIE_CHECK;
 #if defined(WIN64EXCEPTIONS)
         flagsStackWalk |= GC_FUNCLET_REFERENCE_REPORTING;
 #endif // defined(WIN64EXCEPTIONS)

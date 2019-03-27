@@ -4460,7 +4460,7 @@ HRESULT CordbNativeCode::EnumerateVariableHomes(ICorDebugVariableHomeEnum **ppEn
         const DacDbiArrayList<ICorDebugInfo::NativeVarInfo> *pOffsetInfoList = m_nativeVarData.GetOffsetInfoList();
         _ASSERTE(pOffsetInfoList != NULL);
         DWORD countHomes = 0;
-        for (int i = 0; i < pOffsetInfoList->Count(); i++)
+        for (unsigned int i = 0; i < pOffsetInfoList->Count(); i++)
         {
             const ICorDebugInfo::NativeVarInfo *pNativeVarInfo = &((*pOffsetInfoList)[i]);
             _ASSERTE(pNativeVarInfo != NULL);
@@ -4477,7 +4477,7 @@ HRESULT CordbNativeCode::EnumerateVariableHomes(ICorDebugVariableHomeEnum **ppEn
         rsHomes = new RSSmartPtr<CordbVariableHome>[countHomes];
 
         DWORD varHomeInd = 0;
-        for (int i = 0; i < pOffsetInfoList->Count(); i++)
+        for (unsigned int i = 0; i < pOffsetInfoList->Count(); i++)
         {
             const ICorDebugInfo::NativeVarInfo *pNativeVarInfo = &((*pOffsetInfoList)[i]);
 
@@ -4522,7 +4522,10 @@ HRESULT CordbNativeCode::EnumerateVariableHomes(ICorDebugVariableHomeEnum **ppEn
 int CordbNativeCode::GetCallInstructionLength(BYTE *ip, ULONG32 count)
 {
 #if defined(DBG_TARGET_ARM)
-    return MAX_INSTRUCTION_LENGTH;
+    if (Is32BitInstruction(*(WORD*)ip))
+        return 4;
+    else
+        return 2;
 #elif defined(DBG_TARGET_ARM64)
     return MAX_INSTRUCTION_LENGTH;
 #elif defined(DBG_TARGET_X86)
@@ -4788,7 +4791,6 @@ int CordbNativeCode::GetCallInstructionLength(BYTE *ip, ULONG32 count)
                      return -1;
                  }
 
-                 BYTE *result;
                  WORD displace = -1;
 
                  // See: Tables A-15,16,17 in AMD Dev Manual 3 for information
@@ -4986,7 +4988,7 @@ HRESULT CordbNativeCode::EnsureReturnValueAllowedWorker(Instantiation *currentIn
         IfFailRet(CordbType::SigToType(GetModule(), &original, &inst, &pType));
 
         
-        IfFailRet(hr = pType->ReturnedByValue());
+        IfFailRet(pType->ReturnedByValue());
         if (hr == S_OK) // not S_FALSE
             return S_OK;
 
@@ -4999,7 +5001,7 @@ HRESULT CordbNativeCode::EnsureReturnValueAllowedWorker(Instantiation *currentIn
         CordbType *pType = 0;
         IfFailRet(CordbType::SigToType(GetModule(), &original, &inst, &pType));
 
-        IfFailRet(hr = pType->ReturnedByValue());
+        IfFailRet(pType->ReturnedByValue());
         if (hr == S_OK) // not S_FALSE
             return S_OK;
 

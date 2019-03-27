@@ -19,7 +19,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
     {
         private static EventHandler<DesignerNamespaceResolveEventArgs> DesignerNamespaceResolve;
 
-        internal static string[] OnDesignerNamespaceResolveEvent(AppDomain appDomain, string namespaceName)
+        internal static string[] OnDesignerNamespaceResolve(string namespaceName)
         {
             EventHandler<DesignerNamespaceResolveEventArgs> eventHandler = DesignerNamespaceResolve;
             if (eventHandler != null)
@@ -28,7 +28,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
                 {
                     DesignerNamespaceResolveEventArgs eventArgs = new DesignerNamespaceResolveEventArgs(namespaceName);
 
-                    handler(appDomain, eventArgs);
+                    handler(null /* AppDomain */, eventArgs);
 
                     Collection<string> assemblyFilesCollection = eventArgs.ResolvedAssemblyFiles;
                     if (assemblyFilesCollection.Count > 0)
@@ -37,7 +37,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
                         int retIndex = 0;
                         foreach (string assemblyFile in assemblyFilesCollection)
                         {
-                            if (String.IsNullOrEmpty(assemblyFile))
+                            if (string.IsNullOrEmpty(assemblyFile))
                             {   // DesignerNamespaceResolve event returned null or empty file name - that is not allowed
                                 throw new ArgumentException(SR.Arg_EmptyOrNullString, "DesignerNamespaceResolveEventArgs.ResolvedAssemblyFiles");
                             }

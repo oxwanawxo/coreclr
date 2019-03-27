@@ -321,6 +321,7 @@ void SigPointer::ConvertToInternalExactlyOne(Module* pSigModule, SigTypeContext 
                     mdToken tk;
                     IfFailThrowBF(GetToken(&tk), BFA_BAD_COMPLUS_SIG, pSigModule);
                     TypeHandle th = ClassLoader::LoadTypeDefOrRefThrowing(pSigModule, tk);                    
+                    pSigBuilder->AppendElementType(ELEMENT_TYPE_INTERNAL);
                     pSigBuilder->AppendPointer(th.AsPtr());
                     
                     ConvertToInternalExactlyOne(pSigModule, pTypeContext, pSigBuilder, bSkipCustomModifier);
@@ -1090,9 +1091,6 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
     }
     else
     {
-        // This function is recursive, so it must have an interior probe
-        INTERIOR_STACK_PROBE_FOR_NOTHROW_CHECK_THREAD(10, NO_FORBIDGC_LOADER_USE_ThrowSO(););
-
 #ifdef _DEBUG_IMPL
         // This verifies that we won't try and load a type
         // if FORBIDGC_LOADER_USE_ENABLED is true.
@@ -1351,10 +1349,6 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
             if (!ClrSafeInt<DWORD>::multiply(ntypars, sizeof(TypeHandle), dwAllocaSize))
                 ThrowHR(COR_E_OVERFLOW);
 
-            if ((dwAllocaSize/GetOsPageSize()+1) >= 2)
-            {
-                DO_INTERIOR_STACK_PROBE_FOR_NOTHROW_CHECK_THREAD((10+dwAllocaSize/GetOsPageSize()+1), NO_FORBIDGC_LOADER_USE_ThrowSO(););
-            }
             TypeHandle *thisinst = (TypeHandle*) _alloca(dwAllocaSize);
 
             // Finally we gather up the type arguments themselves, loading at the level specified for generic arguments
@@ -1631,11 +1625,6 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                 {
                     ThrowHR(COR_E_OVERFLOW);
                 }
-                
-                if ((cAllocaSize/GetOsPageSize()+1) >= 2)
-                {
-                    DO_INTERIOR_STACK_PROBE_FOR_NOTHROW_CHECK_THREAD((10+cAllocaSize/GetOsPageSize()+1), NO_FORBIDGC_LOADER_USE_ThrowSO(););
-                }
 
                 TypeHandle *retAndArgTypes = (TypeHandle*) _alloca(cAllocaSize);
                 bool fReturnTypeOrParameterNotLoaded = false;
@@ -1711,7 +1700,6 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                 THROW_BAD_FORMAT(BFA_BAD_COMPLUS_SIG, pOrigModule);
     }
 
-    END_INTERIOR_STACK_PROBE;
     }
     
     RETURN thRet;
@@ -2389,7 +2377,6 @@ CorElementType SigPointer::PeekElemTypeNormalized(Module* pModule, const SigType
         if (FORBIDGC_LOADER_USE_ENABLED()) GC_NOTRIGGER; else GC_TRIGGERS;
         if (FORBIDGC_LOADER_USE_ENABLED()) FORBID_FAULT; else { INJECT_FAULT(COMPlusThrowOM()); }
         MODE_ANY;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     }
     CONTRACTL_END
@@ -2399,7 +2386,6 @@ CorElementType SigPointer::PeekElemTypeNormalized(Module* pModule, const SigType
 
     if (type == ELEMENT_TYPE_VALUETYPE)
     {
-        BEGIN_SO_INTOLERANT_CODE(GetThread());
         {
             // Everett C++ compiler can generate a TypeRef with RS=0
             // without respective TypeDef for unmanaged valuetypes,
@@ -2416,7 +2402,6 @@ CorElementType SigPointer::PeekElemTypeNormalized(Module* pModule, const SigType
             if (pthValueType != NULL)
                 *pthValueType = th;
         }
-        END_SO_INTOLERANT_CODE;
     }
 
     return(type);
@@ -2436,7 +2421,6 @@ SigPointer::PeekElemTypeClosed(
         GC_NOTRIGGER;
         FORBID_FAULT;
         MODE_ANY;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     }
     CONTRACTL_END
@@ -2522,7 +2506,6 @@ mdTypeRef SigPointer::PeekValueTypeTokenClosed(Module *pModule, const SigTypeCon
         PRECONDITION(PeekElemTypeClosed(NULL, pTypeContext) == ELEMENT_TYPE_VALUETYPE);
         FORBID_FAULT;
         MODE_ANY;
-        SO_TOLERANT;
     }
     CONTRACTL_END
 
@@ -2795,7 +2778,11 @@ HRESULT TypeIdentifierData::Init(Module *pModule, mdToken tk)
     else
     {
         // no TypeIdentifierAttribute -> the assembly must be a type library
-        bool has_eq = !pModule->GetAssembly()->IsDynamic() && pModule->GetAssembly()->IsPIAOrImportedFromTypeLib();
+        bool has_eq = !pModule->GetAssembly()->IsDynamic();
+
+#ifdef FEATURE_COMINTEROP
+        has_eq = has_eq && pModule->GetAssembly()->IsPIAOrImportedFromTypeLib();
+#endif // FEATURE_COMINTEROP
 
         if (!has_eq)
         {
@@ -2898,33 +2885,6 @@ BOOL TypeIdentifierData::IsEqual(const TypeIdentifierData & data) const
     return (memcmp(m_pchIdentifierNamespace, data.m_pchIdentifierName, m_cbIdentifierNamespace) == 0) &&
            (data.m_pchIdentifierName[m_cbIdentifierNamespace] == NAMESPACE_SEPARATOR_CHAR) &&
            (memcmp(m_pchIdentifierName, data.m_pchIdentifierName + m_cbIdentifierNamespace + 1, m_cbIdentifierName) == 0);
-}
-
-#endif //FEATURE_TYPEEQUIVALENCE
-#ifdef FEATURE_COMINTEROP
-
-//---------------------------------------------------------------------------------------
-// 
-static CorElementType GetFieldSigElementType(PCCOR_SIGNATURE pSig, DWORD cbSig)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_NOTRIGGER;
-        MODE_ANY;
-    }
-    CONTRACTL_END
-
-    SigPointer sigptr(pSig, cbSig);
-    
-    ULONG data;
-    IfFailThrow(sigptr.GetCallingConv(&data));
-    _ASSERTE(data == IMAGE_CEE_CS_CALLCONV_FIELD);
-
-    CorElementType etype;
-    IfFailThrow(sigptr.GetElemType(&etype));
-
-    return etype;
 }
 
 //---------------------------------------------------------------------------------------
@@ -3073,7 +3033,7 @@ static BOOL CompareDelegatesForEquivalence(mdToken tk1, mdToken tk2, Module *pMo
     return MetaSig::CompareMethodSigs(pSig1, cbSig1, pModule1, NULL, pSig2, cbSig2, pModule2, NULL, pVisited);
 }
 
-#endif // FEATURE_COMINTEROP
+#endif // FEATURE_TYPEEQUIVALENCE
 #endif // #ifndef DACCESS_COMPILE
 
 #ifndef DACCESS_COMPILE
@@ -3086,7 +3046,6 @@ BOOL IsTypeDefExternallyVisible(mdToken tk, Module *pModule, DWORD dwAttrClass)
         NOTHROW;
         MODE_ANY;
         GC_NOTRIGGER;
-        SO_INTOLERANT;
     }
     CONTRACTL_END;
 
@@ -3178,7 +3137,12 @@ BOOL IsTypeDefEquivalent(mdToken tk, Module *pModule)
     // 1. Type is within assembly marked with ImportedFromTypeLibAttribute or PrimaryInteropAssemblyAttribute
     if (hr != S_OK)
     {
-        bool has_eq = !pModule->GetAssembly()->IsDynamic() && pModule->GetAssembly()->IsPIAOrImportedFromTypeLib();
+        // no TypeIdentifierAttribute -> the assembly must be a type library
+        bool has_eq = !pModule->GetAssembly()->IsDynamic();
+
+#ifdef FEATURE_COMINTEROP
+        has_eq = has_eq && pModule->GetAssembly()->IsPIAOrImportedFromTypeLib();
+#endif // FEATURE_COMINTEROP
 
         if (!has_eq)
             return FALSE;
@@ -3364,14 +3328,6 @@ BOOL CompareTypeDefsForEquivalence(mdToken tk1, mdToken tk2, Module *pModule1, M
     }
 
     // *************************************************************************
-    // 2c. the two types cannot be equivalent across IntrospectionOnly/Non-introspection boundaries
-    // *************************************************************************
-    if (!!pModule1->GetAssembly()->IsIntrospectionOnly() != !!pModule2->GetAssembly()->IsIntrospectionOnly())
-    {
-        return FALSE;
-    }
-
-    // *************************************************************************
     // 3. type is an interface, struct, enum, or delegate
     // *************************************************************************
     if (IsTdInterface(dwAttrType1))
@@ -3434,7 +3390,7 @@ BOOL CompareTypeDefsForEquivalence(mdToken tk1, mdToken tk2, Module *pModule1, M
     }
     return TRUE;
 
-#else //!defined(DACCESS_COMPILE) && defined(FEATURE_COMINTEROP)
+#else //!defined(DACCESS_COMPILE) && defined(FEATURE_TYPEEQUIVALENCE)
 
 #ifdef DACCESS_COMPILE
     // We shouldn't execute this code in dac builds.
@@ -4981,7 +4937,7 @@ void ReportPointersFromValueType(promote_func *fn, ScanContext *sc, PTR_MethodTa
         while (srcPtr < srcPtrStop)                                         
         {   
             (*fn)(dac_cast<PTR_PTR_Object>(srcPtr), sc, 0);
-            srcPtr++;
+            srcPtr = (PTR_OBJECTREF)(PTR_BYTE(srcPtr) + TARGET_POINTER_SIZE);
         }                                                               
         cur--;                                                              
     } while (cur >= last);

@@ -1,11 +1,13 @@
 cmake_minimum_required(VERSION 2.8.12.2)
 
-if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
-  # On OSX, we use the libunwind that's part of the OS
+if(CMAKE_SYSTEM_NAME STREQUAL Darwin OR CMAKE_SYSTEM_NAME STREQUAL FreeBSD)
+  # On OSX and *BSD, we use the libunwind that's part of the OS
   set(CLR_CMAKE_USE_SYSTEM_LIBUNWIND 1)
-endif(CMAKE_SYSTEM_NAME STREQUAL Darwin)
+endif(CMAKE_SYSTEM_NAME STREQUAL Darwin OR CMAKE_SYSTEM_NAME STREQUAL FreeBSD)
 
-include_directories(SYSTEM /usr/local/include)
+if(NOT DEFINED ENV{ROOTFS_DIR})
+  include_directories(SYSTEM /usr/local/include)
+endif()
 
 add_compile_options(-fPIC)
 
@@ -16,8 +18,37 @@ if(NOT CLR_CMAKE_USE_SYSTEM_LIBUNWIND)
   include_directories(${CMAKE_CURRENT_BINARY_DIR}/libunwind/include/tdep)
 
   add_subdirectory(libunwind)
-endif(NOT CLR_CMAKE_USE_SYSTEM_LIBUNWIND)
+elseif(NOT CMAKE_SYSTEM_NAME STREQUAL Darwin)
+    if(PAL_CMAKE_PLATFORM_ARCH_ARM)
+      find_library(UNWIND_ARCH NAMES unwind-arm)
+    endif()
 
+    if(PAL_CMAKE_PLATFORM_ARCH_ARM64)
+      find_library(UNWIND_ARCH NAMES unwind-aarch64)
+    endif()
+
+    if(PAL_CMAKE_PLATFORM_ARCH_AMD64)
+      find_library(UNWIND_ARCH NAMES unwind-x86_64)
+    endif()
+
+    if(NOT UNWIND_ARCH STREQUAL UNWIND_ARCH-NOTFOUND)
+       set(UNWIND_LIBS ${UNWIND_ARCH})
+    endif()
+
+    find_library(UNWIND_GENERIC NAMES unwind-generic)
+
+    if(NOT UNWIND_GENERIC STREQUAL UNWIND_GENERIC-NOTFOUND)
+      set(UNWIND_LIBS ${UNWIND_LIBS} ${UNWIND_GENERIC})
+    endif()
+
+    find_library(UNWIND NAMES unwind)
+
+    if(UNWIND STREQUAL UNWIND-NOTFOUND)
+      message(FATAL_ERROR "Cannot find libunwind. Try installing libunwind8-dev or libunwind-devel.")
+    endif()
+
+    set(UNWIND_LIBS ${UNWIND_LIBS} ${UNWIND})
+endif(NOT CLR_CMAKE_USE_SYSTEM_LIBUNWIND)
 include(configure.cmake)
 
 project(coreclrpal)
@@ -41,9 +72,14 @@ include_directories(include)
 
 if(CLR_CROSS_COMPONENTS_BUILD)
     if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL x86_64 OR CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL amd64)
-        if(CLR_CMAKE_TARGET_ARCH STREQUAL "arm")
-            set(PAL_CMAKE_PLATFORM_ARCH_I386 1)
-            add_definitions(-D_X86_)
+        if(CLR_CMAKE_TARGET_ARCH STREQUAL "arm" OR CLR_CMAKE_TARGET_ARCH STREQUAL "armel")
+            if($ENV{CROSSCOMPILE} STREQUAL "1")
+                set(PAL_CMAKE_PLATFORM_ARCH_I386 1)
+                add_definitions(-D_X86_)
+            else()
+                set(PAL_CMAKE_PLATFORM_ARCH_AMD64 1)
+                add_definitions(-D_AMD64_)
+            endif()
         else()
             set(PAL_CMAKE_PLATFORM_ARCH_AMD64 1)
             add_definitions(-D_AMD64_)
@@ -146,7 +182,6 @@ endif(PAL_CMAKE_PLATFORM_ARCH_ARM)
 set(SOURCES
   cruntime/file.cpp
   cruntime/filecrt.cpp
-  cruntime/lstr.cpp
   cruntime/malloc.cpp
   cruntime/math.cpp
   cruntime/mbstring.cpp
@@ -196,7 +231,6 @@ set(SOURCES
   misc/strutil.cpp
   misc/sysinfo.cpp
   misc/time.cpp
-  misc/tracepointprovider.cpp
   misc/utils.cpp
   numa/numa.cpp
   objmgr/palobjbase.cpp
@@ -261,6 +295,19 @@ add_library(coreclrpal
   ${LIBUNWIND_OBJECTS}
 )
 
+# There is only one function exported in 'tracepointprovider.cpp' namely 'PAL_InitializeTracing',
+# which is guarded with '#if defined(__linux__)'. On macOS, Xcode issues the following warning:
+#
+# > warning: /Applications/Xcode-9.4.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ranlib:
+# > warning for library: libtracepointprovider.a the table of contents is empty (no object file members in the library define global symbols)
+#
+if(CMAKE_SYSTEM_NAME STREQUAL Linux)
+  add_library(tracepointprovider
+    STATIC
+    misc/tracepointprovider.cpp
+  )
+endif(CMAKE_SYSTEM_NAME STREQUAL Linux)
+
 if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
   find_library(COREFOUNDATION CoreFoundation)
   find_library(CORESERVICES CoreServices)
@@ -275,14 +322,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
 endif(CMAKE_SYSTEM_NAME STREQUAL Darwin)
 
 if(CMAKE_SYSTEM_NAME STREQUAL FreeBSD)
-  if(CLR_CMAKE_USE_SYSTEM_LIBUNWIND)
-    find_library(UNWIND unwind)
-  endif()
   find_library(INTL intl)
   target_link_libraries(coreclrpal
     pthread
     rt
-    ${UNWIND}
+    ${UNWIND_LIBS}
     ${INTL}
   )
 endif(CMAKE_SYSTEM_NAME STREQUAL FreeBSD)
@@ -342,36 +386,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL Linux)
   endif(NOT INTL STREQUAL INTL-NOTFOUND)
 
   if(CLR_CMAKE_USE_SYSTEM_LIBUNWIND)
-    if(PAL_CMAKE_PLATFORM_ARCH_ARM)
-      find_library(UNWIND_ARCH NAMES unwind-arm)
-    endif()
-
-    if(PAL_CMAKE_PLATFORM_ARCH_ARM64)
-      find_library(UNWIND_ARCH NAMES unwind-aarch64)
-    endif()
-
-    if(PAL_CMAKE_PLATFORM_ARCH_AMD64)
-      find_library(UNWIND_ARCH NAMES unwind-x86_64)
-    endif()
-
-    if(NOT UNWIND_ARCH STREQUAL UNWIND_ARCH-NOTFOUND)
-      target_link_libraries(coreclrpal ${UNWIND_ARCH})
-    endif()
-
-    find_library(UNWIND_GENERIC NAMES unwind-generic)
-
-    if(NOT UNWIND_GENERIC STREQUAL UNWIND_GENERIC-NOTFOUND)
-      target_link_libraries(coreclrpal ${UNWIND_GENERIC})
-    endif()
-
-    find_library(UNWIND NAMES unwind)
-
-    if(UNWIND STREQUAL UNWIND-NOTFOUND)
-      message(FATAL_ERROR "Cannot find libunwind. Try installing libunwind8-dev or libunwind-devel.")
-    endif()
-
-    target_link_libraries(coreclrpal ${UNWIND})
-
+    target_link_libraries(coreclrpal ${UNWIND_LIBS})
   endif(CLR_CMAKE_USE_SYSTEM_LIBUNWIND)
 
 endif(CMAKE_SYSTEM_NAME STREQUAL Linux)
@@ -399,4 +414,4 @@ if(FEATURE_EVENT_TRACE)
 endif(FEATURE_EVENT_TRACE)
 
 # Install the static PAL library for VS
-install (TARGETS coreclrpal DESTINATION lib)
+_install (TARGETS coreclrpal DESTINATION lib)

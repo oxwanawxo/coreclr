@@ -165,7 +165,7 @@
 
 // This HRESULT is only used as a private implementation detail. Corerror.xml has a comment in it
 //  reserving this value for our use but it doesn't appear in the public headers.
-#define CORPROF_E_RUNTIME_SUSPEND_REQUIRED 0x80131381
+#define CORPROF_E_RUNTIME_SUSPEND_REQUIRED _HRESULT_TYPEDEF_(0x80131381L)
 
 // This is just used as a unique id. Overflow is OK. If we happen to have more than 4+Billion rejits
 // and somehow manage to not run out of memory, we'll just have to redefine ReJITID as size_t.
@@ -613,32 +613,44 @@ HRESULT ReJitManager::UpdateActiveILVersions(
     BOOL fEESuspended = FALSE;
     SHash<CodeActivationBatchTraits>::Iterator beginIter = mgrToCodeActivationBatch.Begin();
     SHash<CodeActivationBatchTraits>::Iterator endIter = mgrToCodeActivationBatch.End();
-    for (SHash<CodeActivationBatchTraits>::Iterator iter = beginIter; iter != endIter; iter++)
-    {
-        CodeActivationBatch * pCodeActivationBatch = *iter;
-        CodeVersionManager * pCodeVersionManager = pCodeActivationBatch->m_pCodeVersionManager;
 
-        int cMethodsToActivate = pCodeActivationBatch->m_methodsToActivate.Count();
-        if (cMethodsToActivate == 0)
-        {
-            continue;
-        }
-        if(!fEESuspended)
-        {
-            // As a potential future optimization we could speculatively try to update the jump stamps without
-            // suspending the runtime. That needs to be plumbed through BatchUpdateJumpStamps though.
-            ThreadSuspend::SuspendEE(ThreadSuspend::SUSPEND_FOR_REJIT);
-            fEESuspended = TRUE;
-        }
-
-        _ASSERTE(ThreadStore::HoldingThreadStore());
-        hr = pCodeVersionManager->SetActiveILCodeVersions(pCodeActivationBatch->m_methodsToActivate.Ptr(), pCodeActivationBatch->m_methodsToActivate.Count(), fEESuspended, &errorRecords);
-        if (FAILED(hr))
-            break;
-    }
-    if (fEESuspended)
     {
-        ThreadSuspend::RestartEE(FALSE, TRUE);
+        MethodDescBackpatchInfoTracker::ConditionalLockHolder lockHolder;
+
+        for (SHash<CodeActivationBatchTraits>::Iterator iter = beginIter; iter != endIter; iter++)
+        {
+            CodeActivationBatch * pCodeActivationBatch = *iter;
+            CodeVersionManager * pCodeVersionManager = pCodeActivationBatch->m_pCodeVersionManager;
+
+            int cMethodsToActivate = pCodeActivationBatch->m_methodsToActivate.Count();
+            if (cMethodsToActivate == 0)
+            {
+                continue;
+            }
+
+            {
+                // SetActiveILCodeVersions takes the SystemDomain crst, which needs to be acquired before the 
+                // ThreadStore crsts
+                SystemDomain::LockHolder lh;
+
+                if(!fEESuspended)
+                {
+                    // As a potential future optimization we could speculatively try to update the jump stamps without
+                    // suspending the runtime. That needs to be plumbed through BatchUpdateJumpStamps though.
+                    ThreadSuspend::SuspendEE(ThreadSuspend::SUSPEND_FOR_REJIT);
+                    fEESuspended = TRUE;
+                }
+
+                _ASSERTE(ThreadStore::HoldingThreadStore());
+                hr = pCodeVersionManager->SetActiveILCodeVersions(pCodeActivationBatch->m_methodsToActivate.Ptr(), pCodeActivationBatch->m_methodsToActivate.Count(), fEESuspended, &errorRecords);
+                if (FAILED(hr))
+                    break;
+            }
+        }
+        if (fEESuspended)
+        {
+            ThreadSuspend::RestartEE(FALSE, TRUE);
+        }
     }
 
     if (FAILED(hr))
@@ -706,7 +718,7 @@ HRESULT ReJitManager::BindILVersion(
         // twice in a row, without us having a chance to jmp-stamp the code yet OR
         // while iterating through instantiations of a generic, the iterator found
         // duplicate entries for the same instantiation.)
-        _ASSERTE(ilCodeVersion.GetILNoThrow() == NULL);
+        _ASSERTE(ilCodeVersion.HasDefaultIL());
 
         *pILCodeVersion = ilCodeVersion;
         return S_FALSE;

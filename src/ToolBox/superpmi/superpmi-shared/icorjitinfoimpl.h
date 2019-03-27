@@ -291,6 +291,11 @@ int appendClassName(__deref_inout_ecount(*pnBufLen) WCHAR** ppBuf,
 // CORINFO_FLG_VALUECLASS, except faster.
 BOOL isValueClass(CORINFO_CLASS_HANDLE cls);
 
+// Decides how the JIT should do the optimization to inline the check for
+//     GetTypeFromHandle(handle) == obj.GetType() (for CORINFO_INLINE_TYPECHECK_SOURCE_VTABLE)
+//     GetTypeFromHandle(X) == GetTypeFromHandle(Y) (for CORINFO_INLINE_TYPECHECK_SOURCE_TOKEN)
+CorInfoInlineTypeCheck canInlineTypeCheck(CORINFO_CLASS_HANDLE cls, CorInfoInlineTypeCheckSource source);
+
 // If this method returns true, JIT will do optimization to inline the check for
 //     GetTypeFromHandle(handle) == obj.GetType()
 BOOL canInlineTypeCheckWithObjectVTable(CORINFO_CLASS_HANDLE cls);
@@ -326,6 +331,11 @@ size_t getClassModuleIdForStatics(CORINFO_CLASS_HANDLE cls, CORINFO_MODULE_HANDL
 // return the number of bytes needed by an instance of the class
 unsigned getClassSize(CORINFO_CLASS_HANDLE cls);
 
+// return the number of bytes needed by an instance of the class allocated on the heap
+unsigned getHeapClassSize(CORINFO_CLASS_HANDLE cls);
+
+BOOL canAllocateOnStack(CORINFO_CLASS_HANDLE cls);
+
 unsigned getClassAlignmentRequirement(CORINFO_CLASS_HANDLE cls, BOOL fDoubleAlignHint = FALSE);
 
 // This is only called for Value classes.  It returns a boolean array
@@ -350,7 +360,7 @@ CORINFO_FIELD_HANDLE getFieldInClass(CORINFO_CLASS_HANDLE clsHnd, INT num);
 BOOL checkMethodModifier(CORINFO_METHOD_HANDLE hMethod, LPCSTR modifier, BOOL fOptional);
 
 // returns the "NEW" helper optimized for "newCls."
-CorInfoHelpFunc getNewHelper(CORINFO_RESOLVED_TOKEN* pResolvedToken, CORINFO_METHOD_HANDLE callerHandle);
+CorInfoHelpFunc getNewHelper(CORINFO_RESOLVED_TOKEN* pResolvedToken, CORINFO_METHOD_HANDLE callerHandle, bool* pHasSideEffects = NULL /* OUT */);
 
 // returns the newArr (1-Dim array) helper optimized for "arrayCls."
 CorInfoHelpFunc getNewArrHelper(CORINFO_CLASS_HANDLE arrayCls);
@@ -451,8 +461,11 @@ TypeCompareState compareTypesForCast(CORINFO_CLASS_HANDLE fromClass, CORINFO_CLA
 // equal, or the comparison needs to be resolved at runtime.
 TypeCompareState compareTypesForEquality(CORINFO_CLASS_HANDLE cls1, CORINFO_CLASS_HANDLE cls2);
 
-// returns is the intersection of cls1 and cls2.
+// returns the intersection of cls1 and cls2.
 CORINFO_CLASS_HANDLE mergeClasses(CORINFO_CLASS_HANDLE cls1, CORINFO_CLASS_HANDLE cls2);
+
+// Returns true if cls2 is known to be a more specific type than cls1.
+BOOL isMoreSpecificType(CORINFO_CLASS_HANDLE cls1, CORINFO_CLASS_HANDLE cls2);
 
 // Given a class handle, returns the Parent type.
 // For COMObjectType, it returns Class Handle of System.Object.
@@ -508,7 +521,7 @@ CORINFO_CLASS_HANDLE getFieldClass(CORINFO_FIELD_HANDLE field);
 // 'memberParent' is typically only set when verifying.  It should be the
 // result of calling getMemberParent.
 CorInfoType getFieldType(CORINFO_FIELD_HANDLE  field,
-                         CORINFO_CLASS_HANDLE* structType,
+                         CORINFO_CLASS_HANDLE* structType = NULL,
                          CORINFO_CLASS_HANDLE  memberParent = NULL /* IN */
                          );
 
@@ -706,7 +719,8 @@ const char* getMethodName(CORINFO_METHOD_HANDLE ftn,       /* IN */
 // Suitable for non-debugging use.
 const char* getMethodNameFromMetadata(CORINFO_METHOD_HANDLE ftn,       /* IN */
                                       const char**          className, /* OUT */
-                                      const char**          namespaceName /* OUT */
+                                      const char**          namespaceName, /* OUT */
+                                      const char**          enclosingClassName /* OUT */
                                       );
 
 // this function is for debugging only.  It returns a value that
@@ -872,6 +886,9 @@ unsigned getClassDomainID(CORINFO_CLASS_HANDLE cls, void** ppIndirection = NULL)
 // return the data's address (for static fields only)
 void* getFieldAddress(CORINFO_FIELD_HANDLE field, void** ppIndirection = NULL);
 
+// return the class handle for the current value of a static field
+CORINFO_CLASS_HANDLE getStaticFieldCurrentClass(CORINFO_FIELD_HANDLE field, bool *pIsSpeculative);
+
 // registers a vararg sig & returns a VM cookie for it (which can contain other stuff)
 CORINFO_VARARGS_HANDLE getVarArgsHandle(CORINFO_SIG_INFO* pSig, void** ppIndirection = NULL);
 
@@ -905,6 +922,8 @@ void MethodCompileComplete(CORINFO_METHOD_HANDLE methHnd);
 
 // return a thunk that will copy the arguments for the given signature.
 void* getTailCallCopyArgsThunk(CORINFO_SIG_INFO* pSig, CorInfoHelperTailCallSpecialHandling flags);
+
+bool convertPInvokeCalliToCall(CORINFO_RESOLVED_TOKEN * pResolvedToken, bool fMustConvert);
 
 // return memory manager that the JIT can use to allocate a regular memory
 IEEMemoryManager* getMemoryManager();

@@ -41,7 +41,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (!keyFound)
             {
                 Exception e = new KeyNotFoundException(SR.Format(SR.Arg_KeyNotFoundWithKey, key.ToString()));
-                e.SetErrorCode(HResults.E_BOUNDS);
+                e.HResult = HResults.E_BOUNDS;
                 throw e;
             }
 
@@ -74,9 +74,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
                 return;
             }
 
-            ConstantSplittableMap<K, V> splittableMap = _this as ConstantSplittableMap<K, V>;
-
-            if (splittableMap == null)
+            if (!(_this is ConstantSplittableMap<K, V> splittableMap))
                 splittableMap = new ConstantSplittableMap<K, V>(_this);
 
             splittableMap.Split(out first, out second);

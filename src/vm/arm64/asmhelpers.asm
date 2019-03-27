@@ -27,7 +27,6 @@
     IMPORT GetThread
     IMPORT CreateThreadBlockThrow
     IMPORT UMThunkStubRareDisableWorker
-    IMPORT UM2MDoADCallBack
     IMPORT GetCurrentSavedRedirectContext
     IMPORT LinkFrameAndThrow
     IMPORT FixContextHandler
@@ -60,6 +59,9 @@
     IMPORT JIT_GetSharedNonGCStaticBase_Helper
     IMPORT JIT_GetSharedGCStaticBase_Helper
 
+#ifdef FEATURE_COMINTEROP
+    IMPORT CLRToCOMWorker
+#endif // FEATURE_COMINTEROP
     TEXTAREA
 
 ;; LPVOID __stdcall GetCurrentIP(void);
@@ -182,18 +184,18 @@ Done
 ; The call in ndirect import precode points to this function.
         NESTED_ENTRY NDirectImportThunk
 
-        PROLOG_SAVE_REG_PAIR           fp, lr, #-160!
+        PROLOG_SAVE_REG_PAIR           fp, lr, #-224!
         SAVE_ARGUMENT_REGISTERS        sp, 16
-        SAVE_FLOAT_ARGUMENT_REGISTERS  sp, 88 
+        SAVE_FLOAT_ARGUMENT_REGISTERS  sp, 96 
 
         mov     x0, x12
         bl      NDirectImportWorker
         mov     x12, x0
 
         ; pop the stack and restore original register state
-        RESTORE_FLOAT_ARGUMENT_REGISTERS  sp, 88
+        RESTORE_FLOAT_ARGUMENT_REGISTERS  sp, 96
         RESTORE_ARGUMENT_REGISTERS        sp, 16
-        EPILOG_RESTORE_REG_PAIR           fp, lr, #160!
+        EPILOG_RESTORE_REG_PAIR           fp, lr, #224!
 
         ; If we got back from NDirectImportWorker, the MD has been successfully
         ; linked. Proceed to execute the original DLL call.
@@ -274,6 +276,108 @@ ThePreStubPatchLabel
 
     MEND
 
+; ------------------------------------------------------------------
+; Start of the writeable code region
+    LEAF_ENTRY JIT_PatchedCodeStart
+        ret      lr
+    LEAF_END
+
+;-----------------------------------------------------------------------------
+; void JIT_UpdateWriteBarrierState(bool skipEphemeralCheck)
+;
+; Update shadow copies of the various state info required for barrier
+;
+; State info is contained in a literal pool at the end of the function
+; Placed in text section so that it is close enough to use ldr literal and still
+; be relocatable. Eliminates need for PREPARE_EXTERNAL_VAR in hot code.
+;
+; Align and group state info together so it fits in a single cache line
+; and each entry can be written atomically
+;
+    WRITE_BARRIER_ENTRY JIT_UpdateWriteBarrierState
+        PROLOG_SAVE_REG_PAIR   fp, lr, #-16!
+
+        ; x0-x7 will contain intended new state
+        ; x8 will preserve skipEphemeralCheck
+        ; x12 will be used for pointers
+
+        mov      x8, x0
+
+        adrp     x12, g_card_table
+        ldr      x0, [x12, g_card_table]
+
+#ifdef FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
+        adrp     x12, g_card_bundle_table
+        ldr      x1, [x12, g_card_bundle_table]
+#endif
+
+#ifdef WRITE_BARRIER_CHECK
+        adrp     x12, $g_GCShadow
+        ldr      x2, [x12, $g_GCShadow]
+#endif
+
+#ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+        adrp     x12, g_sw_ww_table
+        ldr      x3, [x12, g_sw_ww_table]
+#endif
+
+        adrp     x12, g_ephemeral_low
+        ldr      x4, [x12, g_ephemeral_low]
+
+        adrp     x12, g_ephemeral_high
+        ldr      x5, [x12, g_ephemeral_high]
+
+        ; Check skipEphemeralCheck
+        cbz      x8, EphemeralCheckEnabled
+        movz     x4, #0
+        movn     x5, #0
+
+EphemeralCheckEnabled
+        adrp     x12, g_lowest_address
+        ldr      x6, [x12, g_lowest_address]
+
+        adrp     x12, g_highest_address
+        ldr      x7, [x12, g_highest_address]
+
+        ; Update wbs state
+        adr      x12, wbs_begin
+        stp      x0, x1, [x12], 16
+        stp      x2, x3, [x12], 16
+        stp      x4, x5, [x12], 16
+        stp      x6, x7, [x12], 16
+
+        EPILOG_RESTORE_REG_PAIR fp, lr, #16!
+        EPILOG_RETURN
+
+        ; Begin patchable literal pool
+        ALIGN 64  ; Align to power of two at least as big as patchable literal pool so that it fits optimally in cache line
+
+wbs_begin
+wbs_card_table
+        DCQ 0
+wbs_card_bundle_table
+        DCQ 0
+wbs_GCShadow
+        DCQ 0
+wbs_sw_ww_table
+        DCQ 0
+wbs_ephemeral_low
+        DCQ 0
+wbs_ephemeral_high
+        DCQ 0
+wbs_lowest_address
+        DCQ 0
+wbs_highest_address
+        DCQ 0
+
+    WRITE_BARRIER_END JIT_UpdateWriteBarrierState
+
+; ------------------------------------------------------------------
+; End of the writeable code region
+    LEAF_ENTRY JIT_PatchedCodeLast
+        ret      lr
+    LEAF_END
+
 ; void JIT_ByRefWriteBarrier
 ; On entry:
 ;   x13  : the source address (points to object reference to write)
@@ -305,15 +409,12 @@ ThePreStubPatchLabel
 ;   x15  : trashed
 ;
     WRITE_BARRIER_ENTRY JIT_CheckedWriteBarrier
-        adrp     x12,  g_lowest_address
-        ldr      x12,  [x12, g_lowest_address]
+        ldr      x12,  wbs_lowest_address
         cmp      x14,  x12
-        blt      NotInHeap
 
-        adrp      x12, g_highest_address 
-        ldr      x12, [x12, g_highest_address] 
-        cmp      x14, x12
-        blt      JIT_WriteBarrier
+        ldr      x12,  wbs_highest_address
+        ccmphs   x14,  x12, #0x2
+        blo      JIT_WriteBarrier
 
 NotInHeap
         str      x15, [x14], 8
@@ -334,25 +435,26 @@ NotInHeap
         stlr     x15, [x14]
 
 #ifdef WRITE_BARRIER_CHECK
-        ; Update GC Shadow Heap  
+        ; Update GC Shadow Heap 
 
-        ; need temporary registers. Save them before using. 
-        stp      x12, x13, [sp, #-16]!
+        ; Do not perform the work if g_GCShadow is 0
+        ldr      x12, wbs_GCShadow
+        cbz      x12, ShadowUpdateDisabled 
+
+        ; need temporary register. Save before using.
+        str      x13, [sp, #-16]!
 
         ; Compute address of shadow heap location:
         ;   pShadow = $g_GCShadow + (x14 - g_lowest_address)
-        adrp     x12, g_lowest_address
-        ldr      x12, [x12, g_lowest_address]
-        sub      x12, x14, x12
-        adrp     x13, $g_GCShadow
-        ldr      x13, [x13, $g_GCShadow]
+        ldr      x13, wbs_lowest_address
+        sub      x13, x14, x13
         add      x12, x13, x12
 
         ; if (pShadow >= $g_GCShadowEnd) goto end
         adrp     x13, $g_GCShadowEnd
         ldr      x13, [x13, $g_GCShadowEnd]
         cmp      x12, x13
-        bhs      shadowupdateend
+        bhs      ShadowUpdateEnd
 
         ; *pShadow = x15
         str      x15, [x12]
@@ -364,57 +466,58 @@ NotInHeap
         ; if ([x14] == x15) goto end
         ldr      x13, [x14]
         cmp      x13, x15
-        beq shadowupdateend
+        beq ShadowUpdateEnd
 
-        ; *pShadow = INVALIDGCVALUE (0xcccccccd)        
-        mov      x13, #0
-        movk     x13, #0xcccd
+        ; *pShadow = INVALIDGCVALUE (0xcccccccd)
+        movz     x13, #0xcccd
         movk     x13, #0xcccc, LSL #16
         str      x13, [x12]
 
-shadowupdateend
-        ldp      x12, x13, [sp],#16        
+ShadowUpdateEnd
+        ldr      x13, [sp], #16
+ShadowUpdateDisabled
 #endif
 
+#ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
+#error Need to implement for ARM64
+#endif
+
+CheckCardTable
         ; Branch to Exit if the reference is not in the Gen0 heap
         ;
-        adrp     x12,  g_ephemeral_low
-        ldr      x12,  [x12, g_ephemeral_low]
+        adr      x12,  wbs_ephemeral_low
+        ldp      x12,  x16, [x12]
+        cbz      x12,  SkipEphemeralCheck
+
         cmp      x15,  x12
         blo      Exit
 
-        adrp     x12, g_ephemeral_high 
-        ldr      x12, [x12, g_ephemeral_high]
-        cmp      x15,  x12
+        cmp      x15,  x16
         bhi      Exit
 
-        ; Check if we need to update the card table        
-        adrp     x12, g_card_table
-        ldr      x12, [x12, g_card_table]
-        add      x15,  x12, x14 lsr #11
-        ldrb     w12, [x15]
-        cmp      x12, 0xFF
+SkipEphemeralCheck
+        ; Check if we need to update the card table
+        ldr      x12, wbs_card_table
+
+        ; x15 := offset within card table
+        lsr      x15, x14, #11
+
+        ldrb     w16, [x12, x15]
+        cmp      w16, 0xFF
         beq      Exit
 
 UpdateCardTable
-        mov      x12, 0xFF 
-        strb     w12, [x15]
+        mov      x16, 0xFF
+        strb     w16, [x12, x15]
+
+#ifdef FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
+#error Need to implement for ARM64
+#endif
+
 Exit
         add      x14, x14, 8
-        ret      lr          
+        ret      lr
     WRITE_BARRIER_END JIT_WriteBarrier
-
-; ------------------------------------------------------------------
-; Start of the writeable code region
-    LEAF_ENTRY JIT_PatchedCodeStart
-        ret      lr
-    LEAF_END
-
-; ------------------------------------------------------------------
-; End of the writeable code region
-    LEAF_ENTRY JIT_PatchedCodeLast
-        ret      lr
-    LEAF_END
 
 ;------------------------------------------------
 ; VirtualMethodFixupStub
@@ -435,9 +538,9 @@ Exit
     NESTED_ENTRY VirtualMethodFixupStub
 
     ; Save arguments and return address
-    PROLOG_SAVE_REG_PAIR           fp, lr, #-160!
+    PROLOG_SAVE_REG_PAIR           fp, lr, #-224!
     SAVE_ARGUMENT_REGISTERS        sp, 16
-    SAVE_FLOAT_ARGUMENT_REGISTERS  sp, 88 
+    SAVE_FLOAT_ARGUMENT_REGISTERS  sp, 96 
 
     ; Refer to ZapImportVirtualThunk::Save
     ; for details on this.
@@ -454,8 +557,8 @@ Exit
 
     ; pop the stack and restore original register state
     RESTORE_ARGUMENT_REGISTERS        sp, 16
-    RESTORE_FLOAT_ARGUMENT_REGISTERS  sp, 88
-    EPILOG_RESTORE_REG_PAIR           fp, lr, #160!
+    RESTORE_FLOAT_ARGUMENT_REGISTERS  sp, 96
+    EPILOG_RESTORE_REG_PAIR           fp, lr, #224!
 
     PATCH_LABEL VirtualMethodFixupPatchLabel
 
@@ -515,6 +618,89 @@ LNullThis
 #ifdef FEATURE_COMINTEROP
 
 ; ------------------------------------------------------------------
+; setStubReturnValue
+; w0 - size of floating point return value (MetaSig::GetFPReturnSize())
+; x1 - pointer to the return buffer in the stub frame
+    LEAF_ENTRY setStubReturnValue
+
+        cbz     w0, NoFloatingPointRetVal
+
+        ;; Float return case
+        cmp     x0, #4
+        bne     LNoFloatRetVal
+        ldr     s0, [x1]
+        ret
+LNoFloatRetVal
+
+        ;; Double return case
+        cmp     w0, #8
+        bne     LNoDoubleRetVal
+        ldr     d0, [x1]
+        ret
+LNoDoubleRetVal
+
+        cmp     w0, #16
+        bne     LNoFloatHFARetVal
+        ldp     s0, s1, [x1]
+        ldp     s2, s3, [x1, #8]
+        ret
+LNoFloatHFARetVal
+
+        cmp     w0, #32
+        bne     LNoDoubleHFARetVal
+        ldp     d0, d1, [x1]
+        ldp     d2, d3, [x1, #16]
+        ret
+LNoDoubleHFARetVal
+
+        EMIT_BREAKPOINT ; Unreachable
+
+NoFloatingPointRetVal
+
+        ;; Restore the return value from retbuf
+        ldr     x0, [x1]
+        ldr     x1, [x1, #8]
+        ret
+
+    LEAF_END
+
+; ------------------------------------------------------------------
+; GenericComPlusCallStub that erects a ComPlusMethodFrame and calls into the runtime
+; (CLRToCOMWorker) to dispatch rare cases of the interface call.
+;
+; On entry:
+;   x0          : 'this' object
+;   x12         : Interface MethodDesc*
+;   plus user arguments in registers and on the stack
+;
+; On exit:
+;   x0/x1/s0-s3/d0-d3 set to return value of the call as appropriate
+;
+    NESTED_ENTRY GenericComPlusCallStub
+
+        PROLOG_WITH_TRANSITION_BLOCK 0x20
+
+        add         x0, sp, #__PWTB_TransitionBlock ; pTransitionBlock
+        mov         x1, x12                         ; pMethodDesc
+
+        ; Call CLRToCOMWorker(TransitionBlock *, ComPlusCallMethodDesc *). 
+        ; This call will set up the rest of the frame (including the vfptr, the GS cookie and
+        ; linking to the thread), make the client call and return with correct registers set 
+        ; (x0/x1/s0-s3/d0-d3 as appropriate).
+
+        bl          CLRToCOMWorker
+
+        ; x0 = fpRetSize
+
+        ; return value is stored before float argument registers
+        add         x1, sp, #(__PWTB_FloatArgumentRegisters - 0x20)
+        bl          setStubReturnValue
+
+        EPILOG_WITH_TRANSITION_BLOCK_RETURN
+
+    NESTED_END
+
+; ------------------------------------------------------------------
 ; COM to CLR stub called the first time a particular method is invoked.
 ;
 ; On entry:
@@ -533,7 +719,7 @@ LNullThis
     GBLA ComCallPreStub_FirstStackAdjust
 
 ComCallPreStub_FrameSize         SETA (SIZEOF__GSCookie + SIZEOF__ComMethodFrame)
-ComCallPreStub_FirstStackAdjust  SETA (SIZEOF__ArgumentRegisters + 2 * 8) ; reg args , fp & lr already pushed
+ComCallPreStub_FirstStackAdjust  SETA (8 + SIZEOF__ArgumentRegisters + 2 * 8) ; x8, reg args , fp & lr already pushed
 ComCallPreStub_StackAlloc        SETA ComCallPreStub_FrameSize - ComCallPreStub_FirstStackAdjust 
 ComCallPreStub_StackAlloc        SETA ComCallPreStub_StackAlloc + SIZEOF__FloatArgumentRegisters + 8; 8 for ErrorReturn
     IF ComCallPreStub_StackAlloc:MOD:16 != 0
@@ -603,7 +789,7 @@ ComCallPreStub_ErrorExit
     GBLA GenericComCallStub_FirstStackAdjust
 
 GenericComCallStub_FrameSize         SETA (SIZEOF__GSCookie + SIZEOF__ComMethodFrame)
-GenericComCallStub_FirstStackAdjust  SETA (SIZEOF__ArgumentRegisters + 2 * 8)
+GenericComCallStub_FirstStackAdjust  SETA (8 + SIZEOF__ArgumentRegisters + 2 * 8)
 GenericComCallStub_StackAlloc        SETA GenericComCallStub_FrameSize - GenericComCallStub_FirstStackAdjust
 GenericComCallStub_StackAlloc        SETA GenericComCallStub_StackAlloc + SIZEOF__FloatArgumentRegisters
 
@@ -657,16 +843,29 @@ GenericComCallStub_FirstStackAdjust     SETA GenericComCallStub_FirstStackAdjust
     cbz x0, COMToCLRDispatchHelper_RegSetup
 
     add x9, x1, #SIZEOF__ComMethodFrame
-    add x9, x9, x0, LSL #3
+
+    ; Compute number of 8 bytes slots to copy. This is done by rounding up the
+    ; dwStackSlots value to the nearest even value
+    add x0, x0, #1
+    bic x0, x0, #1
+
+    ; Compute how many slots to adjust the address to copy from. Since we
+    ; are copying 16 bytes at a time, adjust by -1 from the rounded value
+    sub x6, x0, #1
+    add x9, x9, x6, LSL #3
+
 COMToCLRDispatchHelper_StackLoop
-    ldr x8, [x9, #-8]!
-    str x8, [sp, #-8]!
-    sub x0, x0, #1
-    cbnz x0, COMToCLRDispatchHelper_StackLoop
+    ldp     x7, x8, [x9], #-16  ; post-index
+    stp     x7, x8, [sp, #-16]! ; pre-index
+    subs    x0, x0, #2
+    bne     COMToCLRDispatchHelper_StackLoop
     
 COMToCLRDispatchHelper_RegSetup
 
-    RESTORE_FLOAT_ARGUMENT_REGISTERS x1, -1 * GenericComCallStub_FrameOffset
+    ; We need an aligned offset for restoring float args, so do the subtraction into
+    ; a scratch register
+    sub     x5, x1, GenericComCallStub_FrameOffset
+    RESTORE_FLOAT_ARGUMENT_REGISTERS x5, 0
 
     mov lr, x2
     mov x12, x3
@@ -676,7 +875,7 @@ COMToCLRDispatchHelper_RegSetup
     ldp x2, x3, [x1, #(SIZEOF__ComMethodFrame - SIZEOF__ArgumentRegisters + 16)]
     ldp x4, x5, [x1, #(SIZEOF__ComMethodFrame - SIZEOF__ArgumentRegisters + 32)]
     ldp x6, x7, [x1, #(SIZEOF__ComMethodFrame - SIZEOF__ArgumentRegisters + 48)]
-    ldr x8, [x1, #(SIZEOF__ComMethodFrame - SIZEOF__ArgumentRegisters + 64)]
+    ldr x8, [x1, #(SIZEOF__ComMethodFrame - SIZEOF__ArgumentRegisters - 8)]
 
     ldr x1, [x1, #(SIZEOF__ComMethodFrame - SIZEOF__ArgumentRegisters + 8)]
 
@@ -696,9 +895,9 @@ COMToCLRDispatchHelper_RegSetup
     NESTED_ENTRY TheUMEntryPrestub,,UMEntryPrestubUnwindFrameChainHandler
 
     ; Save arguments and return address
-    PROLOG_SAVE_REG_PAIR           fp, lr, #-160!
+    PROLOG_SAVE_REG_PAIR           fp, lr, #-224!
     SAVE_ARGUMENT_REGISTERS        sp, 16
-    SAVE_FLOAT_ARGUMENT_REGISTERS  sp, 88
+    SAVE_FLOAT_ARGUMENT_REGISTERS  sp, 96
 
     mov x0, x12
     bl  TheUMEntryPrestubWorker
@@ -708,8 +907,8 @@ COMToCLRDispatchHelper_RegSetup
 
     ; pop the stack and restore original register state
     RESTORE_ARGUMENT_REGISTERS        sp, 16
-    RESTORE_FLOAT_ARGUMENT_REGISTERS  sp, 88
-    EPILOG_RESTORE_REG_PAIR           fp, lr, #160!
+    RESTORE_FLOAT_ARGUMENT_REGISTERS  sp, 96
+    EPILOG_RESTORE_REG_PAIR           fp, lr, #224!
 
     ; and tailcall to the actual method
     EPILOG_BRANCH_REG x12
@@ -754,15 +953,6 @@ UMThunkStub_HaveThread
 
 UMThunkStub_InCooperativeMode
     ldr                 x12, [fp, #UMThunkStub_HiddenArg] ; x12 = UMEntryThunk*
-
-    ldr                 x0, [x19, #Thread__m_pDomain]
-
-    ; m_dwDomainId is 4 bytes so using 32-bit variant
-    ldr                 w1, [x12, #UMEntryThunk__m_dwDomainId]
-    ldr                 w0, [x0, #AppDomain__m_dwId]
-    cmp                 w0, w1
-    bne                 UMThunkStub_WrongAppDomain
-
     ldr                 x3, [x12, #UMEntryThunk__m_pUMThunkMarshInfo] ; x3 = m_pUMThunkMarshInfo
 
     ; m_cbActualArgSize is UINT32 and hence occupies 4 bytes
@@ -833,109 +1023,6 @@ UMThunkStub_DoTrapReturningThreads
     add                 sp, sp, #SIZEOF__FloatArgumentRegisters
     b                   UMThunkStub_InCooperativeMode
 
-UMThunkStub_WrongAppDomain
-    ; Saving FP Args as this is read by UM2MThunk_WrapperHelper
-    sub                 sp, sp, #SIZEOF__FloatArgumentRegisters
-    SAVE_FLOAT_ARGUMENT_REGISTERS  sp, 0
-
-    ; UMEntryThunk* pUMEntry
-    ldr                 x0, [fp, #UMThunkStub_HiddenArg]
-
-    ; void * pArgs
-    add                 x2, fp, #16              
-
-    ; remaining arguments are unused
-    bl                  UM2MDoADCallBack
-
-    ; restore any integral return value(s)
-    ldp                 x0, x1, [fp, #16]
-
-    ; restore any FP or HFA return value(s)
-    RESTORE_FLOAT_ARGUMENT_REGISTERS sp, 0
-
-    b                   UMThunkStub_PostCall
-
-    NESTED_END
-
-
-; UM2MThunk_WrapperHelper(void *pThunkArgs,             // x0
-;                         int cbStackArgs,              // x1 (unused)
-;                         void *pAddr,                  // x2 (unused)
-;                         UMEntryThunk *pEntryThunk,    // x3
-;                         Thread *pThread)              // x4
-
-; pThunkArgs points to the argument registers pushed on the stack by UMThunkStub
-
-    NESTED_ENTRY UM2MThunk_WrapperHelper
-
-    PROLOG_SAVE_REG_PAIR fp, lr, #-32!
-    PROLOG_SAVE_REG      x19, #16
-
-
-    ; save pThunkArgs in non-volatile reg. It is required after return from call to ILStub
-    mov                 x19, x0  
-
-    ; ARM64TODO - Is this required by ILStub
-    mov                 x12, x3  ;                    // x12 = UMEntryThunk *
-
-    ;
-    ; Note that layout of the arguments is given by UMThunkStub frame
-    ;
-    ldr                 x3, [x3, #UMEntryThunk__m_pUMThunkMarshInfo]
-
-    ; m_cbActualArgSize is 4-byte field
-    ldr                 w2, [x3, #UMThunkMarshInfo__m_cbActualArgSize]
-    cbz                 w2, UM2MThunk_WrapperHelper_RegArgumentsSetup
-
-    ; extend to 64- bits
-    uxtw                x2, w2 
-
-    ; Source pointer. Subtracting 16 bytes due to fp & lr
-    add                 x6, x0, #(UMThunkStub_StackArgs-16) 
-
-    ; move source ptr to end of Stack Args
-    add                 x6, x6, x2 
-
-    ; Count of stack slot pairs to copy (divide by 16)
-    lsr                 x1, x2, #4
-
-    ; Is there an extra stack slot? (can happen when stack arg bytes not multiple of 16)
-    and                 x2, x2, #8
-
-    ; If yes then start source pointer from 16 byte aligned stack slot
-    add                 x6, x6, x2
-
-    ; increment stack slot pair count by 1 if x2 is not zero
-    add                 x1, x1, x2, LSR #3
-
-UM2MThunk_WrapperHelper_StackLoop
-    ldp                 x4, x5, [x6, #-16]!
-    stp                 x4, x5, [sp, #-16]!
-    subs                x1, x1, #1
-    bne                 UM2MThunk_WrapperHelper_StackLoop
-
-UM2MThunk_WrapperHelper_RegArgumentsSetup
-    ldr                 x16, [x3, #(UMThunkMarshInfo__m_pILStub)]
-
-    ; reload floating point registers
-    RESTORE_FLOAT_ARGUMENT_REGISTERS x0, -1 * (SIZEOF__FloatArgumentRegisters + 16)
-
-    ; reload argument registers
-    RESTORE_ARGUMENT_REGISTERS x0, 0
-
-    blr                 x16
-
-    ; save any integral return value(s)
-    stp                 x0, x1, [x19]
-
-    ; save any FP or HFA return value(s)
-    SAVE_FLOAT_ARGUMENT_REGISTERS x19, -1 * (SIZEOF__FloatArgumentRegisters + 16)
-
-    EPILOG_STACK_RESTORE
-    EPILOG_RESTORE_REG      x19, #16
-    EPILOG_RESTORE_REG_PAIR fp, lr, #32!
-    EPILOG_RETURN
-    
     NESTED_END
 
 #ifdef FEATURE_HIJACK
@@ -1262,9 +1349,9 @@ Fail
         mov x4, $frameFlags
         bl DynamicHelperWorker
         cbnz x0, %FT0
-        ldr x0, [sp, #__PWTB_ArgumentRegisters]
+        ldr x0, [sp, #__PWTB_ArgumentRegister_FirstArg]
         EPILOG_WITH_TRANSITION_BLOCK_RETURN
-0		
+0
         mov x12, x0
         EPILOG_WITH_TRANSITION_BLOCK_TAILCALL
         EPILOG_BRANCH_REG  x12

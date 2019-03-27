@@ -180,7 +180,7 @@ DIS* NearDiffer::GetMsVcDis()
 // The output format is in MSDIS's disassembly format.
 //
 // Arguments:
-//    block        - A pointer to the code block to diassemble.
+//    block        - A pointer to the code block to disassemble.
 //    blocksize    - The size of the code block to disassemble.
 //    originalAddr - The original base address of the code block.
 //
@@ -330,7 +330,7 @@ bool NearDiffer::compareOffsets(
 
     // VSD calling case.
     size_t Offset1 = (ipRelOffset1 - 8);
-    if (data->cr->CallTargetTypes->GetIndex((DWORDLONG)Offset1) != (DWORD)-1)
+    if (data->cr->CallTargetTypes->GetIndex((DWORDLONG)Offset1) != -1)
     {
         // This logging is too noisy, so disable it.
         // LogVerbose("Found VSD callsite, did softer compare than ideal");
@@ -340,13 +340,13 @@ bool NearDiffer::compareOffsets(
     // x86 VSD calling cases.
     size_t Offset1b = (size_t)offset1 - 4;
     size_t Offset2b = (size_t)offset2;
-    if (data->cr->CallTargetTypes->GetIndex((DWORDLONG)Offset1b) != (DWORD)-1)
+    if (data->cr->CallTargetTypes->GetIndex((DWORDLONG)Offset1b) != -1)
     {
         // This logging is too noisy, so disable it.
         // LogVerbose("Found VSD callsite, did softer compare than ideal");
         return true;
     }
-    if (data->cr->CallTargetTypes->GetIndex((DWORDLONG)Offset2b) != (DWORD)-1)
+    if (data->cr->CallTargetTypes->GetIndex((DWORDLONG)Offset2b) != -1)
     {
         // This logging is too noisy, so disable it.
         // LogVerbose("Found VSD callsite, did softer compare than ideal");
@@ -368,7 +368,7 @@ bool NearDiffer::compareOffsets(
         return true;
 
     realTargetAddr = (size_t)data->cr->searchAddressMap((void*)(gOffset2));
-    if (realTargetAddr != -1) // we know this was passed out as a bbloc
+    if (realTargetAddr != (size_t)-1) // we know this was passed out as a bbloc
         return true;
 
     return false;
@@ -402,7 +402,7 @@ bool NearDiffer::compareOffsets(
 //    mc                 - The method context of the method to diff. Unused.
 //    cr1                - The first compile result to compare. Unused.
 //    cr2                - The second compile result to compare. Unused.
-//    block1             - A pointer to the first code block to diassemble.
+//    block1             - A pointer to the first code block to disassemble.
 //    blocksize1         - The size of the first code block to compare.
 //    datablock1         - A pointer to the first read-only data block to compare. Unused.
 //    datablockSize1     - The size of the first read-only data block to compare.
@@ -411,7 +411,7 @@ bool NearDiffer::compareOffsets(
 //    otherCodeBlock1    - The original base address of the first cold code block. Note that this is
 //                         just an address; we don't need the cold code buffer.
 //    otherCodeBlockSize1- The size of the first cold code block.
-//    block2             - A pointer to the second code block to diassemble.
+//    block2             - A pointer to the second code block to disassemble.
 //    blocksize2         - The size of the second code block to compare.
 //    datablock2         - A pointer to the second read-only data block to compare.
 //    datablockSize2     - The size of the second read-only data block to compare.
@@ -698,10 +698,10 @@ DumpDetails:
 //    mc                 - The method context of the method to diff.
 //    cr1                - The first compile result to compare.
 //    cr2                - The second compile result to compare.
-//    block1             - A pointer to the first code block to diassemble.
+//    block1             - A pointer to the first code block to disassemble.
 //    blocksize1         - The size of the first code block to compare.
 //    originalDataBlock1 - The original base address of the first read-only data block.
-//    block2             - A pointer to the second code block to diassemble.
+//    block2             - A pointer to the second code block to disassemble.
 //    blocksize2         - The size of the second code block to compare.
 //    originalDataBlock2 - The original base address of the second read-only data block.
 //

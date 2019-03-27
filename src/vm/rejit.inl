@@ -6,7 +6,7 @@
 //
 
 // 
-// Inline definitions of various items declared in REJIT.H\
+// Inline definitions of various items declared in REJIT.H
 // ===========================================================================
 #ifndef _REJIT_INL_
 #define _REJIT_INL_
@@ -26,7 +26,10 @@ inline BOOL ReJitManager::IsReJITEnabled()
 {
     LIMITED_METHOD_CONTRACT;
 
-    return CORProfilerEnableRejit();
+    static bool profilerStartupRejit = CORProfilerEnableRejit() != FALSE;
+    static ConfigDWORD rejitOnAttachEnabled;
+
+    return  profilerStartupRejit || (rejitOnAttachEnabled.val(CLRConfig::EXTERNAL_ProfAPI_RejitOnAttach) != 0);
 }
 
 #ifndef DACCESS_COMPILE

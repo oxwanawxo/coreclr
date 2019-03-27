@@ -68,6 +68,7 @@
 
 #include "versionresilienthashcode.h"
 #include "inlinetracking.h"
+#include "jithost.h"
 
 #ifdef CROSSGEN_COMPILE
 CompilationDomain * theDomain;
@@ -134,15 +135,7 @@ HRESULT CEECompileInfo::CreateDomain(ICorCompilationDomain **ppDomain,
 
     COOPERATIVE_TRANSITION_BEGIN();
 
-#ifndef CROSSGEN_COMPILE
-    AppDomainCreationHolder<CompilationDomain> pCompilationDomain;
-
-    pCompilationDomain.Assign(new CompilationDomain(fForceDebug,
-                                                    fForceProfiling,
-                                                    fForceInstrument));
-#else
     CompilationDomain * pCompilationDomain = theDomain;
-#endif
 
     {
         SystemDomain::LockHolder lh;
@@ -170,14 +163,10 @@ HRESULT CEECompileInfo::CreateDomain(ICorCompilationDomain **ppDomain,
 
         ENTER_DOMAIN_PTR(pCompilationDomain,ADV_COMPILATION)
         {
-            pCompilationDomain->InitializeDomainContext(TRUE, NULL, NULL);
+            pCompilationDomain->CreateFusionContext();
 
             pCompilationDomain->SetFriendlyName(W("Compilation Domain"));
             SystemDomain::System()->LoadDomain(pCompilationDomain);
-
-#ifndef CROSSGEN_COMPILE
-            pCompilationDomain.DoneCreating();
-#endif
         }
         END_DOMAIN_TRANSITION;
     }
@@ -216,13 +205,8 @@ HRESULT MakeCrossDomainCallbackWorker(
     LPVOID                  pArgs)
 {
     STATIC_CONTRACT_MODE_COOPERATIVE;
-    STATIC_CONTRACT_SO_INTOLERANT;
 
-    HRESULT hrRetVal = E_UNEXPECTED;
-    BEGIN_SO_TOLERANT_CODE(GetThread());
-    hrRetVal = pfnCallback(pArgs);
-    END_SO_TOLERANT_CODE;
-    return hrRetVal;
+    return pfnCallback(pArgs);
 }
 
 HRESULT CEECompileInfo::MakeCrossDomainCallback(
@@ -345,7 +329,7 @@ HRESULT CEECompileInfo::LoadAssemblyByPath(
 #endif // !_TARGET_64BIT_
         
         AssemblySpec spec;
-        spec.InitializeSpec(TokenFromRid(1, mdtAssembly), pImage->GetMDImport(), NULL, FALSE);
+        spec.InitializeSpec(TokenFromRid(1, mdtAssembly), pImage->GetMDImport(), NULL);
 
         if (spec.IsMscorlib())
         {
@@ -374,7 +358,7 @@ HRESULT CEECompileInfo::LoadAssemblyByPath(
 #endif //FEATURE_COMINTEROP
 
             // If there is a host binder then use it to bind the assembly.
-            if (pDomain->HasLoadContextHostBinder() || isWinRT)
+            if (isWinRT)
             {
                 pAssemblyHolder = pDomain->BindAssemblySpec(&spec, TRUE, FALSE);
             }
@@ -402,7 +386,7 @@ HRESULT CEECompileInfo::LoadAssemblyByPath(
                     // that IL assemblies will be available.
                     fExplicitBindToNativeImage
                     );
-                pAssemblyHolder = PEAssembly::Open(&bindResult,FALSE,FALSE);
+                pAssemblyHolder = PEAssembly::Open(&bindResult,FALSE);
             }
 
             // Now load assembly into domain.
@@ -410,13 +394,6 @@ HRESULT CEECompileInfo::LoadAssemblyByPath(
 
             if (spec.CanUseWithBindingCache() && pDomainAssembly->CanUseWithBindingCache())
                 pDomain->AddAssemblyToCache(&spec, pDomainAssembly);
-
-
-            {
-                // Mark the assembly before it gets fully loaded and NGen image dependencies are verified. This is necessary
-                // to allow skipping compilation if there is NGen image already.
-                pDomainAssembly->GetFile()->SetSafeToHardBindTo();
-            }
 
             pAssembly = pDomain->LoadAssembly(&spec, pAssemblyHolder, FILE_LOADED);
 
@@ -476,7 +453,7 @@ HRESULT CEECompileInfo::LoadTypeRefWinRT(
                 LPCSTR pszname;
                 pAssemblyImport->GetNameOfTypeRef(ref, &psznamespace, &pszname);
                 AssemblySpec spec;
-                spec.InitializeSpec(tkResolutionScope, pAssemblyImport, NULL, FALSE);
+                spec.InitializeSpec(tkResolutionScope, pAssemblyImport, NULL);
                 spec.SetWindowsRuntimeType(psznamespace, pszname);
                 
                 _ASSERTE(spec.HasBindableIdentity());
@@ -601,10 +578,7 @@ HRESULT CEECompileInfo::SetCompilationTarget(CORINFO_ASSEMBLY_HANDLE     assembl
 
         if (!IsReadyToRunCompilation() && !SystemDomain::SystemFile()->HasNativeImage())
         {
-            if (!CLRConfig::GetConfigValue(CLRConfig::INTERNAL_NgenAllowMscorlibSoftbind))
-            {
-                return NGEN_E_SYS_ASM_NI_MISSING;
-            }
+            return NGEN_E_SYS_ASM_NI_MISSING;
         }
     }
 
@@ -787,9 +761,6 @@ void GetLoadHint(ASSEMBLY * pAssembly, ASSEMBLY *pAssemblyDependency,
 
     *loadHint = LoadDefault;
 
-    if (g_pConfig->NgenHardBind() == EEConfig::NGEN_HARD_BIND_ALL)
-        *loadHint = LoadAlways;
-
     const BYTE  *pbAttr;                // Custom attribute data as a BYTE*.
     ULONG       cbAttr;                 // Size of custom attribute data.
     mdToken     mdAssembly;
@@ -853,11 +824,6 @@ void GetLoadHint(ASSEMBLY * pAssembly, ASSEMBLY *pAssemblyDependency,
             // Get default bind setting
             UINT32 u4 = 0;
             IfFailThrow(cap.GetU4(&u4));
-
-            if (pAssemblyDependency->IsSystem() && CLRConfig::GetConfigValue(CLRConfig::INTERNAL_NgenAllowMscorlibSoftbind))
-            {
-                u4 = LoadDefault;
-            }
 
             if (defaultLoadHint)
                 *defaultLoadHint = (LoadHintEnum) u4;
@@ -926,7 +892,7 @@ void FakePromote(PTR_PTR_Object ppObj, ScanContext *pSC, uint32_t dwFlags)
 
     CORCOMPILE_GCREFMAP_TOKENS newToken = (dwFlags & GC_CALL_INTERIOR) ? GCREFMAP_INTERIOR : GCREFMAP_REF;
 
-    _ASSERTE((*ppObj == NULL) || (*(CORCOMPILE_GCREFMAP_TOKENS *)ppObj == newToken));
+    _ASSERTE((*(CORCOMPILE_GCREFMAP_TOKENS *)ppObj == NULL) || (*(CORCOMPILE_GCREFMAP_TOKENS *)ppObj == newToken));
 
     *(CORCOMPILE_GCREFMAP_TOKENS *)ppObj = newToken;
 }
@@ -993,7 +959,7 @@ void FakeGcScanRoots(MetaSig& msig, ArgIterator& argit, MethodDesc * pMD, BYTE *
     }
 }
 
-void CEECompileInfo::GetCallRefMap(CORINFO_METHOD_HANDLE hMethod, GCRefMapBuilder * pBuilder)
+void CEECompileInfo::GetCallRefMap(CORINFO_METHOD_HANDLE hMethod, GCRefMapBuilder * pBuilder, bool isDispatchCell)
 {
 #ifdef _DEBUG
     DWORD dwInitialLength = pBuilder->GetBlobLength();
@@ -1002,7 +968,25 @@ void CEECompileInfo::GetCallRefMap(CORINFO_METHOD_HANDLE hMethod, GCRefMapBuilde
 
     MethodDesc *pMD = (MethodDesc *)hMethod;
 
-    MetaSig msig(pMD);
+    SigTypeContext typeContext(pMD);
+    PCCOR_SIGNATURE pSig;
+    DWORD cbSigSize;
+    pMD->GetSig(&pSig, &cbSigSize);
+    MetaSig msig(pSig, cbSigSize, pMD->GetModule(), &typeContext);
+
+    //
+    // Shared default interface methods (i.e. virtual interface methods with an implementation) require
+    // an instantiation argument. But if we're in a situation where we haven't resolved the method yet
+    // we need to pretent that unresolved default interface methods are like any other interface
+    // methods and don't have an instantiation argument.
+    // See code:CEEInfo::getMethodSigInternal
+    //
+    assert(!isDispatchCell || !pMD->RequiresInstArg() || pMD->GetMethodTable()->IsInterface());
+    if (pMD->RequiresInstArg() && !isDispatchCell)
+    {
+        msig.SetHasParamTypeArg();
+    }
+
     ArgIterator argit(&msig);
 
     UINT nStackBytes = argit.SizeOfFrameArgumentArray();
@@ -1029,7 +1013,7 @@ void CEECompileInfo::GetCallRefMap(CORINFO_METHOD_HANDLE hMethod, GCRefMapBuilde
 
     nStackSlots = nStackBytes / sizeof(TADDR) + NUM_ARGUMENT_REGISTERS;
 #else
-    nStackSlots = (sizeof(TransitionBlock) + nStackBytes - TransitionBlock::GetOffsetOfArgumentRegisters()) / TARGET_POINTER_SIZE;
+    nStackSlots = (sizeof(TransitionBlock) + nStackBytes - TransitionBlock::GetOffsetOfFirstGCRefMapSlot()) / TARGET_POINTER_SIZE;
 #endif
 
     for (UINT pos = 0; pos < nStackSlots; pos++)
@@ -1041,7 +1025,7 @@ void CEECompileInfo::GetCallRefMap(CORINFO_METHOD_HANDLE hMethod, GCRefMapBuilde
             (TransitionBlock::GetOffsetOfArgumentRegisters() + ARGUMENTREGISTERS_SIZE - (pos + 1) * sizeof(TADDR)) :
             (TransitionBlock::GetOffsetOfArgs() + (pos - NUM_ARGUMENT_REGISTERS) * sizeof(TADDR));
 #else
-        ofs = TransitionBlock::GetOffsetOfArgumentRegisters() + pos * TARGET_POINTER_SIZE;
+        ofs = TransitionBlock::GetOffsetOfFirstGCRefMapSlot() + pos * TARGET_POINTER_SIZE;
 #endif
 
         CORCOMPILE_GCREFMAP_TOKENS token = *(CORCOMPILE_GCREFMAP_TOKENS *)(pFrame + ofs);
@@ -1084,7 +1068,7 @@ void CEECompileInfo::GetCallRefMap(CORINFO_METHOD_HANDLE hMethod, GCRefMapBuilde
             (TransitionBlock::GetOffsetOfArgumentRegisters() + ARGUMENTREGISTERS_SIZE - (pos + 1) * sizeof(TADDR)) :
             (TransitionBlock::GetOffsetOfArgs() + (pos - NUM_ARGUMENT_REGISTERS) * sizeof(TADDR));
 #else
-        ofs = TransitionBlock::GetOffsetOfArgumentRegisters() + pos * TARGET_POINTER_SIZE;
+        ofs = TransitionBlock::GetOffsetOfFirstGCRefMapSlot() + pos * TARGET_POINTER_SIZE;
 #endif
 
         if (token != 0)
@@ -1110,6 +1094,11 @@ void CEECompileInfo::CompressDebugInfo(
     STANDARD_VM_CONTRACT;
 
     CompressDebugInfo::CompressBoundariesAndVars(pOffsetMapping, iOffsetMapping, pNativeVarInfo, iNativeVarInfo, pDebugInfoBuffer, NULL);
+}
+
+ICorJitHost* CEECompileInfo::GetJitHost()
+{
+    return JitHost::getJitHost();
 }
 
 HRESULT CEECompileInfo::GetBaseJitFlags(
@@ -1308,27 +1297,6 @@ BOOL CEEPreloader::CanEmbedFunctionEntryPoint(
     STANDARD_VM_CONTRACT;
 
     MethodDesc * pMethod = GetMethod(methodHandle);
-    MethodDesc * pContext = GetMethod(contextHandle);
-
-    // IsRemotingInterceptedViaVirtualDispatch is a rather special case.
-    //
-    // Other remoting intercepts are implemented by one of:
-    //  (1) in DoPrestub (for non-virtual calls)
-    //  (2) by transparent proxy vtables, where all the entries in the vtable
-    //      go to the same code.
-    //
-    // However when calling virtual functions non-virtually the JIT interface
-    // pointer to the code for the function in a stub 
-    // (see GetNonVirtualEntryPointForVirtualMethod).  
-    // Thus we cannot embed non-virtual calls to these functions because we 
-    // don't save these stubs.  Unlike most other remoting stubs these ones 
-    // are NOT inserted by DoPrestub.
-    //
-    if (((accessFlags & CORINFO_ACCESS_THIS) == 0) &&
-        (pMethod->IsRemotingInterceptedViaVirtualDispatch()))
-    {
-        return FALSE;
-    }
 
     // Methods with native callable attribute are special , since 
     // they are used as LDFTN targets.Native Callable methods
@@ -1486,11 +1454,10 @@ HRESULT CEECompileInfo::GetFieldDef(CORINFO_FIELD_HANDLE fieldHandle,
     return S_OK;
 }
 
-void CEECompileInfo::EncodeModuleAsIndexes(CORINFO_MODULE_HANDLE  fromHandle,
-                                           CORINFO_MODULE_HANDLE  handle,
-                                           DWORD*                 pAssemblyIndex,
-                                           DWORD*                 pModuleIndex,
-                                           IMetaDataAssemblyEmit* pAssemblyEmit)
+void CEECompileInfo::EncodeModuleAsIndex(CORINFO_MODULE_HANDLE  fromHandle,
+                                         CORINFO_MODULE_HANDLE  handle,
+                                         DWORD*                 pIndex,
+                                         IMetaDataAssemblyEmit* pAssemblyEmit)
 {
     STANDARD_VM_CONTRACT;
 
@@ -1503,7 +1470,7 @@ void CEECompileInfo::EncodeModuleAsIndexes(CORINFO_MODULE_HANDLE  fromHandle,
     Assembly *assembly = module->GetAssembly();
 
     if (assembly == fromAssembly)
-        *pAssemblyIndex = 0;
+        *pIndex = 0;
     else
     {
         UPTR    result;
@@ -1549,17 +1516,9 @@ void CEECompileInfo::EncodeModuleAsIndexes(CORINFO_MODULE_HANDLE  fromHandle,
             }
         }
 
-        *pAssemblyIndex = RidFromToken(token);
+        *pIndex = RidFromToken(token);
 
         pRefCache->m_sAssemblyRefMap.InsertValue((UPTR) assembly, (UPTR)token);
-    }
-
-    if (module == assembly->GetManifestModule())
-        *pModuleIndex = 0;
-    else
-    {
-        _ASSERTE(module->GetModuleRef() != mdFileNil);
-        *pModuleIndex = RidFromToken(module->GetModuleRef());
     }
 
     COOPERATIVE_TRANSITION_END();
@@ -3091,7 +3050,7 @@ HRESULT NGenModulePdbWriter::WritePDBData()
 	// Currently DiaSymReader does not work properly generating NGEN PDBS unless 
 	// the DLL whose PDB is being generated ends in .ni.*.   Unfortunately, readyToRun
 	// images do not follow this convention and end up producing bad PDBS.  To fix
-	// this (without changing diasymreader.dll which ships indepdendently of .Net Core)
+	// this (without changing diasymreader.dll which ships indepdendently of .NET Core)
 	// we copy the file to somethign with this convention before generating the PDB
 	// and delete it when we are done.  
 	SString dllPath = pLoadedLayout->GetPath();
@@ -4493,7 +4452,7 @@ HRESULT __stdcall CreatePdb(CORINFO_ASSEMBLY_HANDLE hAssembly, BSTR pNativeImage
     {
         pModule = moduleIterator.GetModule();
 
-        if (pModule->HasNativeImage() || pModule->IsReadyToRun())
+        if (pModule->HasNativeOrReadyToRunImage())
         {
 #if !defined(NO_NGENPDB)
             IfFailThrow(pdbWriter.WritePDBDataForModule(pModule));
@@ -4610,11 +4569,6 @@ CEEPreloader::CEEPreloader(Module *pModule,
     GetAppDomain()->ToCompilationDomain()->SetTargetImage(m_image, this);
 
     m_methodCompileLimit = pModule->GetMDImport()->GetCountWithTokenKind(mdtMethodDef) * 10;
-
-#ifdef FEATURE_FULL_NGEN
-    m_fSpeculativeTriage = FALSE;
-    m_fDictionariesPopulated = FALSE;
-#endif
 }
 
 CEEPreloader::~CEEPreloader()
@@ -4717,38 +4671,14 @@ CORINFO_METHOD_HANDLE CEEPreloader::NextUncompiledMethod()
     // that we are about to save.
     if (m_uncompiledMethods.GetCount() == 0)
     {
-#ifdef FEATURE_FULL_NGEN
-        if (!m_fSpeculativeTriage)
-        {
-            // We take one shot at smarter elimination of speculative instantiations
-            // that are guaranteed to be found in other modules
-            TriageSpeculativeInstantiations();
-            m_fSpeculativeTriage = TRUE;
-        }
-#endif
+        // The subsequent populations are done in non-expansive way (won't load new types)
+        m_image->GetModule()->PrepopulateDictionaries(m_image, TRUE);
 
-        if (m_uncompiledMethods.GetCount() == 0)
-        {
-#ifdef FEATURE_FULL_NGEN
-            if (!m_fDictionariesPopulated)
-            {
-                // Prepopulate dictionaries. Only the first population is done in expansive way.
-                m_image->GetModule()->PrepopulateDictionaries(m_image, FALSE);
-                m_fDictionariesPopulated = TRUE;
-            }
-            else
-#endif
-            {
-                // The subsequent populations are done in non-expansive way (won't load new types)
-                m_image->GetModule()->PrepopulateDictionaries(m_image, TRUE);
-            }
-            
-            // Make sure that we have generated code for all instantiations that we are going to save
-            // The new items that we encounter here were most likely side effects of verification or failed inlining,
-            // so do not try to save them eagerly.
-            while (TriageForZap(FALSE)) {
-                // Loop as long as new types are added
-            }
+        // Make sure that we have generated code for all instantiations that we are going to save
+        // The new items that we encounter here were most likely side effects of verification or failed inlining,
+        // so do not try to save them eagerly.
+        while (TriageForZap(FALSE)) {
+            // Loop as long as new types are added
         }
     }
 
@@ -5834,7 +5764,7 @@ void CEEPreloader::ExpandTypeDependencies(TypeHandle th)
         TriageTypeForZap(intIterator.GetInterface(), TRUE);
     }
     
-    // Make sure aprox types for all fields are saved
+    // Make sure approx types for all fields are saved
     ApproxFieldDescIterator fdIterator(pMT, ApproxFieldDescIterator::ALL_FIELDS);
     FieldDesc* pFD;
     while ((pFD = fdIterator.Next()) != NULL)
@@ -6974,11 +6904,6 @@ void CompilationDomain::Init()
 #endif
 
     SetCompilationDomain();
-
-
-#ifdef _DEBUG 
-    g_pConfig->DisableGenerateStubForHost();
-#endif
 }
 
 HRESULT CompilationDomain::AddDependencyEntry(PEAssembly *pFile,
@@ -7291,8 +7216,6 @@ void ReportMissingDependency(Exception * e)
 PEAssembly *CompilationDomain::BindAssemblySpec(
     AssemblySpec *pSpec,
     BOOL fThrowOnFileNotFound,
-    BOOL fRaisePrebindEvents,
-    StackCrawlMark *pCallerStackMark,
     BOOL fUseHostBinderIfAvailable)
 {
     PEAssembly *pFile = NULL;
@@ -7309,8 +7232,6 @@ PEAssembly *CompilationDomain::BindAssemblySpec(
         pFile = AppDomain::BindAssemblySpec(
             pSpec,
             fThrowOnFileNotFound,
-            fRaisePrebindEvents,
-            pCallerStackMark,
             fUseHostBinderIfAvailable);
     }
     EX_HOOK

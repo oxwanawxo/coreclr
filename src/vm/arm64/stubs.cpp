@@ -1071,7 +1071,7 @@ void emitCOMStubCall (ComCallMethodDesc *pCOMMethod, PCODE target)
 #endif // FEATURE_COMINTEROP
 
 
-void JIT_ProfilerEnterLeaveTailcallStub(UINT_PTR ProfilerHandle)
+void STDMETHODCALLTYPE JIT_ProfilerEnterLeaveTailcallStub(UINT_PTR ProfilerHandle)
 {
     _ASSERTE(!"ARM64:NYI");
 }
@@ -1084,7 +1084,6 @@ void JIT_TailCall()
 #if !defined(DACCESS_COMPILE) && !defined(CROSSGEN_COMPILE)
 void InitJITHelpers1()
 {
-#ifdef FEATURE_PAL // TODO
     STANDARD_VM_CONTRACT;
 
     _ASSERTE(g_SystemInfo.dwNumberOfProcessors != 0);
@@ -1107,13 +1106,9 @@ void InitJITHelpers1()
             ECall::DynamicallyAssignFCallImpl(GetEEFuncEntryPoint(AllocateString_MP_FastPortable), ECall::FastAllocateString);
         }
     }
-#endif
 
     JIT_UpdateWriteBarrierState(GCHeapUtilities::IsServerHeap());
 }
-#ifndef FEATURE_PAL // TODO-ARM64-WINDOWS #13592
-EXTERN_C void JIT_UpdateWriteBarrierState(bool) {}
-#endif
 
 #else
 EXTERN_C void JIT_UpdateWriteBarrierState(bool) {}
@@ -1218,14 +1213,6 @@ AdjustContextForVirtualStub(
     return TRUE;
 }
 #endif // !(DACCESS_COMPILE && CROSSGEN_COMPILE)
-
-#ifdef FEATURE_COMINTEROP
-extern "C" void GenericComPlusCallStub(void)
-{
-    // This is not required for coreclr scenarios
-    throw "GenericComPlusCallStub is not implemented yet.";    
-}
-#endif // FEATURE_COMINTEROP
 
 UMEntryThunk * UMEntryThunk::Decode(void *pCallback)
 {
@@ -2037,7 +2024,7 @@ PCODE DynamicHelpers::CreateReturnConst(LoaderAllocator * pAllocator, TADDR arg)
 
     BEGIN_DYNAMIC_HELPER_EMIT(16);
  
-    // ldr x0, <lable>
+    // ldr x0, <label>
     *(DWORD*)p = 0x58000040;
     p += 4;
     

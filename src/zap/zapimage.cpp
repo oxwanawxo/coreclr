@@ -149,7 +149,6 @@ void ZapImage::InitializeSections()
     m_pStubDispatchDataSection->Place(m_pStubDispatchDataTable);
 
     m_pImportTable = new (GetHeap()) ZapImportTable(this);
-    m_pImportTableSection->Place(m_pImportTable);
 
     m_pGCInfoTable = new (GetHeap()) ZapGCInfoTable(this);
     m_pExceptionInfoLookupTable = new (GetHeap()) ZapExceptionInfoLookupTable(this);
@@ -229,7 +228,6 @@ void ZapImage::InitializeSectionsForReadyToRun()
     }
 
     m_pImportTable = new (GetHeap()) ZapImportTable(this);
-    m_pImportTableSection->Place(m_pImportTable);
 
     for (int i=0; i<ZapImportSectionType_Total; i++)
     {
@@ -572,7 +570,8 @@ void ZapImage::AllocateVirtualSections()
 #endif // defined(WIN64EXCEPTIONS)
 
         m_pPreloadSections[CORCOMPILE_SECTION_READONLY_WARM] = NewVirtualSection(pTextSection, IBCProfiledSection | WarmRange | ReadonlySection, TARGET_POINTER_SIZE);
-        m_pPreloadSections[CORCOMPILE_SECTION_READONLY_VCHUNKS_AND_DICTIONARY] = NewVirtualSection(pTextSection, IBCProfiledSection | WarmRange | ReadonlySection, TARGET_POINTER_SIZE);
+        m_pPreloadSections[CORCOMPILE_SECTION_READONLY_VCHUNKS] = NewVirtualSection(pTextSection, IBCProfiledSection | WarmRange | ReadonlySection, TARGET_POINTER_SIZE);
+        m_pPreloadSections[CORCOMPILE_SECTION_READONLY_DICTIONARY] = NewVirtualSection(pTextSection, IBCProfiledSection | WarmRange | ReadonlySection, TARGET_POINTER_SIZE);
 
         //
         // GC Info for methods which were not touched in profiling
@@ -1026,8 +1025,8 @@ HANDLE ZapImage::GenerateFile(LPCWSTR wszOutputFileName, CORCOMPILE_NGEN_SIGNATU
     {    
         // Write the debug directory entry for the NGEN PDB
         RSDS rsds = {0};
-        
-        rsds.magic = 'SDSR';
+
+        rsds.magic = VAL32(0x53445352); // "SDSR";
         rsds.age = 1;
         // our PDB signature will be the same as our NGEN signature.  
         // However we want the printed version of the GUID to be be the same as the
@@ -1081,9 +1080,9 @@ HANDLE ZapImage::GenerateFile(LPCWSTR wszOutputFileName, CORCOMPILE_NGEN_SIGNATU
 }
 
 
-HANDLE ZapImage::SaveImage(LPCWSTR wszOutputFileName, CORCOMPILE_NGEN_SIGNATURE * pNativeImageSig)
+HANDLE ZapImage::SaveImage(LPCWSTR wszOutputFileName, LPCWSTR wszDllPath, CORCOMPILE_NGEN_SIGNATURE * pNativeImageSig)
 {
-    if (!IsReadyToRunCompilation())
+    if(!IsReadyToRunCompilation() || IsLargeVersionBubbleEnabled())
     {
         OutputManifestMetadata();
     }
@@ -1094,7 +1093,7 @@ HANDLE ZapImage::SaveImage(LPCWSTR wszOutputFileName, CORCOMPILE_NGEN_SIGNATURE 
     // that native images are resoure-only DLLs.  It is important to NOT
     // be a resource-only DLL because those DLL's PDBS are not put up on the
     // symbol server and we want NEN PDBS to be placed there.  
-    ZapPEExports* exports = new(GetHeap()) ZapPEExports(wszOutputFileName);
+    ZapPEExports* exports = new(GetHeap()) ZapPEExports(wszDllPath);
     m_pDebugSection->Place(exports);
     SetDirectoryEntry(IMAGE_DIRECTORY_ENTRY_EXPORT, exports);
     
@@ -1164,8 +1163,6 @@ void ZapImage::PrintStats(LPCWSTR wszOutputFileName)
     ACCUM_SIZE(m_stats->m_dynamicInfoDelayListSize, m_pDelayLoadInfoDelayListSectionEager);
     ACCUM_SIZE(m_stats->m_dynamicInfoDelayListSize, m_pDelayLoadInfoDelayListSectionHot);
     ACCUM_SIZE(m_stats->m_dynamicInfoDelayListSize, m_pDelayLoadInfoDelayListSectionCold);
-
-    ACCUM_SIZE(m_stats->m_importTableSize, m_pImportTable);
 
     ACCUM_SIZE(m_stats->m_debuggingTableSize, m_pDebugSection);
     ACCUM_SIZE(m_stats->m_headerSectionSize, m_pGCSection);
@@ -1538,6 +1535,10 @@ void ZapImage::OutputTables()
 #endif // _DEBUG
         {
             dllCharacteristics |= IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
+#ifdef _TARGET_64BIT_
+            // Large address aware, required for High Entry VA, is always enabled for 64bit native images.
+            dllCharacteristics |= IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA;
+#endif
         }
 
         SetDllCharacteristics(dllCharacteristics);
@@ -1834,6 +1835,10 @@ void ZapImage::Compile()
         OutputTypesTableForReadyToRun(m_pMDImport);
         OutputInliningTableForReadyToRun();
         OutputProfileDataForReadyToRun();
+        if (IsLargeVersionBubbleEnabled())
+        {
+            OutputManifestMetadataForReadyToRun();
+        }
     }
     else
 #endif
@@ -2093,17 +2098,17 @@ ZapImage::CompileStatus ZapImage::TryCompileMethodWorker(CORINFO_METHOD_HANDLE h
     }
     else  // we are compiling methods for the cold region
     {
+        // Retrieve any information that we have about a previous compilation attempt of this method
+        const ProfileDataHashEntry* pEntry = profileDataHashTable.LookupPtr(md);
+        
         // When Partial Ngen is specified we will omit the AOT native code for every
-        // method that was not executed based on the profile data.
+        // method that does not have profile data
         //
-        if (m_zapper->m_pOpt->m_fPartialNGen)
+        if (pEntry == nullptr && m_zapper->m_pOpt->m_fPartialNGen)
         {
             // returning COMPILE_COLD_EXCLUDED excludes this method from the AOT native image
             return COMPILE_COLD_EXCLUDED;
         }
-
-        // Retrieve any information that we have about a previous compilation attempt of this method
-        const ProfileDataHashEntry* pEntry = profileDataHashTable.LookupPtr(md);
 
         if (pEntry != nullptr)
         { 
@@ -2123,13 +2128,6 @@ ZapImage::CompileStatus ZapImage::TryCompileMethodWorker(CORINFO_METHOD_HANDLE h
 
     CompileStatus result = NOT_COMPILED;
     
-    // This is an entry point into the JIT which can call back into the VM. There are methods in the
-    // JIT that will swallow exceptions and only the VM guarentees that exceptions caught or swallowed
-    // with restore the debug state of the stack guards. So it is necessary to ensure that the status
-    // is restored on return from the call into the JIT, which this light-weight transition macro
-    // will do.
-    REMOVE_STACK_GUARD;
-
     CORINFO_MODULE_HANDLE module;
 
     // We only compile IL_STUBs from the current assembly
@@ -2179,7 +2177,7 @@ ZapImage::CompileStatus ZapImage::TryCompileMethodWorker(CORINFO_METHOD_HANDLE h
             // We skip the compilation of such methods and we don't want to
             // issue a warning or error
             //
-            if ((hrException == E_NOTIMPL) || (hrException == IDS_CLASSLOAD_GENERAL))
+            if ((hrException == E_NOTIMPL) || (hrException == (HRESULT)IDS_CLASSLOAD_GENERAL))
             {
                 result = NOT_COMPILED;
                 level = CORZAP_LOGLEVEL_INFO;

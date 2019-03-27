@@ -40,7 +40,7 @@
 // To resolve this problem, SOS now abstracts the target behind the IMachine interface, and uses 
 // calls on IMachine to take target-specific actions. It implements X86Machine, ARMMachine, and 
 // AMD64Machine. An instance of these exists in each appropriate host (e.g. the X86 version of SOS
-// contains instaces of X86Machine and ARMMachine, the ARM version contains an instance of 
+// contains instances of X86Machine and ARMMachine, the ARM version contains an instance of 
 // ARMMachine, and the AMD64 version contains an instance of AMD64Machine). The code included in 
 // each version if determined by the SosTarget*** MSBuild symbols, and SOS_TARGET_*** conditional 
 // compilation symbols (as specified in sos.targets).
@@ -122,9 +122,7 @@
 #include "ExpressionNode.h"
 #include "WatchCmd.h"
 
-#include <set>
 #include <algorithm>
-#include <vector>
 
 #include "tls.h"
 
@@ -147,6 +145,10 @@ const PROCESSINFOCLASS ProcessVmCounters = static_cast<PROCESSINFOCLASS>(3);
 
 #endif // !FEATURE_PAL
 
+#include <set>
+#include <vector>
+#include <map>
+
 BOOL CallStatus;
 BOOL ControlC = FALSE;
 
@@ -155,7 +157,6 @@ WCHAR g_mdName[mdNameLen];
 
 #ifndef FEATURE_PAL
 HMODULE g_hInstance = NULL;
-#include <vector>
 #include <algorithm>
 #endif // !FEATURE_PAL
 
@@ -1258,14 +1259,6 @@ DECLARE_API(DumpClass)
             ExtOut("NumThreadStaticFields: %x\n", vMethodTableFields.wNumThreadStaticFields);
         }
 
-
-        if (vMethodTableFields.wContextStaticsSize)
-        {
-            ExtOut("ContextStaticOffset: %x\n", vMethodTableFields.wContextStaticOffset);
-            ExtOut("ContextStaticsSize:  %x\n", vMethodTableFields.wContextStaticsSize);
-        }
-
-    
         if (vMethodTableFields.wNumInstanceFields + vMethodTableFields.wNumStaticFields > 0)
         {
             DisplayFields(methodTable, &mtdata, &vMethodTableFields, NULL, TRUE, FALSE);
@@ -1338,6 +1331,9 @@ DECLARE_API(DumpMT)
         return Status;
     }
 
+    DacpMethodTableCollectibleData vMethTableCollectible;
+    vMethTableCollectible.Request(g_sos, TO_CDADDR(dwStartAddr));
+
     table.WriteRow("EEClass:", EEClassPtr(vMethTable.Class));
 
     table.WriteRow("Module:", ModulePtr(vMethTable.Module));
@@ -1349,6 +1345,15 @@ DECLARE_API(DumpMT)
     FileNameForModule(TO_TADDR(vMethTable.Module), fileName);
     table.WriteRow("mdToken:", Pointer(vMethTable.cl));
     table.WriteRow("File:", fileName[0] ? fileName : W("Unknown Module"));
+
+    if (vMethTableCollectible.LoaderAllocatorObjectHandle != NULL)
+    {
+        TADDR loaderAllocator;
+        if (SUCCEEDED(MOVE(loaderAllocator, vMethTableCollectible.LoaderAllocatorObjectHandle)))
+        {
+            table.WriteRow("LoaderAllocator:", ObjectPtr(loaderAllocator));
+        }
+    }
 
     table.WriteRow("BaseSize:", PrefixHex(vMethTable.BaseSize));
     table.WriteRow("ComponentSize:", PrefixHex(vMethTable.ComponentSize));
@@ -2053,6 +2058,134 @@ DECLARE_API(DumpObj)
     return Status;
 }
 
+/**********************************************************************\
+* Routine Description:                                                 *
+*                                                                      *
+*    This function is called to dump the contents of a delegate from a *
+*    given address.                                                    *
+*                                                                      *
+\**********************************************************************/
+
+DECLARE_API(DumpDelegate)
+{
+    INIT_API();
+    MINIDUMP_NOT_SUPPORTED();
+
+    try
+    {
+        BOOL dml = FALSE;
+        DWORD_PTR dwAddr = 0;
+
+        CMDOption option[] =
+        {   // name, vptr, type, hasValue
+            {"/d", &dml, COBOOL, FALSE}
+        };
+        CMDValue arg[] =
+        {   // vptr, type
+            {&dwAddr, COHEX}
+        };
+        size_t nArg;
+        if (!GetCMDOption(args, option, _countof(option), arg, _countof(arg), &nArg))
+        {
+            return Status;
+        }
+        if (nArg != 1)
+        {
+            ExtOut("Usage: !DumpDelegate <delegate object address>\n");
+            return Status;
+        }
+
+        EnableDMLHolder dmlHolder(dml);
+        CLRDATA_ADDRESS delegateAddr = TO_CDADDR(dwAddr);
+
+        if (!sos::IsObject(delegateAddr))
+        {
+            ExtOut("Invalid object.\n");
+        }
+        else
+        {
+            sos::Object delegateObj = TO_TADDR(delegateAddr);
+            if (!IsDerivedFrom(TO_CDADDR(delegateObj.GetMT()), W("System.Delegate")))
+            {
+                ExtOut("Object of type '%S' is not a delegate.", delegateObj.GetTypeName());
+            }
+            else
+            {
+                ExtOut("Target           Method           Name\n");
+
+                std::vector<CLRDATA_ADDRESS> delegatesRemaining;
+                delegatesRemaining.push_back(delegateAddr);
+                while (delegatesRemaining.size() > 0)
+                {
+                    delegateAddr = delegatesRemaining.back();
+                    delegatesRemaining.pop_back();
+                    delegateObj = TO_TADDR(delegateAddr);
+
+                    int offset;
+                    if ((offset = GetObjFieldOffset(delegateObj.GetAddress(), delegateObj.GetMT(), W("_target"))) != 0)
+                    {
+                        CLRDATA_ADDRESS target;
+                        MOVE(target, delegateObj.GetAddress() + offset);
+
+                        if ((offset = GetObjFieldOffset(delegateObj.GetAddress(), delegateObj.GetMT(), W("_invocationList"))) != 0)
+                        {
+                            CLRDATA_ADDRESS invocationList;
+                            MOVE(invocationList, delegateObj.GetAddress() + offset);
+
+                            if ((offset = GetObjFieldOffset(delegateObj.GetAddress(), delegateObj.GetMT(), W("_invocationCount"))) != 0)
+                            {
+                                int invocationCount;
+                                MOVE(invocationCount, delegateObj.GetAddress() + offset);
+
+                                if (invocationList == NULL)
+                                {
+                                    CLRDATA_ADDRESS md;
+                                    DMLOut("%s ", DMLObject(target));
+                                    if (TryGetMethodDescriptorForDelegate(delegateAddr, &md))
+                                    {
+                                        DMLOut("%s ", DMLMethodDesc(md));
+                                        NameForMD_s((DWORD_PTR)md, g_mdName, mdNameLen);
+                                        ExtOut("%S\n", g_mdName);
+                                    }
+                                    else
+                                    {
+                                        ExtOut("(unknown)\n");
+                                    }
+                                }
+                                else if (sos::IsObject(invocationList, false))
+                                {
+                                    DacpObjectData objData;
+                                    if (objData.Request(g_sos, invocationList) == S_OK &&
+                                        objData.ObjectType == OBJ_ARRAY &&
+                                        invocationCount <= (int)objData.dwNumComponents)
+                                    {
+                                        for (int i = 0; i < invocationCount; i++)
+                                        {
+                                            CLRDATA_ADDRESS elementPtr;
+                                            MOVE(elementPtr, TO_CDADDR(objData.ArrayDataPtr + (i * objData.dwComponentSize)));
+                                            if (elementPtr != NULL && sos::IsObject(elementPtr, false))
+                                            {
+                                                delegatesRemaining.push_back(elementPtr);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return S_OK;
+    }
+    catch (const sos::Exception &e)
+    {
+        ExtOut("%s\n", e.what());
+        return E_FAIL;
+    }
+}
+
 CLRDATA_ADDRESS isExceptionObj(CLRDATA_ADDRESS mtObj)
 {
     // We want to follow back until we get the mt for System.Exception
@@ -2230,7 +2363,7 @@ Done:
 // Overload that mirrors the code above when the ExceptionObjectData was already retrieved from LS
 BOOL IsAsyncException(const DacpExceptionObjectData & excData)
 {
-    if (excData.XCode != EXCEPTION_COMPLUS)
+    if ((DWORD)excData.XCode != EXCEPTION_COMPLUS)
         return TRUE;
 
     HRESULT ehr = excData.HResult;
@@ -3253,7 +3386,10 @@ DECLARE_API(EEHeap)
         // The first one is the system domain.
         ExtOut("Loader Heap:\n");
         IfFailRet(PrintDomainHeapInfo("System Domain", adsData.systemDomain, &allHeapSize, &wasted));
-        IfFailRet(PrintDomainHeapInfo("Shared Domain", adsData.sharedDomain, &allHeapSize, &wasted));
+        if (adsData.sharedDomain != NULL)
+        {
+            IfFailRet(PrintDomainHeapInfo("Shared Domain", adsData.sharedDomain, &allHeapSize, &wasted));
+        }
         
         ArrayHolder<CLRDATA_ADDRESS> pArray = new NOTHROW CLRDATA_ADDRESS[adsData.DomainCount];
 
@@ -4101,6 +4237,577 @@ private:
 /**********************************************************************\
 * Routine Description:                                                 *
 *                                                                      *
+*    This function dumps async state machines on GC heap,              *
+*    displaying details about each async operation found.              *
+*    (May not work if GC is in progress.)                              *
+*                                                                      *
+\**********************************************************************/
+
+void ResolveContinuation(CLRDATA_ADDRESS* contAddr)
+{
+    // Ideally this continuation is itself an async method box.
+    sos::Object contObj = TO_TADDR(*contAddr);
+    if (GetObjFieldOffset(contObj.GetAddress(), contObj.GetMT(), W("StateMachine")) == 0)
+    {
+        // It was something else.
+
+        // If it's a standard task continuation, get its task field.
+        int offset;
+        if ((offset = GetObjFieldOffset(contObj.GetAddress(), contObj.GetMT(), W("m_task"))) != 0)
+        {
+            MOVE(*contAddr, contObj.GetAddress() + offset);
+            if (sos::IsObject(*contAddr, false))
+            {
+                contObj = TO_TADDR(*contAddr);
+            }
+        }
+        else
+        {
+            // If it's storing an action wrapper, try to follow to that action's target.
+            if ((offset = GetObjFieldOffset(contObj.GetAddress(), contObj.GetMT(), W("m_action"))) != 0)
+            {
+                MOVE(*contAddr, contObj.GetAddress() + offset);
+                if (sos::IsObject(*contAddr, false))
+                {
+                    contObj = TO_TADDR(*contAddr);
+                }
+            }
+
+            // If we now have an Action, try to follow through to the delegate's target.
+            if ((offset = GetObjFieldOffset(contObj.GetAddress(), contObj.GetMT(), W("_target"))) != 0)
+            {
+                MOVE(*contAddr, contObj.GetAddress() + offset);
+                if (sos::IsObject(*contAddr, false))
+                {
+                    contObj = TO_TADDR(*contAddr);
+
+                    // In some cases, the delegate's target might be a ContinuationWrapper, in which case we want to unwrap that as well.
+                    if (_wcsncmp(contObj.GetTypeName(), W("System.Runtime.CompilerServices.AsyncMethodBuilderCore+ContinuationWrapper"), 74) == 0 &&
+                        (offset = GetObjFieldOffset(contObj.GetAddress(), contObj.GetMT(), W("_continuation"))) != 0)
+                    {
+                        MOVE(*contAddr, contObj.GetAddress() + offset);
+                        if (sos::IsObject(*contAddr, false))
+                        {
+                            contObj = TO_TADDR(*contAddr);
+                            if ((offset = GetObjFieldOffset(contObj.GetAddress(), contObj.GetMT(), W("_target"))) != 0)
+                            {
+                                MOVE(*contAddr, contObj.GetAddress() + offset);
+                                if (sos::IsObject(*contAddr, false))
+                                {
+                                    contObj = TO_TADDR(*contAddr);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Use whatever object we ended with.
+        *contAddr = contObj.GetAddress();
+    }
+}
+
+bool TryGetContinuation(CLRDATA_ADDRESS addr, CLRDATA_ADDRESS mt, CLRDATA_ADDRESS* contAddr)
+{
+    // Get the continuation field from the task.
+    int offset = GetObjFieldOffset(addr, mt, W("m_continuationObject"));
+    if (offset != 0)
+    {
+        DWORD_PTR contObjPtr;
+        MOVE(contObjPtr, addr + offset);
+        if (sos::IsObject(contObjPtr, false))
+        {
+            *contAddr = TO_CDADDR(contObjPtr);
+            ResolveContinuation(contAddr);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+struct AsyncRecord
+{
+    CLRDATA_ADDRESS Address;
+    CLRDATA_ADDRESS MT;
+    DWORD Size;
+    CLRDATA_ADDRESS StateMachineAddr;
+    CLRDATA_ADDRESS StateMachineMT;
+    BOOL FilteredByOptions;
+    BOOL IsStateMachine;
+    BOOL IsValueType;
+    BOOL IsTopLevel;
+    int TaskStateFlags;
+    int StateValue;
+    std::vector<CLRDATA_ADDRESS> Continuations;
+};
+
+bool AsyncRecordIsCompleted(AsyncRecord& ar)
+{
+    const int TASK_STATE_COMPLETED_MASK = 0x1600000;
+    return (ar.TaskStateFlags & TASK_STATE_COMPLETED_MASK) != 0;
+}
+
+const char* GetAsyncRecordStatusDescription(AsyncRecord& ar)
+{
+    const int TASK_STATE_RAN_TO_COMPLETION = 0x1000000;
+    const int TASK_STATE_FAULTED = 0x200000;
+    const int TASK_STATE_CANCELED = 0x400000;
+
+    if ((ar.TaskStateFlags & TASK_STATE_RAN_TO_COMPLETION) != 0) return "Success";
+    if ((ar.TaskStateFlags & TASK_STATE_FAULTED) != 0) return "Failed";
+    if ((ar.TaskStateFlags & TASK_STATE_CANCELED) != 0) return "Canceled";
+    return "Pending";
+}
+
+void ExtOutTaskDelegateMethod(sos::Object& obj)
+{
+    DacpFieldDescData actionField;
+    int offset = GetObjFieldOffset(obj.GetAddress(), obj.GetMT(), W("m_action"), TRUE, &actionField);
+    if (offset != 0)
+    {
+        CLRDATA_ADDRESS actionAddr;
+        MOVE(actionAddr, obj.GetAddress() + offset);
+        CLRDATA_ADDRESS actionMD;
+        if (actionAddr != NULL && TryGetMethodDescriptorForDelegate(actionAddr, &actionMD))
+        {
+            NameForMD_s((DWORD_PTR)actionMD, g_mdName, mdNameLen);
+            ExtOut("(%S) ", g_mdName);
+        }
+    }
+}
+
+void ExtOutTaskStateFlagsDescription(int stateFlags)
+{
+    if (stateFlags == 0) return;
+
+    ExtOut("State Flags: ");
+
+    // TaskCreationOptions.*
+    if ((stateFlags & 0x01) != 0) ExtOut("PreferFairness ");
+    if ((stateFlags & 0x02) != 0) ExtOut("LongRunning ");
+    if ((stateFlags & 0x04) != 0) ExtOut("AttachedToParent ");
+    if ((stateFlags & 0x08) != 0) ExtOut("DenyChildAttach ");
+    if ((stateFlags & 0x10) != 0) ExtOut("HideScheduler ");
+    if ((stateFlags & 0x40) != 0) ExtOut("RunContinuationsAsynchronously ");
+
+    // InternalTaskOptions.*
+    if ((stateFlags & 0x0200) != 0) ExtOut("ContinuationTask ");
+    if ((stateFlags & 0x0400) != 0) ExtOut("PromiseTask ");
+    if ((stateFlags & 0x1000) != 0) ExtOut("LazyCancellation ");
+    if ((stateFlags & 0x2000) != 0) ExtOut("QueuedByRuntime ");
+    if ((stateFlags & 0x4000) != 0) ExtOut("DoNotDispose ");
+
+    // TASK_STATE_*
+    if ((stateFlags & 0x10000) != 0) ExtOut("STARTED ");
+    if ((stateFlags & 0x20000) != 0) ExtOut("DELEGATE_INVOKED ");
+    if ((stateFlags & 0x40000) != 0) ExtOut("DISPOSED ");
+    if ((stateFlags & 0x80000) != 0) ExtOut("EXCEPTIONOBSERVEDBYPARENT ");
+    if ((stateFlags & 0x100000) != 0) ExtOut("CANCELLATIONACKNOWLEDGED ");
+    if ((stateFlags & 0x200000) != 0) ExtOut("FAULTED ");
+    if ((stateFlags & 0x400000) != 0) ExtOut("CANCELED ");
+    if ((stateFlags & 0x800000) != 0) ExtOut("WAITING_ON_CHILDREN ");
+    if ((stateFlags & 0x1000000) != 0) ExtOut("RAN_TO_COMPLETION ");
+    if ((stateFlags & 0x2000000) != 0) ExtOut("WAITINGFORACTIVATION ");
+    if ((stateFlags & 0x4000000) != 0) ExtOut("COMPLETION_RESERVED ");
+    if ((stateFlags & 0x8000000) != 0) ExtOut("THREAD_WAS_ABORTED ");
+    if ((stateFlags & 0x10000000) != 0) ExtOut("WAIT_COMPLETION_NOTIFICATION ");
+    if ((stateFlags & 0x20000000) != 0) ExtOut("EXECUTIONCONTEXT_IS_NULL ");
+    if ((stateFlags & 0x40000000) != 0) ExtOut("TASKSCHEDULED_WAS_FIRED ");
+
+    ExtOut("\n");
+}
+
+DECLARE_API(DumpAsync)
+{
+    INIT_API();
+    MINIDUMP_NOT_SUPPORTED();
+    if (!g_snapshot.Build())
+    {
+        ExtOut("Unable to build snapshot of the garbage collector state\n");
+        return E_FAIL;
+    }
+
+    try
+    {
+        // Process command-line arguments.
+        size_t nArg = 0;
+        TADDR mt = NULL, addr = NULL;
+        ArrayHolder<char> ansiType = NULL;
+        ArrayHolder<WCHAR> type = NULL;
+        BOOL dml = FALSE, includeCompleted = FALSE, includeStacks = FALSE, includeRoots = FALSE, includeAllTasks = FALSE, dumpFields = FALSE;
+        CMDOption option[] =
+        {   // name, vptr, type, hasValue
+            { "-addr", &addr, COHEX, TRUE },                // dump only the async object at the specified address
+            { "-mt", &mt, COHEX, TRUE },                        // dump only async objects with a given MethodTable
+            { "-type", &ansiType, COSTRING, TRUE },             // dump only async objects that contain the specified type substring
+            { "-tasks", &includeAllTasks, COBOOL, FALSE },      // include all tasks that can be found on the heap, not just async methods
+            { "-completed", &includeCompleted, COBOOL, FALSE }, // include async objects that are in a completed state
+            { "-fields", &dumpFields, COBOOL, FALSE },          // show relevant fields of found async objects
+            { "-stacks", &includeStacks, COBOOL, FALSE },       // gather and output continuation/stack information
+            { "-roots", &includeRoots, COBOOL, FALSE },         // gather and output GC root information
+#ifndef FEATURE_PAL
+            { "/d", &dml, COBOOL, FALSE },                      // Debugger Markup Language
+#endif
+        };
+        if (!GetCMDOption(args, option, _countof(option), NULL, 0, &nArg) || nArg != 0)
+        {
+            sos::Throw<sos::Exception>(
+                "Usage: DumpAsync [-addr ObjectAddr] [-mt MethodTableAddr] [-type TypeName] [-tasks] [-completed] [-fields] [-stacks] [-roots]\n"
+                "[-addr ObjectAddr]     => Only display the async object at the specified address.\n"
+                "[-mt MethodTableAddr]  => Only display top-level async objects with the specified method table address.\n"
+                "[-type TypeName]       => Only display top-level async objects whose type name includes the specified substring.\n"
+                "[-tasks]               => Include Task and Task-derived objects, in addition to any state machine objects found.\n"
+                "[-completed]           => Include async objects that represent completed operations but that are still on the heap.\n"
+                "[-fields]              => Show the fields of state machines.\n"
+                "[-stacks]              => Gather, output, and consolidate based on continuation chains / async stacks for discovered async objects.\n"
+                "[-roots]               => Perform a gcroot on each rendered async object.\n"
+                );
+        }
+        if (ansiType != NULL)
+        {
+            size_t ansiTypeLen = strlen(ansiType) + 1;
+            type = new WCHAR[ansiTypeLen];
+            MultiByteToWideChar(CP_ACP, 0, ansiType, -1, type, (int)ansiTypeLen);
+        }
+        
+        EnableDMLHolder dmlHolder(dml);
+        BOOL hasTypeFilter = mt != NULL || ansiType != NULL || addr != NULL;
+
+        // Display a message if the heap isn't verified.
+        sos::GCHeap gcheap;
+        if (!gcheap.AreGCStructuresValid())
+        {
+            DisplayInvalidStructuresMessage();
+        }
+
+        // Walk each heap object looking for async state machine objects.  As we're targeting .NET Core 2.1+, all such objects
+        // will be Task or Task-derived types.
+        std::map<CLRDATA_ADDRESS, AsyncRecord> asyncRecords;
+        for (sos::ObjectIterator itr = gcheap.WalkHeap(); !IsInterrupt() && itr != NULL; ++itr)
+        {
+            // Skip objects too small to be state machines or tasks, avoiding some compiler-generated caching data structures.
+            if (itr->GetSize() <= 24) 
+            {
+                continue;
+            }
+
+            // Match only async objects.
+            if (includeAllTasks)
+            {
+                // If the user has selected to include all tasks and not just async state machine boxes, we simply need to validate
+                // that this is Task or Task-derived, and if it's not, skip it.
+                if (!IsDerivedFrom(itr->GetMT(), W("System.Threading.Tasks.Task")))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                // Otherwise, we only care about AsyncStateMachineBox`1 as well as the DebugFinalizableAsyncStateMachineBox`1
+                // that's used when certain ETW events are set.
+                if (_wcsncmp(itr->GetTypeName(), W("System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1+AsyncStateMachineBox`1"), 79) != 0 &&
+                    _wcsncmp(itr->GetTypeName(), W("System.Runtime.CompilerServices.AsyncTaskMethodBuilder`1+DebugFinalizableAsyncStateMachineBox`1"), 95) != 0)
+                {
+                    continue;
+                }
+            }
+
+            // Create an AsyncRecord to store the state for this instance.  We're likely going to keep the object at this point,
+            // though we may still discard/skip it with a few checks later; to do that, though, we'll need some of the info
+            // gathered here, so we construct the record to store the data.
+            AsyncRecord ar;
+            ar.Address = itr->GetAddress();
+            ar.MT = itr->GetMT();
+            ar.Size = (DWORD)itr->GetSize();
+            ar.StateMachineAddr = itr->GetAddress();
+            ar.StateMachineMT = itr->GetMT();
+            ar.IsValueType = false;
+            ar.IsTopLevel = true;
+            ar.IsStateMachine = false;
+            ar.TaskStateFlags = 0;
+            ar.StateValue = 0;
+            ar.FilteredByOptions = // we process all objects to support forming proper chains, but then only display ones that match the user's request
+                (mt == NULL || mt == itr->GetMT()) && // Match only MTs the user requested.
+                (type == NULL || _wcsstr(itr->GetTypeName(), type) != NULL) && // Match only type name substrings the user requested.
+                (addr == NULL || addr == itr->GetAddress()); // Match only the object at the specified address.
+
+            // Get the state flags for the task.  This is used to determine whether async objects are completed (and thus should
+            // be culled by default).  It avoids our needing to depend on interpreting the compiler's "<>1__state" field, and also lets
+            // us display state information for non-async state machine objects.
+            DacpFieldDescData stateFlagsField;
+            int offset = GetObjFieldOffset(ar.Address, ar.MT, W("m_stateFlags"), TRUE, &stateFlagsField);
+            if (offset != 0)
+            {
+                MOVE(ar.TaskStateFlags, ar.Address + offset);
+            }
+
+            // Get the async state machine object's StateMachine field.
+            DacpFieldDescData stateMachineField;
+            int stateMachineFieldOffset = GetObjFieldOffset(TO_CDADDR(itr->GetAddress()), itr->GetMT(), W("StateMachine"), TRUE, &stateMachineField);
+            if (stateMachineFieldOffset != 0)
+            {
+                ar.IsStateMachine = true;
+                ar.IsValueType = stateMachineField.Type == ELEMENT_TYPE_VALUETYPE;
+
+                // Get the address and method table of the state machine.  While it'll generally be a struct, it is valid for it to be a
+                // class (the C# compiler generates a class in debug builds to better support Edit-And-Continue), so we accommodate both.
+                DacpFieldDescData stateField;
+                int stateFieldOffset = -1;
+                if (ar.IsValueType)
+                {
+                    ar.StateMachineAddr = itr->GetAddress() + stateMachineFieldOffset;
+                    ar.StateMachineMT = stateMachineField.MTOfType;
+                    stateFieldOffset = GetValueFieldOffset(ar.StateMachineMT, W("<>1__state"), &stateField);
+                }
+                else
+                {
+                    MOVE(ar.StateMachineAddr, itr->GetAddress() + stateMachineFieldOffset);
+                    DacpObjectData objData;
+                    if (objData.Request(g_sos, ar.StateMachineAddr) == S_OK)
+                    {
+                        ar.StateMachineMT = objData.MethodTable; // update from Canon to actual type
+                        stateFieldOffset = GetObjFieldOffset(ar.StateMachineAddr, ar.StateMachineMT, W("<>1__state"), TRUE, &stateField);
+                    }
+                }
+
+                if (stateFieldOffset >= 0 && (ar.IsValueType || stateFieldOffset != 0))
+                {
+                    MOVE(ar.StateValue, ar.StateMachineAddr + stateFieldOffset);
+                }
+            }
+
+            // If we only want to include incomplete async objects, skip this one if it's completed.
+            if (!includeCompleted && AsyncRecordIsCompleted(ar))
+            {
+                continue;
+            }
+
+            // If the user has asked to include "async stacks" information, resolve any continuation
+            // that might be registered with it.  This could be a single continuation, or it could
+            // be a list of continuations in the case of the same task being awaited multiple times.
+            CLRDATA_ADDRESS nextAddr;
+            if (includeStacks && TryGetContinuation(itr->GetAddress(), itr->GetMT(), &nextAddr))
+            {
+                sos::Object contObj = TO_TADDR(nextAddr);
+                if (_wcsncmp(contObj.GetTypeName(), W("System.Collections.Generic.List`1"), 33) == 0)
+                {
+                    // The continuation is a List<object>.  Iterate through its internal object[]
+                    // looking for non-null objects, and adding each one as a continuation.
+                    int itemsOffset = GetObjFieldOffset(contObj.GetAddress(), contObj.GetMT(), W("_items"));
+                    if (itemsOffset != 0)
+                    {
+                        DWORD_PTR listItemsPtr;
+                        MOVE(listItemsPtr, contObj.GetAddress() + itemsOffset);
+                        if (sos::IsObject(listItemsPtr, false))
+                        {
+                            DacpObjectData objData;
+                            if (objData.Request(g_sos, TO_CDADDR(listItemsPtr)) == S_OK && objData.ObjectType == OBJ_ARRAY)
+                            {
+                                for (SIZE_T i = 0; i < objData.dwNumComponents; i++)
+                                {
+                                    CLRDATA_ADDRESS elementPtr;
+                                    MOVE(elementPtr, TO_CDADDR(objData.ArrayDataPtr + (i * objData.dwComponentSize)));
+                                    if (elementPtr != NULL && sos::IsObject(elementPtr, false))
+                                    {
+                                        ResolveContinuation(&elementPtr);
+                                        ar.Continuations.push_back(elementPtr);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    ar.Continuations.push_back(contObj.GetAddress());
+                }
+            }
+
+            // We've gathered all of the needed information for this heap object.  Add it to our list of async records.
+            asyncRecords.insert(std::pair<CLRDATA_ADDRESS, AsyncRecord>(ar.Address, ar));
+        }
+
+        // As with DumpHeap, output a summary table about all of the objects we found.  In contrast, though, his is based on the filtered
+        // list of async records we gathered rather than everything on the heap.
+        if (addr == NULL) // no point in stats if we're only targeting a single object
+        {
+            HeapStat stats;
+            for (std::map<CLRDATA_ADDRESS, AsyncRecord>::iterator arIt = asyncRecords.begin(); arIt != asyncRecords.end(); ++arIt)
+            {
+                if (!hasTypeFilter || arIt->second.FilteredByOptions)
+                {
+                    stats.Add((DWORD_PTR)arIt->second.MT, (DWORD)arIt->second.Size);
+                }
+            }
+            stats.Sort();
+            stats.Print();
+        }
+
+        // If the user has asked for "async stacks" and if there's not MT/type name filter, look through all of our async records
+        // to find the "top-level" nodes that start rather than that are a part of a continuation chain.  When we then iterate through
+        // async records, we only print ones out that are still classified as top-level.  We don't do this if there's a type filter
+        // because in that case we consider those and only those objects to be top-level.
+        if (includeStacks && !hasTypeFilter)
+        {
+            size_t uniqueChains = asyncRecords.size();
+            for (std::map<CLRDATA_ADDRESS, AsyncRecord>::iterator arIt = asyncRecords.begin(); arIt != asyncRecords.end(); ++arIt)
+            {
+                for (std::vector<CLRDATA_ADDRESS>::iterator contIt = arIt->second.Continuations.begin(); contIt != arIt->second.Continuations.end(); ++contIt)
+                {
+                    std::map<CLRDATA_ADDRESS, AsyncRecord>::iterator found = asyncRecords.find(*contIt);
+                    if (found != asyncRecords.end())
+                    {
+                        if (found->second.IsTopLevel)
+                        {
+                            found->second.IsTopLevel = false;
+                            uniqueChains--;
+                        }
+                    }
+                }
+            }
+
+            ExtOut("In %d chains.\n", uniqueChains);
+        }
+
+        // Print out header for the main line of each result.
+        ExtOut("%" POINTERSIZE "s %" POINTERSIZE "s %8s ", "Address", "MT", "Size");
+        if (includeCompleted) ExtOut("%8s ", "Status");
+        ExtOut("%10s %s\n", "State", "Description");
+
+        // Output each top-level async record.
+        int counter = 0;
+        for (std::map<CLRDATA_ADDRESS, AsyncRecord>::iterator arIt = asyncRecords.begin(); arIt != asyncRecords.end(); ++arIt)
+        {
+            if (!arIt->second.IsTopLevel || (hasTypeFilter && !arIt->second.FilteredByOptions))
+            {
+                continue;
+            }
+
+            // Output the state machine's details as a single line.
+            sos::Object obj = TO_TADDR(arIt->second.Address);
+            DacpMethodTableData mtabledata;
+            DacpMethodTableFieldData vMethodTableFields;
+            if (arIt->second.IsStateMachine &&
+                mtabledata.Request(g_sos, arIt->second.StateMachineMT) == S_OK &&
+                vMethodTableFields.Request(g_sos, arIt->second.StateMachineMT) == S_OK &&
+                vMethodTableFields.wNumInstanceFields + vMethodTableFields.wNumStaticFields > 0)
+            {
+                // This has a StateMachine.  Output its details.
+                sos::MethodTable mt = TO_TADDR(arIt->second.StateMachineMT);
+                DMLOut("%s %s %8d ", DMLAsync(obj.GetAddress()), DMLDumpHeapMT(obj.GetMT()), obj.GetSize());
+                if (includeCompleted) ExtOut("%8s ", GetAsyncRecordStatusDescription(arIt->second));
+                ExtOut("%10d %S\n", arIt->second.StateValue, mt.GetName());
+                if (dumpFields) DisplayFields(arIt->second.StateMachineMT, &mtabledata, &vMethodTableFields, (DWORD_PTR)arIt->second.StateMachineAddr, TRUE, arIt->second.IsValueType);
+            }
+            else
+            {
+                // This does not have a StateMachine.  Output the details of the Task itself.
+                DMLOut("%s %s %8d ", DMLAsync(obj.GetAddress()), DMLDumpHeapMT(obj.GetMT()), obj.GetSize());
+                if (includeCompleted) ExtOut("%8s ", GetAsyncRecordStatusDescription(arIt->second));
+                ExtOut("[%08x] %S ", arIt->second.TaskStateFlags, obj.GetTypeName());
+                ExtOutTaskDelegateMethod(obj);
+                ExtOut("\n");
+                if (dumpFields) ExtOutTaskStateFlagsDescription(arIt->second.TaskStateFlags);
+            }
+
+            // If we gathered any continuations for this record, output the chains now.
+            if (includeStacks && arIt->second.Continuations.size() > 0)
+            {
+                ExtOut(includeAllTasks ? "Continuation chains:\n" : "Async \"stack\":\n");
+                std::vector<std::pair<int, CLRDATA_ADDRESS>> continuationChainToExplore;
+                continuationChainToExplore.push_back(std::pair<int, CLRDATA_ADDRESS>(1, obj.GetAddress()));
+
+                // Do a depth-first traversal of continuations, outputting each continuation found and then
+                // looking in our gathered objects list for its continuations.
+                std::set<CLRDATA_ADDRESS> seen;
+                while (continuationChainToExplore.size() > 0)
+                {
+                    // Pop the next continuation from the stack.
+                    std::pair<int, CLRDATA_ADDRESS> cur = continuationChainToExplore.back();
+                    continuationChainToExplore.pop_back();
+
+                    // Get the async record for this continuation.  It should be one we already know about.
+                    std::map<CLRDATA_ADDRESS, AsyncRecord>::iterator curAsyncRecord = asyncRecords.find(cur.second);
+                    if (curAsyncRecord == asyncRecords.end())
+                    {
+                        continue;
+                    }
+
+                    // Make sure to avoid cycles in the rare case where async records may refer to each other.
+                    if (seen.find(cur.second) != seen.end())
+                    {
+                        continue;
+                    }
+                    seen.insert(cur.second);
+
+                    // Iterate through all continuations from this object.
+                    for (std::vector<CLRDATA_ADDRESS>::iterator contIt = curAsyncRecord->second.Continuations.begin(); contIt != curAsyncRecord->second.Continuations.end(); ++contIt)
+                    {
+                        sos::Object cont = TO_TADDR(*contIt);
+
+                        // Print out the depth of the continuation with dots, then its address.
+                        for (int i = 0; i < cur.first; i++) ExtOut(".");
+                        DMLOut("%s ", DMLObject(cont.GetAddress()));
+
+                        // Print out the name of the method for this task's delegate if it has one (state machines won't, but others tasks may).
+                        ExtOutTaskDelegateMethod(cont);
+
+                        // Find the async record for this continuation, and output its name.  If it's a state machine,
+                        // also output its current state value so that a user can see at a glance its status.
+                        std::map<CLRDATA_ADDRESS, AsyncRecord>::iterator contAsyncRecord = asyncRecords.find(cont.GetAddress());
+                        if (contAsyncRecord != asyncRecords.end())
+                        {
+                            sos::MethodTable contMT = TO_TADDR(contAsyncRecord->second.StateMachineMT);
+                            if (contAsyncRecord->second.IsStateMachine) ExtOut("(%d) ", contAsyncRecord->second.StateValue);
+                            ExtOut("%S\n", contMT.GetName());
+                        }
+                        else
+                        {
+                            ExtOut("%S\n", cont.GetTypeName());
+                        }
+
+                        // Add this continuation to the stack to explore.
+                        continuationChainToExplore.push_back(std::pair<int, CLRDATA_ADDRESS>(cur.first + 1, *contIt));
+                    }
+                }
+            }
+
+            // Finally, output gcroots, as they can serve as alternative/more detailed "async stacks", and also help to highlight
+            // state machines that aren't being kept alive.  However, they're more expensive to compute, so they're opt-in.
+            if (includeRoots)
+            {
+                ExtOut("GC roots:\n");
+                IncrementIndent();
+                GCRootImpl gcroot;
+                int numRoots = gcroot.PrintRootsForObject(obj.GetAddress(), FALSE, FALSE);
+                DecrementIndent();
+                if (numRoots == 0 && !AsyncRecordIsCompleted(arIt->second))
+                {
+                    ExtOut("Incomplete state machine or task with 0 roots.\n");
+                }
+            }
+
+            // If we're rendering more than one line per entry, output a separator to help distinguish the entries.
+            if (dumpFields || includeStacks || includeRoots)
+            {
+                ExtOut("--------------------------------------------------------------------------------\n");
+            }
+        }
+
+        return S_OK;
+    }
+    catch (const sos::Exception &e)
+    {
+        ExtOut("%s\n", e.what());
+        return E_FAIL;
+    }
+}
+
+/**********************************************************************\
+* Routine Description:                                                 *
+*                                                                      *
 *    This function dumps all objects on GC heap. It also displays      *  
 *    statistics of objects.  If GC heap is corrupted, it will stop at 
 *    the bad place.  (May not work if GC is in progress.)              *
@@ -4218,8 +4925,8 @@ static const char *const str_fgm[] =
     "Failed to reserve memory", // fgm_reserve_segment
     "Didn't have enough memory to commit beginning of the segment", // fgm_commit_segment_beg
     "Didn't have enough memory to commit the new ephemeral segment", // fgm_commit_eph_segment
-    "Didn't have enough memory to grow the internal GC datastructures", // fgm_grow_table
-    "Didn't have enough memory to commit the internal GC datastructures", // fgm_commit_table
+    "Didn't have enough memory to grow the internal GC data structures", // fgm_grow_table
+    "Didn't have enough memory to commit the internal GC data structures", // fgm_commit_table
 };
 
 void PrintOOMInfo(DacpOomData* oomData)
@@ -4697,7 +5404,7 @@ DECLARE_API(GCHeapStat)
             return Status;
         }
 
-        // aggregate stats accross heaps / generation
+        // aggregate stats across heaps / generation
         GenUsageStat genUsageStat[4] = {0, 0, 0, 0};
 
         for (DWORD n = 0; n < dwNHeaps; n ++)
@@ -4780,6 +5487,8 @@ DECLARE_API(GCHeapStat)
 
 #endif // FEATURE_PAL
 }
+
+#endif // FEATURE_PAL
 
 /**********************************************************************\
 * Routine Description:                                                 *
@@ -4963,9 +5672,11 @@ DECLARE_API(SyncBlk)
     
     ExtOut("-----------------------------\n");
     ExtOut("Total           %d\n", dwCount);
+#ifdef FEATURE_COMINTEROP
     ExtOut("CCW             %d\n", CCWCount);
     ExtOut("RCW             %d\n", RCWCount);
     ExtOut("ComClassFactory %d\n", CFCount);
+#endif
     ExtOut("Free            %d\n", freeCount);
    
     return Status;
@@ -5055,7 +5766,6 @@ DECLARE_API(RCWCleanupList)
     return Status;
 }
 #endif // FEATURE_COMINTEROP
-
 
 /**********************************************************************\
 * Routine Description:                                                 *
@@ -5198,8 +5908,6 @@ DECLARE_API(FinalizeQueue)
 
     return Status;
 }
-
-#endif // FEATURE_PAL
 
 enum {
     // These are the values set in m_dwTransientFlags.
@@ -5395,14 +6103,17 @@ DECLARE_API(DumpDomain)
     }
     DomainInfo(&appDomain);
     
-    ExtOut("--------------------------------------\n");
-    DMLOut("Shared Domain:      %s\n", DMLDomain(adsData.sharedDomain));
-    if ((Status=appDomain.Request(g_sos, adsData.sharedDomain))!=S_OK)
+    if (adsData.sharedDomain != NULL)
     {
-        ExtOut("Unable to get shared domain info\n");
-        return Status;
+        ExtOut("--------------------------------------\n");
+        DMLOut("Shared Domain:      %s\n", DMLDomain(adsData.sharedDomain));
+        if ((Status=appDomain.Request(g_sos, adsData.sharedDomain))!=S_OK)
+        {
+            ExtOut("Unable to get shared domain info\n");
+            return Status;
+        }
+        DomainInfo(&appDomain);
     }
-    DomainInfo(&appDomain);
 
     ArrayHolder<CLRDATA_ADDRESS> pArray = new NOTHROW CLRDATA_ADDRESS[adsData.DomainCount];
     if (pArray==NULL)
@@ -5850,10 +6561,6 @@ HRESULT PrintSpecialThreads()
         if (ThreadType & ThreadType_Finalizer)
         {
             type += "Finalizer ";
-        }
-        if (ThreadType & ThreadType_ADUnloadHelper)
-        {
-            type += "ADUnloadHelper ";
         }
         if (ThreadType & ThreadType_ShutdownHelper)
         {
@@ -6560,7 +7267,7 @@ public:
             pMeth->EndEnumInstances (h1);
         }
 
-        // if this is a generic method we need to add a defered bp
+        // if this is a generic method we need to add a deferred bp
         BOOL bGeneric = FALSE;
         pMeth->HasClassOrMethodInstantiation(&bGeneric);
 
@@ -7073,10 +7780,9 @@ HRESULT HandleExceptionNotification(ILLDBServices *client)
 
 DECLARE_API(bpmd)
 {
-    INIT_API_NOEE();    
-    MINIDUMP_NOT_SUPPORTED();    
-    int i;
-    char buffer[1024];    
+    INIT_API_NOEE();
+    MINIDUMP_NOT_SUPPORTED();
+    char buffer[1024];
     
     if (IsDumpFile())
     {
@@ -7470,17 +8176,23 @@ DECLARE_API(ThreadPool)
 
     if ((Status = threadpool.Request(g_sos)) == S_OK)
     {
-        BOOL doHCDump = FALSE;
+        BOOL doHCDump = FALSE, doWorkItemDump = FALSE, dml = FALSE;
 
         CMDOption option[] = 
         {   // name, vptr, type, hasValue
-            {"-ti", &doHCDump, COBOOL, FALSE}
+            {"-ti", &doHCDump, COBOOL, FALSE},
+            {"-wi", &doWorkItemDump, COBOOL, FALSE},
+#ifndef FEATURE_PAL
+            {"/d", &dml, COBOOL, FALSE},
+#endif
         };    
 
         if (!GetCMDOption(args, option, _countof(option), NULL, 0, NULL)) 
         {
             return Status;
         }
+
+        EnableDMLHolder dmlHolder(dml);
 
         ExtOut ("CPU utilization: %d%%\n", threadpool.cpuUtilization);            
         ExtOut ("Worker Thread:");
@@ -7522,6 +8234,152 @@ DECLARE_API(ThreadPool)
                     SOS_PTR(workRequestData.Context));
 
             workRequestPtr = workRequestData.NextWorkRequest;
+        }
+
+        if (doWorkItemDump && g_snapshot.Build())
+        {
+            // Display a message if the heap isn't verified.
+            sos::GCHeap gcheap;
+            if (!gcheap.AreGCStructuresValid())
+            {
+                DisplayInvalidStructuresMessage();
+            }
+
+            // Walk every heap item looking for the global queue and local queues.
+            ExtOut("\nQueued work items:\n%" POINTERSIZE "s %" POINTERSIZE "s %s\n", "Queue", "Address", "Work Item");
+            HeapStat stats;
+            for (sos::ObjectIterator itr = gcheap.WalkHeap(); !IsInterrupt() && itr != NULL; ++itr)
+            {
+                if (_wcscmp(itr->GetTypeName(), W("System.Threading.ThreadPoolWorkQueue")) == 0)
+                {
+                    // We found a global queue (there should be only one, given one AppDomain).
+                    // Get its workItems ConcurrentQueue<IThreadPoolWorkItem>.
+                    int offset = GetObjFieldOffset(itr->GetAddress(), itr->GetMT(), W("workItems"));
+                    if (offset > 0)
+                    {
+                        DWORD_PTR workItemsConcurrentQueuePtr;
+                        MOVE(workItemsConcurrentQueuePtr, itr->GetAddress() + offset);
+                        if (sos::IsObject(workItemsConcurrentQueuePtr, false))
+                        {
+                            // We got the ConcurrentQueue.  Get its head segment.
+                            sos::Object workItemsConcurrentQueue = TO_TADDR(workItemsConcurrentQueuePtr);
+                            offset = GetObjFieldOffset(workItemsConcurrentQueue.GetAddress(), workItemsConcurrentQueue.GetMT(), W("_head"));
+                            if (offset > 0)
+                            {
+                                // Now, walk from segment to segment, each of which contains an array of work items.
+                                DWORD_PTR segmentPtr;
+                                MOVE(segmentPtr, workItemsConcurrentQueue.GetAddress() + offset);
+                                while (sos::IsObject(segmentPtr, false))
+                                {
+                                    sos::Object segment = TO_TADDR(segmentPtr);
+
+                                    // Get the work items array.  It's an array of Slot structs, which starts with the T.
+                                    offset = GetObjFieldOffset(segment.GetAddress(), segment.GetMT(), W("_slots"));
+                                    if (offset <= 0)
+                                    {
+                                        break;
+                                    }
+
+                                    DWORD_PTR slotsPtr;
+                                    MOVE(slotsPtr, segment.GetAddress() + offset);
+                                    if (!sos::IsObject(slotsPtr, false))
+                                    {
+                                        break;
+                                    }
+
+                                    // Walk every element in the array, outputting details on non-null work items.
+                                    DacpObjectData slotsArray;
+                                    if (slotsArray.Request(g_sos, TO_CDADDR(slotsPtr)) == S_OK && slotsArray.ObjectType == OBJ_ARRAY)
+                                    {
+                                        for (int i = 0; i < slotsArray.dwNumComponents; i++)
+                                        {
+                                            CLRDATA_ADDRESS workItemPtr;
+                                            MOVE(workItemPtr, TO_CDADDR(slotsArray.ArrayDataPtr + (i * slotsArray.dwComponentSize))); // the item object reference is at the beginning of the Slot
+                                            if (workItemPtr != NULL && sos::IsObject(workItemPtr, false))
+                                            {
+                                                sos::Object workItem = TO_TADDR(workItemPtr);
+                                                stats.Add((DWORD_PTR)workItem.GetMT(), (DWORD)workItem.GetSize());
+                                                DMLOut("%" POINTERSIZE "s %s %S", "[Global]", DMLObject(workItem.GetAddress()), workItem.GetTypeName());
+                                                if ((offset = GetObjFieldOffset(workItem.GetAddress(), workItem.GetMT(), W("_callback"))) > 0 ||
+                                                    (offset = GetObjFieldOffset(workItem.GetAddress(), workItem.GetMT(), W("m_action"))) > 0)
+                                                {
+                                                    CLRDATA_ADDRESS delegatePtr;
+                                                    MOVE(delegatePtr, workItem.GetAddress() + offset);
+                                                    CLRDATA_ADDRESS md;
+                                                    if (TryGetMethodDescriptorForDelegate(delegatePtr, &md))
+                                                    {
+                                                        NameForMD_s((DWORD_PTR)md, g_mdName, mdNameLen);
+                                                        ExtOut(" => %S", g_mdName);
+                                                    }
+                                                }
+                                                ExtOut("\n");
+                                            }
+                                        }
+                                    }
+
+                                    // Move to the next segment.
+                                    DacpFieldDescData segmentField;
+                                    offset = GetObjFieldOffset(segment.GetAddress(), segment.GetMT(), W("_nextSegment"), TRUE, &segmentField);
+                                    if (offset <= 0)
+                                    {
+                                        break;
+                                    }
+
+                                    MOVE(segmentPtr, segment.GetAddress() + offset);
+                                    if (segmentPtr == NULL)
+                                    {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else if (_wcscmp(itr->GetTypeName(), W("System.Threading.ThreadPoolWorkQueue+WorkStealingQueue")) == 0)
+                {
+                    // We found a local queue.  Get its work items array.
+                    int offset = GetObjFieldOffset(itr->GetAddress(), itr->GetMT(), W("m_array"));
+                    if (offset > 0)
+                    {
+                        // Walk every element in the array, outputting details on non-null work items.
+                        DWORD_PTR workItemArrayPtr;
+                        MOVE(workItemArrayPtr, itr->GetAddress() + offset);
+                        DacpObjectData workItemArray;
+                        if (workItemArray.Request(g_sos, TO_CDADDR(workItemArrayPtr)) == S_OK && workItemArray.ObjectType == OBJ_ARRAY)
+                        {
+                            for (int i = 0; i < workItemArray.dwNumComponents; i++)
+                            {
+                                CLRDATA_ADDRESS workItemPtr;
+                                MOVE(workItemPtr, TO_CDADDR(workItemArray.ArrayDataPtr + (i * workItemArray.dwComponentSize)));
+                                if (workItemPtr != NULL && sos::IsObject(workItemPtr, false))
+                                {
+                                    sos::Object workItem = TO_TADDR(workItemPtr);
+                                    stats.Add((DWORD_PTR)workItem.GetMT(), (DWORD)workItem.GetSize());
+                                    DMLOut("%s %s %S", DMLObject(itr->GetAddress()), DMLObject(workItem.GetAddress()), workItem.GetTypeName());
+                                    if ((offset = GetObjFieldOffset(workItem.GetAddress(), workItem.GetMT(), W("_callback"))) > 0 ||
+                                        (offset = GetObjFieldOffset(workItem.GetAddress(), workItem.GetMT(), W("m_action"))) > 0)
+                                    {
+                                        CLRDATA_ADDRESS delegatePtr;
+                                        MOVE(delegatePtr, workItem.GetAddress() + offset);
+                                        CLRDATA_ADDRESS md;
+                                        if (TryGetMethodDescriptorForDelegate(delegatePtr, &md))
+                                        {
+                                            NameForMD_s((DWORD_PTR)md, g_mdName, mdNameLen);
+                                            ExtOut(" => %S", g_mdName);
+                                        }
+                                    }
+                                    ExtOut("\n");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Output a summary.
+            stats.Sort();
+            stats.Print();
+            ExtOut("\n");
         }
 
         if (doHCDump)
@@ -8571,8 +9429,7 @@ DECLARE_API(DumpLog)
     return Status;
 }
 
-#ifdef TRACE_GC
-
+#ifndef FEATURE_PAL
 DECLARE_API (DumpGCLog)
 {
     INIT_API_NODAC();
@@ -8585,6 +9442,10 @@ DECLARE_API (DumpGCLog)
     }
 
     const char* fileName = "GCLog.txt";
+    int iLogSize = 1024*1024;
+    BYTE* bGCLog = NULL;
+    int iRealLogSize = iLogSize - 1;
+    DWORD dwWritten = 0;
 
     while (isspace (*args))
         args ++;
@@ -8629,8 +9490,7 @@ DECLARE_API (DumpGCLog)
         goto exit;
     }
 
-    int iLogSize = 1024*1024;
-    BYTE* bGCLog = new NOTHROW BYTE[iLogSize];
+    bGCLog = new NOTHROW BYTE[iLogSize];
     if (bGCLog == NULL)
     {
         ReportOOM();
@@ -8643,7 +9503,6 @@ DECLARE_API (DumpGCLog)
         ExtOut("failed to read memory from %08x\n", dwAddr);
     }
 
-    int iRealLogSize = iLogSize - 1;
     while (iRealLogSize >= 0)
     {
         if (bGCLog[iRealLogSize] != '*')
@@ -8654,12 +9513,16 @@ DECLARE_API (DumpGCLog)
         iRealLogSize--;
     }
 
-    DWORD dwWritten = 0;
     WriteFile (hGCLog, bGCLog, iRealLogSize + 1, &dwWritten, NULL);
 
     Status = S_OK;
 
 exit:
+
+    if (bGCLog != NULL)
+    {
+        delete [] bGCLog;
+    }
 
     if (hGCLog != INVALID_HANDLE_VALUE)
     {
@@ -8675,9 +9538,7 @@ exit:
 
     return Status;
 }
-#endif //TRACE_GC
 
-#ifndef FEATURE_PAL
 DECLARE_API (DumpGCConfigLog)
 {
     INIT_API();
@@ -8814,7 +9675,7 @@ static const char * const str_interesting_data_points[] =
 static const char * const str_heap_compact_reasons[] = 
 {
     "low on ephemeral space",
-    "high fragmetation",
+    "high fragmentation",
     "couldn't allocate gaps",
     "user specfied compact LOH",
     "last GC before OOM",
@@ -9892,11 +10753,8 @@ DECLARE_API(FindRoots)
 class GCHandleStatsForDomains
 {
 public:
-    const static int SHARED_DOMAIN_INDEX = 0;
-    const static int SYSTEM_DOMAIN_INDEX = 1;
-    
     GCHandleStatsForDomains() 
-        : m_singleDomainMode(FALSE), m_numDomains(0), m_pStatistics(NULL), m_pDomainPointers(NULL)
+        : m_singleDomainMode(FALSE), m_numDomains(0), m_pStatistics(NULL), m_pDomainPointers(NULL), m_sharedDomainIndex(-1), m_systemDomainIndex(-1)
     {
     }
 
@@ -9930,19 +10788,28 @@ public:
             if (adsData.Request(g_sos) != S_OK)
                 return FALSE;
 
-            m_numDomains = adsData.DomainCount + 2;
-            ArrayHolder<CLRDATA_ADDRESS> pArray = new NOTHROW CLRDATA_ADDRESS[adsData.DomainCount + 2];
+            LONG numSpecialDomains = (adsData.sharedDomain != NULL) ? 2 : 1;
+            m_numDomains = adsData.DomainCount + numSpecialDomains;
+            ArrayHolder<CLRDATA_ADDRESS> pArray = new NOTHROW CLRDATA_ADDRESS[m_numDomains];
             if (pArray == NULL)
                 return FALSE;
 
-            pArray[SHARED_DOMAIN_INDEX] = adsData.sharedDomain;
-            pArray[SYSTEM_DOMAIN_INDEX] = adsData.systemDomain;
+            int i = 0;
+            if (adsData.sharedDomain != NULL)
+            {
+                pArray[i++] = adsData.sharedDomain;
+            }
+
+            pArray[i] = adsData.systemDomain;
+
+            m_sharedDomainIndex = i - 1; // The m_sharedDomainIndex is set to -1 if there is no shared domain
+            m_systemDomainIndex = i;
             
-            if (g_sos->GetAppDomainList(adsData.DomainCount, pArray+2, NULL) != S_OK)
+            if (g_sos->GetAppDomainList(adsData.DomainCount, pArray+numSpecialDomains, NULL) != S_OK)
                 return FALSE;
             
             m_pDomainPointers = pArray.Detach();
-            m_pStatistics = new NOTHROW GCHandleStatistics[adsData.DomainCount + 2];
+            m_pStatistics = new NOTHROW GCHandleStatistics[m_numDomains];
             if (m_pStatistics == NULL)
                 return FALSE;
         }
@@ -9987,12 +10854,24 @@ public:
         SOS_Assert(index < m_numDomains);
         return m_pDomainPointers[index];
     }
-    
+
+    int GetSharedDomainIndex()
+    {
+        return m_sharedDomainIndex;
+    }
+
+    int GetSystemDomainIndex()
+    {
+        return m_systemDomainIndex;
+    }
+
 private:
     BOOL m_singleDomainMode;
     int m_numDomains;
     GCHandleStatistics *m_pStatistics;
     CLRDATA_ADDRESS *m_pDomainPointers;
+    int m_sharedDomainIndex;
+    int m_systemDomainIndex;
 };
 
 class GCHandlesImpl
@@ -10063,9 +10942,9 @@ public:
                 Print( "------------------------------------------------------------------------------\n");           
                 Print("GC Handle Statistics for AppDomain ", AppDomainPtr(mHandleStat.GetDomain(i)));
             
-                if (i == GCHandleStatsForDomains::SHARED_DOMAIN_INDEX)
+                if (i == mHandleStat.GetSharedDomainIndex())
                     Print(" (Shared Domain)\n");
-                else if (i == GCHandleStatsForDomains::SYSTEM_DOMAIN_INDEX)
+                else if (i == mHandleStat.GetSystemDomainIndex())
                     Print(" (System Domain)\n");
                 else
                     Print("\n");
@@ -10279,27 +11158,6 @@ DECLARE_API(GCHandles)
     }
 
     return Status;
-}
-
-BOOL derivedFrom(CLRDATA_ADDRESS mtObj, __in_z LPWSTR baseString)
-{
-    // We want to follow back until we get the mt for System.Exception
-    DacpMethodTableData dmtd;
-    CLRDATA_ADDRESS walkMT = mtObj;
-    while(walkMT != NULL)
-    {
-        if (dmtd.Request(g_sos, walkMT) != S_OK)
-        {
-            break;            
-        }
-        NameForMT_s (TO_TADDR(walkMT), g_mdName, mdNameLen);                
-        if (_wcscmp (baseString, g_mdName) == 0)
-        {
-            return TRUE;
-        }
-        walkMT = dmtd.ParentMethodTable;
-    }
-    return FALSE;
 }
 
 // This is an experimental and undocumented SOS API that attempts to step through code
@@ -10619,7 +11477,7 @@ DECLARE_API(StopOnException)
         {            
             NameForMT_s (taMT, g_mdName, mdNameLen);
             if ((_wcscmp(g_mdName,typeNameWide) == 0) ||
-                (fDerived && derivedFrom(taMT, typeNameWide)))
+                (fDerived && IsDerivedFrom(taMT, typeNameWide)))
             {
                 sprintf_s(buffer,_countof (buffer),
                     "r$t%d=1",
@@ -11232,7 +12090,6 @@ private:
             ULONG             nameLen = 0;
             DWORD             fieldAttr = 0;
             WCHAR             mdName[mdNameLen];
-            WCHAR             typeName[mdNameLen];
             UVCP_CONSTANT     pRawValue = NULL;
             ULONG             rawValueLength = 0;
             if(SUCCEEDED(pMD->GetFieldProps(fieldDef, NULL, mdName, mdNameLen, &nameLen, &fieldAttr, NULL, NULL, NULL, &pRawValue, &rawValueLength)))
@@ -11821,9 +12678,9 @@ public:
         InternalFrameManager internalFrameManager;
         IfFailRet(internalFrameManager.Init(pThread3));
         
-    #if defined(_AMD64_)
+    #if defined(_AMD64_) || defined(_ARM64_)
         ExtOut("%-16s %-16s %s\n", "Child SP", "IP", "Call Site");
-    #elif defined(_X86_)
+    #elif defined(_X86_) || defined(_ARM_)
         ExtOut("%-8s %-8s %s\n", "Child SP", "IP", "Call Site");
     #endif
 
@@ -14307,7 +15164,7 @@ DECLARE_API(ExposeDML)
 // According to kksharma the Windows debuggers always sign-extend
 // arguments when calling externally, therefore StackObjAddr 
 // conforms to CLRDATA_ADDRESS contract.
-HRESULT CALLBACK 
+HRESULT CALLBACK
 _EFN_GetManagedExcepStack(
     PDEBUG_CLIENT client,
     ULONG64 StackObjAddr,
@@ -14354,7 +15211,7 @@ _EFN_GetManagedExcepStackW(
 // According to kksharma the Windows debuggers always sign-extend
 // arguments when calling externally, therefore objAddr 
 // conforms to CLRDATA_ADDRESS contract.
-HRESULT CALLBACK 
+HRESULT CALLBACK
 _EFN_GetManagedObjectName(
     PDEBUG_CLIENT client,
     ULONG64 objAddr,
@@ -14382,7 +15239,7 @@ _EFN_GetManagedObjectName(
 // According to kksharma the Windows debuggers always sign-extend
 // arguments when calling externally, therefore objAddr 
 // conforms to CLRDATA_ADDRESS contract.
-HRESULT CALLBACK 
+HRESULT CALLBACK
 _EFN_GetManagedObjectFieldInfo(
     PDEBUG_CLIENT client,
     ULONG64 objAddr,
@@ -14687,7 +15544,7 @@ GetStackFrame(CONTEXT* context, ULONG numNativeFrames)
     if (FAILED(hr))
     {
         PDEBUG_STACK_FRAME frame = &g_Frames[0];
-        for (int i = 0; i < numNativeFrames; i++, frame++) {
+        for (unsigned int i = 0; i < numNativeFrames; i++, frame++) {
             if (frame->InstructionOffset == context->Rip)
             {
                 if ((i + 1) >= numNativeFrames) {

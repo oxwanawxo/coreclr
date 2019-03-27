@@ -174,11 +174,6 @@ void EEClass::Destruct(MethodTable * pOwningMT)
         delete pDelegateEEClass->m_pUMThunkMarshInfo;
     }
 
-    // We should never get here for thunking proxy because we do not destroy
-    // default appdomain and mscorlib.dll module during shutdown
-    _ASSERTE(!pOwningMT->IsTransparentProxy());
-
-  
 #ifdef FEATURE_COMINTEROP 
     if (GetSparseCOMInteropVTableMap() != NULL && !pOwningMT->IsZapped())
         delete GetSparseCOMInteropVTableMap();
@@ -384,8 +379,7 @@ VOID EEClass::FixupFieldDescForEnC(MethodTable * pMT, EnCFieldDesc *pFD, mdField
                        NULL,
                        NULL,
                        &genericsInfo,
-                       &bmtEnumFields,
-                       NULL);
+                       &bmtEnumFields);
 
     EX_TRY
     {
@@ -400,7 +394,6 @@ VOID EEClass::FixupFieldDescForEnC(MethodTable * pMT, EnCFieldDesc *pFD, mdField
                                  &pByValueClassCache,
                                  &bmtMFDescs,
                                  &bmtFP,
-                                 NULL, // not needed as thread or context static are not allowed in EnC
                                  &totalDeclaredFieldSize);
     }
     EX_CATCH_THROWABLE(&pThrowable);
@@ -1041,480 +1034,6 @@ CorElementType EEClass::ComputeInternalCorElementTypeForValueType(MethodTable * 
 
     return ELEMENT_TYPE_VALUETYPE;
 }
-
-#if defined(_DEBUG)
-//*******************************************************************************
-void EEClass::GetPredefinedAgility(Module *pModule, mdTypeDef td,
-                                   BOOL *pfIsAgile, BOOL *pfCheckAgile)
-{
-
-    CONTRACTL
-    {
-        NOTHROW;
-        GC_NOTRIGGER;
-        FORBID_FAULT;
-    }
-    CONTRACTL_END
-
-    //
-    // There are 4 settings possible:
-    // IsAgile  CheckAgile
-    // F        F               (default)   Use normal type logic to determine agility
-    // T        F               "Proxy"     Treated as agile even though may not be.
-    // F        T               "Maybe"     Not agile, but specific instances can be made agile.
-    // T        T               "Force"     All instances are forced agile, even though not typesafe.
-    //
-    // Also, note that object arrays of agile or maybe agile types are made maybe agile.
-    //
-
-    static const struct PredefinedAgility
-    {
-        const char  *name;
-        BOOL        isAgile;
-        BOOL        checkAgile;
-    }
-
-    // Matches based on name with the first records having higher precedence than subsequent ones
-    // so that when there is an ambiguity, the first one will be used:
-    // System.Globalization.CultureNotFoundException
-    // comes before
-    // System.Globalization.*
-    //
-    // although System.Globalization.CultureNotFoundException matches both records, the first
-    // is the one that will be used
-    agility[] =
-    {
-        // The Thread leak across context boundaries.
-        // We manage the leaks manually
-        { g_ThreadClassName,                    TRUE,   FALSE },
-
-        // The SharedStatics class is a container for process-wide data
-        { g_SharedStaticsClassName,             FALSE,  TRUE },
-
-        // The extra dot at the start is to accomodate the string comparison logic below 
-        // when there is no namespace for a type
-        {".StringMaker",                        FALSE, TRUE },
-
-        {g_StringBufferClassName,               FALSE, TRUE },
-
-        { "System.ActivationArguments",         FALSE,  TRUE },
-        { "System.AppDomainSetup" ,             FALSE,  TRUE },
-        { "System.AppDomainInitializerInfo",    FALSE,  TRUE },
-
-        // Make all containers maybe agile
-        { "System.Collections.*",               FALSE,  TRUE },
-        { "System.Collections.Generic.*",               FALSE,  TRUE },
-
-        // Make all globalization objects agile except for System.Globalization.CultureNotFoundException
-        // The exception inherits from ArgumentException so needs the same agility
-        // this must come before the more general declaration below so that it will match first
-        { "System.Globalization.CultureNotFoundException",             FALSE,  FALSE },
-        // We have CultureInfo objects on thread.  Because threads leak across
-        // app domains, we have to be prepared for CultureInfo to leak across.
-        // CultureInfo exposes all of the other globalization objects, so we
-        // just make the entire namespace app domain agile.
-        { "System.Globalization.*",             FALSE,  TRUE },
-
-        // Remoting structures for legally smuggling messages across app domains
-        { "System.Runtime.Remoting.Messaging.SmuggledMethodCallMessage", FALSE,  TRUE },
-        { "System.Runtime.Remoting.Messaging.SmuggledMethodReturnMessage", FALSE,  TRUE },
-        { "System.Runtime.Remoting.Messaging.SmuggledObjRef", FALSE, TRUE},
-        { "System.Runtime.Remoting.ObjRef", FALSE,  TRUE },
-        { "System.Runtime.Remoting.ChannelInfo", FALSE,  TRUE },
-        { "System.Runtime.Remoting.Channels.CrossAppDomainData", FALSE,  TRUE },
-
-        // Remoting cached data structures are all in mscorlib
-        { "System.Runtime.Remoting.Metadata.RemotingCachedData",       FALSE,  TRUE },
-        { "System.Runtime.Remoting.Metadata.RemotingFieldCachedData", FALSE,  TRUE },
-        { "System.Runtime.Remoting.Metadata.RemotingParameterCachedData", FALSE,  TRUE },
-        { "System.Runtime.Remoting.Metadata.RemotingMethodCachedData", FALSE,  TRUE },
-        { "System.Runtime.Remoting.Metadata.RemotingTypeCachedData", FALSE,  TRUE },
-        { "System.Runtime.Remoting.Metadata.SoapAttribute",      FALSE,  TRUE },
-        { "System.Runtime.Remoting.Metadata.SoapFieldAttribute", FALSE,  TRUE },
-        { "System.Runtime.Remoting.Metadata.SoapMethodAttribute",FALSE,  TRUE },
-        { "System.Runtime.Remoting.Metadata.SoapParameterAttribute", FALSE,  TRUE },
-        { "System.Runtime.Remoting.Metadata.SoapTypeAttribute",  FALSE,  TRUE },
-
-        // Reflection types
-        { g_ReflectionMemberInfoName,                            FALSE,  TRUE },
-        { g_TypeClassName,                                       FALSE,  TRUE },
-        { g_ReflectionClassName,                                 FALSE,  TRUE },
-        { g_ReflectionConstructorInfoName,                       FALSE,  TRUE },
-        { g_ReflectionConstructorName,                           FALSE,  TRUE },
-        { g_ReflectionEventInfoName,                             FALSE,  TRUE },
-        { g_ReflectionEventName,                                 FALSE,  TRUE },
-        { g_ReflectionFieldInfoName,                             FALSE,  TRUE },
-        { g_ReflectionFieldName,                                 FALSE,  TRUE },
-        { g_MethodBaseName,                                      FALSE,  TRUE },
-        { g_ReflectionMethodInfoName,                            FALSE,  TRUE },
-        { g_ReflectionMethodName,                                FALSE,  TRUE },
-        { g_ReflectionPropertyInfoName,                          FALSE,  TRUE },
-        { g_ReflectionPropInfoName,                              FALSE,  TRUE },
-        { g_ReflectionParamInfoName,                             FALSE,  TRUE },
-        { g_ReflectionParamName,                                 FALSE,  TRUE },
-
-        { "System.RuntimeType+RuntimeTypeCache",                 FALSE,  TRUE },
-        { "System.RuntimeType+RuntimeTypeCache+MemberInfoCache`1", FALSE,  TRUE },
-        { "System.RuntimeType+RuntimeTypeCache+MemberInfoCache`1+Filter", FALSE,  TRUE },
-        { "System.Reflection.CerHashtable`2",                    FALSE,  TRUE },
-        { "System.Reflection.CerHashtable`2+Table",              FALSE,  TRUE },
-        { "System.Reflection.RtFieldInfo",                       FALSE,  TRUE },
-        { "System.Reflection.MdFieldInfo",                       FALSE,  TRUE },
-        { "System.Signature",                                    FALSE,  TRUE },
-        { "System.Reflection.MetadataImport",                    FALSE,  TRUE },
-
-        // LogSwitches are agile even though we can't prove it
-        // <TODO>@todo: do they need really to be?</TODO>
-        { "System.Diagnostics.LogSwitch",       FALSE,  TRUE },
-
-        // There is a process global PermissionTokenFactory
-        { "System.Security.PermissionToken",    FALSE,  TRUE },
-        { g_PermissionTokenFactoryName,         FALSE,  TRUE },
-
-        // Mark all the exceptions we throw agile.  This makes
-        // most BVTs pass even though exceptions leak
-        //
-        // Note that making exception checked automatically
-        // makes a bunch of subclasses checked as well.
-        //
-        // Pre-allocated exceptions
-        { g_ExceptionClassName,                 FALSE,  TRUE },
-        { g_OutOfMemoryExceptionClassName,      FALSE,  TRUE },
-        { g_StackOverflowExceptionClassName,    FALSE,  TRUE },
-        { g_ExecutionEngineExceptionClassName,  FALSE,  TRUE },
-
-        // SecurityDocument contains pointers and other agile types
-        { "System.Security.SecurityDocument",    TRUE, TRUE },
-
-        // BinaryFormatter smuggles these across appdomains.
-        { "System.Runtime.Serialization.Formatters.Binary.BinaryObjectWithMap", TRUE, FALSE},
-        { "System.Runtime.Serialization.Formatters.Binary.BinaryObjectWithMapTyped", TRUE, FALSE},
-
-        { NULL }
-    };
-
-    if (pModule == SystemDomain::SystemModule())
-    {
-        while (TRUE)
-        {
-            LPCUTF8 pszName;
-            LPCUTF8 pszNamespace;
-            HRESULT     hr;
-            mdTypeDef   tdEnclosing;
-            
-            if (FAILED(pModule->GetMDImport()->GetNameOfTypeDef(td, &pszName, &pszNamespace)))
-            {
-                break;
-            }
-            
-            // We rely the match algorithm matching the first items in the list before subsequent ones
-            // so that when there is an ambiguity, the first one will be used:
-            // System.Globalization.CultureNotFoundException
-            // comes before
-            // System.Globalization.*
-            //
-            // although System.Globalization.CultureNotFoundException matches both records, the first
-            // is the one that will be used
-            const PredefinedAgility *p = agility;
-            while (p->name != NULL)
-            {
-                SIZE_T length = strlen(pszNamespace);
-                if (strncmp(pszNamespace, p->name, length) == 0
-                    && (strcmp(pszName, p->name + length + 1) == 0
-                        || strcmp("*", p->name + length + 1) == 0))
-                {
-                    *pfIsAgile = p->isAgile;
-                    *pfCheckAgile = p->checkAgile;
-                    return;
-                }
-
-                p++;
-            }
-
-            // Perhaps we have a nested type like 'bucket' that is supposed to be
-            // agile or checked agile by virtue of being enclosed in a type like
-            // hashtable, which is itself inside "System.Collections".
-            tdEnclosing = mdTypeDefNil;
-            hr = pModule->GetMDImport()->GetNestedClassProps(td, &tdEnclosing);
-            if (SUCCEEDED(hr))
-            {
-                BAD_FORMAT_NOTHROW_ASSERT(tdEnclosing != td && TypeFromToken(tdEnclosing) == mdtTypeDef);
-                td = tdEnclosing;
-            }
-            else
-                break;
-        }
-    }
-
-    *pfIsAgile = FALSE;
-    *pfCheckAgile = FALSE;
-}
-
-//*******************************************************************************
-void EEClass::SetAppDomainAgileAttribute(MethodTable * pMT)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        INJECT_FAULT(COMPlusThrowOM());
-        //        PRECONDITION(!IsAppDomainAgilityDone());
-    }
-    CONTRACTL_END
-
-    EEClass * pClass = pMT->GetClass();
-
-    //
-    // The most general case for provably a agile class is
-    // (1) No instance fields of non-sealed or non-agile types
-    // (2) Class is in system domain (its type must be not unloadable
-    //      & loaded in all app domains)
-    // (3) The class can't have a finalizer
-    // (4) The class can't be a COMClass
-    //
-
-    _ASSERTE(!pClass->IsAppDomainAgilityDone());
-
-    BOOL    fCheckAgile     = FALSE;
-    BOOL    fAgile          = FALSE;
-    BOOL    fFieldsAgile    = TRUE;
-    WORD        nFields         = 0;
-
-    if (!pMT->GetModule()->IsSystem())
-    {
-        //
-        // No types outside of the system domain can even think about
-        // being agile
-        //
-
-        goto exit;
-    }
-
-    if (pMT->IsComObjectType())
-    {
-        //
-        // No COM type is agile, as there is domain specific stuff in the sync block
-        //
-
-        goto exit;
-    }
-
-    if (pMT->IsInterface())
-    {
-        //
-        // Don't mark interfaces agile
-        //
-
-        goto exit;
-    }
-
-    if (pMT->ContainsGenericVariables())
-    {
-        // Types containing formal type parameters aren't agile
-        goto exit;
-    }
-
-    //
-    // See if we need agile checking in the class
-    //
-
-    GetPredefinedAgility(pMT->GetModule(), pMT->GetCl(),
-                         &fAgile, &fCheckAgile);
-
-    if (pMT->HasFinalizer())
-    {
-        if (!fAgile && !fCheckAgile)
-        {
-            //
-            // If we're finalizable, we need domain affinity.  Otherwise, we may appear
-            // to a particular app domain not to call the finalizer (since it may run
-            // in a different domain.)
-            //
-            // Note: do not change this assumption. The eager finalizaton code for
-            // appdomain unloading assumes that no obects other than those in mscorlib
-            // can be agile and finalizable  
-            //
-            goto exit;
-        }
-        else
-        {
-
-            // Note that a finalizable object will be considered potentially agile if it has one of the two
-            // predefined agility bits set. This will cause an assert in the eager finalization code if you add
-            // a finalizer to such a class - we don't want to have them as we can't run them eagerly and running
-            // them after we've cleared the roots/handles means it can't do much safely. Right now thread is the
-            // only one we allow.  
-            _ASSERTE(g_pThreadClass == NULL || pMT->IsAgileAndFinalizable());
-        }
-    }
-
-    //
-    // Now see if the type is "naturally agile" - that is, it's type structure
-    // guarantees agility.
-    //
-
-    if (pMT->GetParentMethodTable() != NULL)
-    {
-        EEClass * pParentClass = pMT->GetParentMethodTable()->GetClass();
-
-        //
-        // Make sure our parent was computed.  This should only happen
-        // when we are prejitting - otherwise it is computed for each
-        // class as its loaded.
-        //
-
-        _ASSERTE(pParentClass->IsAppDomainAgilityDone());
-
-        if (!pParentClass->IsAppDomainAgile())
-        {
-            fFieldsAgile = FALSE;
-            if (fCheckAgile)
-                _ASSERTE(pParentClass->IsCheckAppDomainAgile());
-        }
-
-        //
-        // To save having to list a lot of trivial (layout-wise) subclasses,
-        // automatically check a subclass if its parent is checked and
-        // it introduces no new fields.
-        //
-
-        if (!fCheckAgile
-            && pParentClass->IsCheckAppDomainAgile()
-            && pClass->GetNumInstanceFields() == pParentClass->GetNumInstanceFields())
-            fCheckAgile = TRUE;
-    }
-
-    nFields = pMT->GetNumInstanceFields()
-        - (pMT->GetParentMethodTable() == NULL ? 0 : pMT->GetParentMethodTable()->GetNumInstanceFields());
-
-    if (fFieldsAgile || fCheckAgile)
-    {
-        FieldDesc *pFD = pClass->GetFieldDescList();
-        FieldDesc *pFDEnd = pFD + nFields;
-        while (pFD < pFDEnd)
-        {
-            switch (pFD->GetFieldType())
-            {
-            case ELEMENT_TYPE_CLASS:
-                {
-                    //
-                    // There is a bit of a problem in computing the classes which are naturally agile -
-                    // we don't want to load types of non-value type fields.  So for now we'll
-                    // err on the side of conservatism and not allow any non-value type fields other than
-                    // the forced agile types listed above.
-                    //
-
-                    MetaSig sig(pFD);
-                    CorElementType type = sig.NextArg();
-                    SigPointer sigPtr = sig.GetArgProps();
-
-                    //
-                    // Don't worry about strings
-                    //
-
-                    if (type == ELEMENT_TYPE_STRING)
-                        break;
-
-                    // Find our field's token so we can proceed cautiously
-                    mdToken token = mdTokenNil;
-
-                    if (type == ELEMENT_TYPE_CLASS)
-                        IfFailThrow(sigPtr.GetToken(&token));
-
-                    //
-                    // First, a special check to see if the field is of our own type.
-                    //
-
-                    if (token == pMT->GetCl() && pMT->IsSealed())
-                        break;
-
-                    //
-                    // Now, look for the field's TypeHandle.
-                    //
-                    // <TODO>@todo: there is some ifdef'd code here to to load the type if it's
-                    // not already loading.  This code has synchronization problems, as well
-                    // as triggering more aggressive loading than normal.  So it's disabled
-                    // for now.
-                    // </TODO>
-
-                    TypeHandle th;
-#if 0 
-                    if (TypeFromToken(token) == mdTypeDef
-                        && GetClassLoader()->FindUnresolvedClass(GetModule, token) == NULL)
-                        th = pFD->GetFieldTypeHandleThrowing();
-                    else
-#endif // 0
-                        th = pFD->LookupFieldTypeHandle();
-
-                    //
-                    // See if the referenced type is agile.  Note that there is a reasonable
-                    // chance that the type hasn't been loaded yet.  If this is the case,
-                    // we just have to assume that it's not agile, since we can't trigger
-                    // extra loads here (for fear of circular recursion.)
-                    //
-                    // If you have an agile class which runs into this problem, you can solve it by
-                    // setting the type manually to be agile.
-                    //
-
-                    if (th.IsNull()
-                        || !th.IsAppDomainAgile()
-                        || (!th.IsTypeDesc()
-                            && !th.AsMethodTable()->IsSealed()))
-                    {
-                        //
-                        // Treat the field as non-agile.
-                        //
-
-                        fFieldsAgile = FALSE;
-                        if (fCheckAgile)
-                            pFD->SetDangerousAppDomainAgileField();
-                    }
-                }
-
-                break;
-
-            case ELEMENT_TYPE_VALUETYPE:
-                {
-                    TypeHandle th;
-
-                    {
-                        // Loading a non-self-ref valuetype field.
-                        OVERRIDE_TYPE_LOAD_LEVEL_LIMIT(CLASS_LOADED);
-
-                        th = pFD->GetApproxFieldTypeHandleThrowing();
-                    }
-
-                    _ASSERTE(!th.IsNull());
-
-                    if (!th.IsAppDomainAgile())
-                    {
-                        fFieldsAgile = FALSE;
-                        if (fCheckAgile)
-                            pFD->SetDangerousAppDomainAgileField();
-                    }
-                }
-
-                break;
-
-            default:
-                break;
-            }
-
-            pFD++;
-        }
-    }
-
-    if (fFieldsAgile || fAgile)
-        pClass->SetAppDomainAgile();
-
-    if (fCheckAgile && !fFieldsAgile)
-        pClass->SetCheckAppDomainAgile();
-
-exit:
-    LOG((LF_CLASSLOADER, LL_INFO1000, "CLASSLOADER: AppDomainAgileAttribute for %s is %d\n", pClass->GetDebugClassName(), pClass->IsAppDomainAgile()));
-    pClass->SetAppDomainAgilityDone();
-}
-#endif // defined(_DEBUG)
 
 //*******************************************************************************
 //
@@ -2278,7 +1797,6 @@ LPCUTF8 MethodTable::GetFullyQualifiedNameInfo(LPCUTF8 *ppszNamespace)
         NOTHROW;
         GC_NOTRIGGER;
         FORBID_FAULT;
-        SO_TOLERANT;
     }
     CONTRACTL_END
 
@@ -2619,7 +2137,7 @@ MethodTable::DebugDumpGCDesc(
                 {
                     ssBuff.Printf(W("   offset %5d (%d w/o Object), size %5d (%5d w/o BaseSize subtr)\n"),
                         pSeries->GetSeriesOffset(),
-                        pSeries->GetSeriesOffset() - sizeof(Object),
+                        pSeries->GetSeriesOffset() - OBJECT_SIZE,
                         pSeries->GetSeriesSize(),
                         pSeries->GetSeriesSize() + GetBaseSize() );
                     WszOutputDebugString(ssBuff.GetUnicode());
@@ -2629,7 +2147,7 @@ MethodTable::DebugDumpGCDesc(
                     //LF_ALWAYS allowed here because this is controlled by special env var ShouldDumpOnClassLoad
                     LOG((LF_ALWAYS, LL_ALWAYS, "   offset %5d (%d w/o Object), size %5d (%5d w/o BaseSize subtr)\n",
                          pSeries->GetSeriesOffset(),
-                         pSeries->GetSeriesOffset() - sizeof(Object),
+                         pSeries->GetSeriesOffset() - OBJECT_SIZE,
                          pSeries->GetSeriesSize(),
                          pSeries->GetSeriesSize() + GetBaseSize()
                          ));
@@ -2867,7 +2385,6 @@ WORD SparseVTableMap::LookupVTSlot(WORD MTSlot)
         NOTHROW;
         GC_NOTRIGGER;
         FORBID_FAULT;
-        SO_TOLERANT;
     }
     CONTRACTL_END
 
@@ -2943,21 +2460,7 @@ void EEClass::Save(DataImage *image, MethodTable *pMT)
 
     LOG((LF_ZAP, LL_INFO10000, "EEClass::Save %s (%p)\n", m_szDebugClassName, this));
 
-    // Optimize packable fields before saving into ngen image (the packable fields are located at the end of
-    // the EEClass or sub-type instance and packing will transform them into a space-efficient format which
-    // should reduce the result returned by the GetSize() call below). Packing will fail if the compression
-    // algorithm would result in an increase in size. We track this in the m_fFieldsArePacked data member
-    // which we use to determine whether to access the fields in their packed or unpacked format.
-    // Special case: we don't attempt to pack fields for the System.Threading.OverlappedData class since a
-    // host can change the size of this at runtime. This requires modifying one of the packable fields and we
-    // don't support updates to such fields if they were successfully packed.
-    if (g_pOverlappedDataClass == NULL)
-    {
-        g_pOverlappedDataClass = MscorlibBinder::GetClass(CLASS__OVERLAPPEDDATA);
-        _ASSERTE(g_pOverlappedDataClass);
-    }
-    if (this != g_pOverlappedDataClass->GetClass())
-        m_fFieldsArePacked = GetPackedFields()->PackFields();
+    m_fFieldsArePacked = GetPackedFields()->PackFields();
 
     DWORD cbSize = GetSize();
 
@@ -3668,7 +3171,6 @@ DWORD EEClass::GetPackableField(EEClassFieldId eField)
         GC_NOTRIGGER;
         MODE_ANY;
         SUPPORTS_DAC;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -3687,10 +3189,709 @@ void EEClass::SetPackableField(EEClassFieldId eField, DWORD dwValue)
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
     _ASSERTE(!m_fFieldsArePacked);
     GetPackedFields()->SetUnpackedField(eField, dwValue);
 }
+
+#ifndef DACCESS_COMPILE
+
+//=======================================================================
+// Called from the clsloader to load up and summarize the field metadata
+// for layout classes.
+//
+// Warning: This function can load other classes (esp. for nested structs.)
+//=======================================================================
+#ifdef _PREFAST_
+#pragma warning(push)
+#pragma warning(disable:21000) // Suppress PREFast warning about overly large function
+#endif
+VOID EEClassLayoutInfo::CollectLayoutFieldMetadataThrowing(
+   mdTypeDef      cl,               // cl of the NStruct being loaded
+   BYTE           packingSize,      // packing size (from @dll.struct)
+   BYTE           nlType,           // nltype (from @dll.struct)
+#ifdef FEATURE_COMINTEROP
+   BOOL           isWinRT,          // Is the type a WinRT type
+#endif // FEATURE_COMINTEROP
+   BOOL           fExplicitOffsets, // explicit offsets?
+   MethodTable   *pParentMT,        // the loaded superclass
+   ULONG          cTotalFields,         // total number of fields (instance and static)
+   HENUMInternal *phEnumField,      // enumerator for field
+   Module        *pModule,          // Module that defines the scope, loader and heap (for allocate FieldMarshalers)
+   const SigTypeContext *pTypeContext,          // Type parameters for NStruct being loaded
+   EEClassLayoutInfo    *pEEClassLayoutInfoOut, // caller-allocated structure to fill in.
+   LayoutRawFieldInfo   *pInfoArrayOut,         // caller-allocated array to fill in.  Needs room for cMember+1 elements
+   LoaderAllocator      *pAllocator,
+   AllocMemTracker      *pamTracker
+)
+{
+    CONTRACTL
+    {
+        THROWS;
+        GC_TRIGGERS;
+        MODE_ANY;
+        INJECT_FAULT(COMPlusThrowOM());
+        PRECONDITION(CheckPointer(pModule));
+    }
+    CONTRACTL_END;
+
+    HRESULT hr;
+    // Internal interface for the NStruct being loaded.
+    IMDInternalImport *pInternalImport = pModule->GetMDImport();
+
+#ifdef _DEBUG
+    LPCUTF8 szName; 
+    LPCUTF8 szNamespace; 
+    if (FAILED(pInternalImport->GetNameOfTypeDef(cl, &szName, &szNamespace)))
+    {
+        szName = szNamespace = "Invalid TypeDef record";
+    }
+    
+    if (g_pConfig->ShouldBreakOnStructMarshalSetup(szName))
+        CONSISTENCY_CHECK_MSGF(false, ("BreakOnStructMarshalSetup: '%s' ", szName));
+#endif
+
+    // Running tote - if anything in this type disqualifies it from being ManagedSequential, somebody will set this to TRUE by the the time
+    // function exits.
+    BOOL fDisqualifyFromManagedSequential; 
+
+    // Check if this type might be ManagedSequential. Only valuetypes marked Sequential can be
+    // ManagedSequential. Other issues checked below might also disqualify the type.
+    if ( (!fExplicitOffsets) &&    // Is it marked sequential?
+         (pParentMT && (pParentMT->IsValueTypeClass() || pParentMT->IsManagedSequential()))  // Is it a valuetype or derived from a qualifying valuetype?
+       )
+    {
+        fDisqualifyFromManagedSequential = FALSE;
+    }
+    else
+    {
+        fDisqualifyFromManagedSequential = TRUE;
+    }
+
+
+    BOOL fHasNonTrivialParent = pParentMT &&
+                                !pParentMT->IsObjectClass() &&
+                                !pParentMT->IsValueTypeClass();
+
+
+    //====================================================================
+    // First, some validation checks.
+    //====================================================================
+    _ASSERTE(!(fHasNonTrivialParent && !(pParentMT->HasLayout())));
+
+    MD_CLASS_LAYOUT classlayout;
+    hr = pInternalImport->GetClassLayoutInit(cl, &classlayout);
+    if (FAILED(hr))
+    {
+        COMPlusThrowHR(hr, BFA_CANT_GET_CLASSLAYOUT);
+    }
+
+    pEEClassLayoutInfoOut->m_numCTMFields        = fHasNonTrivialParent ? pParentMT->GetLayoutInfo()->m_numCTMFields : 0;
+    pEEClassLayoutInfoOut->SetFieldMarshalers(NULL);
+    pEEClassLayoutInfoOut->SetIsBlittable(TRUE);
+    if (fHasNonTrivialParent)
+        pEEClassLayoutInfoOut->SetIsBlittable(pParentMT->IsBlittable());
+    pEEClassLayoutInfoOut->SetIsZeroSized(FALSE);    
+    pEEClassLayoutInfoOut->SetHasExplicitSize(FALSE);
+    pEEClassLayoutInfoOut->m_cbPackingSize = packingSize;
+
+    LayoutRawFieldInfo *pfwalk = pInfoArrayOut;
+    
+    S_UINT32 cbSortArraySize = S_UINT32(cTotalFields) * S_UINT32(sizeof(LayoutRawFieldInfo *));
+    if (cbSortArraySize.IsOverflow())
+    {
+        ThrowHR(COR_E_TYPELOAD);
+    }
+    LayoutRawFieldInfo **pSortArray = (LayoutRawFieldInfo **)_alloca(cbSortArraySize.Value());
+    LayoutRawFieldInfo **pSortArrayEnd = pSortArray;
+    
+    ULONG maxRid = pInternalImport->GetCountWithTokenKind(mdtFieldDef);
+    
+    
+    //=====================================================================
+    // Phase 1: Figure out the NFT of each field based on both the CLR
+    // signature of the field and the FieldMarshaler metadata. 
+    //=====================================================================
+    BOOL fParentHasLayout = pParentMT && pParentMT->HasLayout();
+    UINT32 cbAdjustedParentLayoutNativeSize = 0;
+    EEClassLayoutInfo *pParentLayoutInfo = NULL;;
+    if (fParentHasLayout)
+    {
+        pParentLayoutInfo = pParentMT->GetLayoutInfo();
+        // Treat base class as an initial member.
+        cbAdjustedParentLayoutNativeSize = pParentLayoutInfo->GetNativeSize();
+        // If the parent was originally a zero-sized explicit type but
+        // got bumped up to a size of 1 for compatibility reasons, then
+        // we need to remove the padding, but ONLY for inheritance situations.
+        if (pParentLayoutInfo->IsZeroSized()) {
+            CONSISTENCY_CHECK(cbAdjustedParentLayoutNativeSize == 1);
+            cbAdjustedParentLayoutNativeSize = 0;
+        }
+    }
+
+    mdFieldDef fd;
+    ULONG i;
+    ULONG cInstanceFields = 0;
+    for (i = 0; pInternalImport->EnumNext(phEnumField, &fd); i++)
+    {
+        DWORD dwFieldAttrs;
+        ULONG rid = RidFromToken(fd);
+
+        if((rid == 0)||(rid > maxRid))
+        {
+            COMPlusThrowHR(COR_E_TYPELOAD, BFA_BAD_FIELD_TOKEN);
+        }
+
+        IfFailThrow(pInternalImport->GetFieldDefProps(fd, &dwFieldAttrs));
+        
+        PCCOR_SIGNATURE pNativeType = NULL;
+        ULONG cbNativeType;
+        // We ignore marshaling data attached to statics and literals,
+        // since these do not contribute to instance data.
+        if (!IsFdStatic(dwFieldAttrs) && !IsFdLiteral(dwFieldAttrs))
+        {
+            PCCOR_SIGNATURE pCOMSignature;
+            ULONG       cbCOMSignature;
+
+            if (IsFdHasFieldMarshal(dwFieldAttrs))
+            {
+                hr = pInternalImport->GetFieldMarshal(fd, &pNativeType, &cbNativeType);
+                if (FAILED(hr))
+                    cbNativeType = 0;
+            }
+            else
+                cbNativeType = 0;
+            
+            IfFailThrow(pInternalImport->GetSigOfFieldDef(fd,&cbCOMSignature, &pCOMSignature));
+            
+            IfFailThrow(::validateTokenSig(fd,pCOMSignature,cbCOMSignature,dwFieldAttrs,pInternalImport));
+            
+            // fill the appropriate entry in pInfoArrayOut
+            pfwalk->m_MD = fd;
+            pfwalk->m_offset = (UINT32) -1;
+            pfwalk->m_sequence = 0;
+
+#ifdef _DEBUG
+            LPCUTF8 szFieldName;
+            if (FAILED(pInternalImport->GetNameOfFieldDef(fd, &szFieldName)))
+            {
+                szFieldName = "Invalid FieldDef record";
+            }
+#endif
+
+            ParseNativeTypeFlags flags = ParseNativeTypeFlags::None;
+#ifdef FEATURE_COMINTEROP
+            if (isWinRT)
+                flags = ParseNativeTypeFlags::IsWinRT;
+            else // WinRT types have nlType == nltAnsi but should be treated as Unicode
+#endif // FEATURE_COMINTEROP
+            if (nlType == nltAnsi)
+                flags =  ParseNativeTypeFlags::IsAnsi;
+
+            ParseNativeType(pModule,
+                            pCOMSignature,
+                            cbCOMSignature,
+                            flags,
+                            pfwalk,
+                            pNativeType,
+                            cbNativeType,
+                            pInternalImport,
+                            cl,
+                            pTypeContext,
+                            &fDisqualifyFromManagedSequential
+#ifdef _DEBUG
+                            ,
+                            szNamespace,
+                            szName,
+                            szFieldName
+#endif
+                                );
+
+            if (!IsFieldBlittable((FieldMarshaler*)(&pfwalk->m_FieldMarshaler)))
+                pEEClassLayoutInfoOut->SetIsBlittable(FALSE);
+
+            cInstanceFields++;
+            pfwalk++;
+        }
+    }
+
+    _ASSERTE(i == cTotalFields);
+
+    // NULL out the last entry
+    pfwalk->m_MD = mdFieldDefNil;
+    
+    
+    //
+    // fill in the layout information 
+    //
+    
+    // pfwalk points to the beginging of the array
+    pfwalk = pInfoArrayOut;
+
+    ULONG ulOffset;
+    while (SUCCEEDED(hr = pInternalImport->GetClassLayoutNext(
+                                     &classlayout,
+                                     &fd,
+                                     &ulOffset)) &&
+                                     fd != mdFieldDefNil)
+    {
+        // watch for the last entry: must be mdFieldDefNil
+        while ((mdFieldDefNil != pfwalk->m_MD)&&(pfwalk->m_MD < fd))
+            pfwalk++;
+
+        // if we haven't found a matching token, it must be a static field with layout -- ignore it
+        if(pfwalk->m_MD != fd) continue;
+
+        if (!fExplicitOffsets)
+        {
+            // ulOffset is the sequence
+            pfwalk->m_sequence = ulOffset;
+        }
+        else
+        {
+            // ulOffset is the explicit offset
+            pfwalk->m_offset = ulOffset;
+            pfwalk->m_sequence = (ULONG) -1;
+
+            // Treat base class as an initial member.
+            if (!SafeAddUINT32(&(pfwalk->m_offset), cbAdjustedParentLayoutNativeSize))
+                COMPlusThrowOM();
+        }
+    }
+    IfFailThrow(hr);
+
+    // now sort the array
+    if (!fExplicitOffsets)
+    { 
+        // sort sequential by ascending sequence
+        for (i = 0; i < cInstanceFields; i++)
+        {
+            LayoutRawFieldInfo**pSortWalk = pSortArrayEnd;
+            while (pSortWalk != pSortArray)
+            {
+                if (pInfoArrayOut[i].m_sequence >= (*(pSortWalk-1))->m_sequence)
+                    break;
+
+                pSortWalk--;
+            }
+
+            // pSortWalk now points to the target location for new FieldInfo.
+            MoveMemory(pSortWalk + 1, pSortWalk, (pSortArrayEnd - pSortWalk) * sizeof(LayoutRawFieldInfo*));
+            *pSortWalk = &pInfoArrayOut[i];
+            pSortArrayEnd++;
+        }
+    }
+    else // no sorting for explicit layout
+    {
+        for (i = 0; i < cInstanceFields; i++)
+        {
+            if(pInfoArrayOut[i].m_MD != mdFieldDefNil)
+            {
+                if (pInfoArrayOut[i].m_offset == (UINT32)-1)
+                {
+                    LPCUTF8 szFieldName;
+                    if (FAILED(pInternalImport->GetNameOfFieldDef(pInfoArrayOut[i].m_MD, &szFieldName)))
+                    {
+                        szFieldName = "Invalid FieldDef record";
+                    }
+                    pModule->GetAssembly()->ThrowTypeLoadException(pInternalImport, 
+                                                                   cl,
+                                                                   szFieldName,
+                                                                   IDS_CLASSLOAD_NSTRUCT_EXPLICIT_OFFSET);
+                }
+                else if ((INT)pInfoArrayOut[i].m_offset < 0)
+                {
+                    LPCUTF8 szFieldName;
+                    if (FAILED(pInternalImport->GetNameOfFieldDef(pInfoArrayOut[i].m_MD, &szFieldName)))
+                    {
+                        szFieldName = "Invalid FieldDef record";
+                    }
+                    pModule->GetAssembly()->ThrowTypeLoadException(pInternalImport, 
+                                                                   cl,
+                                                                   szFieldName,
+                                                                   IDS_CLASSLOAD_NSTRUCT_NEGATIVE_OFFSET);
+                }
+            }
+                
+            *pSortArrayEnd = &pInfoArrayOut[i];
+            pSortArrayEnd++;
+        }
+    }
+
+    //=====================================================================
+    // Phase 2: Compute the native size (in bytes) of each field.
+    // Store this in pInfoArrayOut[].cbNativeSize;
+    //=====================================================================
+
+    // Now compute the native size of each field
+    for (pfwalk = pInfoArrayOut; pfwalk->m_MD != mdFieldDefNil; pfwalk++)
+    {
+        pEEClassLayoutInfoOut->m_numCTMFields++;
+
+        pfwalk->m_cbNativeSize = ((FieldMarshaler*)&(pfwalk->m_FieldMarshaler))->NativeSize();
+    }
+
+    if (pEEClassLayoutInfoOut->m_numCTMFields)
+    {
+        pEEClassLayoutInfoOut->SetFieldMarshalers((FieldMarshaler*)(pamTracker->Track(pAllocator->GetLowFrequencyHeap()->AllocMem(S_SIZE_T(MAXFIELDMARSHALERSIZE) * S_SIZE_T(pEEClassLayoutInfoOut->m_numCTMFields)))));
+
+        // Bring in the parent's fieldmarshalers
+        if (fHasNonTrivialParent)
+        {
+            CONSISTENCY_CHECK(fParentHasLayout);
+            PREFAST_ASSUME(pParentLayoutInfo != NULL);  // See if (fParentHasLayout) branch above
+
+            UINT numChildCTMFields = pEEClassLayoutInfoOut->m_numCTMFields - pParentLayoutInfo->m_numCTMFields;
+
+            BYTE *pParentCTMFieldSrcArray = (BYTE*)pParentLayoutInfo->GetFieldMarshalers();
+            BYTE *pParentCTMFieldDestArray = ((BYTE*)pEEClassLayoutInfoOut->GetFieldMarshalers()) + MAXFIELDMARSHALERSIZE*numChildCTMFields;
+
+            for (UINT parentCTMFieldIndex = 0; parentCTMFieldIndex < pParentLayoutInfo->m_numCTMFields; parentCTMFieldIndex++)
+            {
+                FieldMarshaler *pParentCTMFieldSrc = (FieldMarshaler *)(pParentCTMFieldSrcArray + MAXFIELDMARSHALERSIZE*parentCTMFieldIndex);
+                FieldMarshaler *pParentCTMFieldDest = (FieldMarshaler *)(pParentCTMFieldDestArray + MAXFIELDMARSHALERSIZE*parentCTMFieldIndex);
+
+                pParentCTMFieldSrc->CopyTo(pParentCTMFieldDest, MAXFIELDMARSHALERSIZE);
+            }
+        }
+
+    }
+
+
+    //=====================================================================
+    // Phase 3: If FieldMarshaler requires autooffsetting, compute the offset
+    // of each field and the size of the total structure. We do the layout
+    // according to standard VC layout rules:
+    //
+    //   Each field has an alignment requirement. The alignment-requirement
+    //   of a scalar field is the smaller of its size and the declared packsize.
+    //   The alignment-requirement of a struct field is the smaller of the
+    //   declared packsize and the largest of the alignment-requirement
+    //   of its fields. The alignment requirement of an array is that
+    //   of one of its elements.
+    //
+    //   In addition, each struct gets padding at the end to ensure
+    //   that an array of such structs contain no unused space between
+    //   elements.
+    //=====================================================================
+    {
+        BYTE   LargestAlignmentRequirement = 1;
+        UINT32 cbCurOffset = 0;
+
+        // Treat base class as an initial member.
+        if (!SafeAddUINT32(&cbCurOffset, cbAdjustedParentLayoutNativeSize))
+            COMPlusThrowOM();
+
+        if (fParentHasLayout)
+        {
+            BYTE alignmentRequirement;
+            
+            alignmentRequirement = min(packingSize, pParentLayoutInfo->GetLargestAlignmentRequirementOfAllMembers());
+    
+            LargestAlignmentRequirement = max(LargestAlignmentRequirement, alignmentRequirement);                                          
+        }
+
+        // Start with the size inherited from the parent (if any).
+        unsigned calcTotalSize = cbAdjustedParentLayoutNativeSize;
+     
+        LayoutRawFieldInfo **pSortWalk;
+        for (pSortWalk = pSortArray, i=cInstanceFields; i; i--, pSortWalk++)
+        {
+            pfwalk = *pSortWalk;
+    
+            BYTE alignmentRequirement = static_cast<BYTE>(((FieldMarshaler*)&(pfwalk->m_FieldMarshaler))->AlignmentRequirement());
+            if (!(alignmentRequirement == 1 ||
+                     alignmentRequirement == 2 ||
+                     alignmentRequirement == 4 ||
+                  alignmentRequirement == 8 ||
+                  alignmentRequirement == 16 ||
+                  alignmentRequirement == 32))
+            {
+                COMPlusThrowHR(COR_E_INVALIDPROGRAM, BFA_METADATA_CORRUPT);
+            }
+    
+            alignmentRequirement = min(alignmentRequirement, packingSize);
+    
+            LargestAlignmentRequirement = max(LargestAlignmentRequirement, alignmentRequirement);
+    
+            // This assert means I forgot to special-case some NFT in the
+            // above switch.
+            _ASSERTE(alignmentRequirement <= 32);
+    
+            // Check if this field is overlapped with other(s)
+            pfwalk->m_fIsOverlapped = FALSE;
+            if (fExplicitOffsets) {
+                LayoutRawFieldInfo *pfwalk1;
+                DWORD dwBegin = pfwalk->m_offset;
+                DWORD dwEnd = dwBegin+pfwalk->m_cbNativeSize;
+                for (pfwalk1 = pInfoArrayOut; pfwalk1 < pfwalk; pfwalk1++)
+                {
+                    if((pfwalk1->m_offset >= dwEnd) || (pfwalk1->m_offset+pfwalk1->m_cbNativeSize <= dwBegin)) continue;
+                    pfwalk->m_fIsOverlapped = TRUE;
+                    pfwalk1->m_fIsOverlapped = TRUE;
+                }
+            }
+            else
+            {
+                // Insert enough padding to align the current data member.
+                while (cbCurOffset % alignmentRequirement)
+                {
+                    if (!SafeAddUINT32(&cbCurOffset, 1))
+                        COMPlusThrowOM();
+                }
+    
+                // Insert current data member.
+                pfwalk->m_offset = cbCurOffset;
+    
+                // if we overflow we will catch it below
+                cbCurOffset += pfwalk->m_cbNativeSize;
+            } 
+    
+            unsigned fieldEnd = pfwalk->m_offset + pfwalk->m_cbNativeSize;
+            if (fieldEnd < pfwalk->m_offset)
+                COMPlusThrowOM();
+    
+                // size of the structure is the size of the last field.  
+            if (fieldEnd > calcTotalSize)
+                calcTotalSize = fieldEnd;
+        }
+    
+        ULONG clstotalsize = 0;
+        if (FAILED(pInternalImport->GetClassTotalSize(cl, &clstotalsize)))
+        {
+            clstotalsize = 0;
+        }
+        
+        if (clstotalsize != 0)
+        {
+            if (!SafeAddULONG(&clstotalsize, (ULONG)cbAdjustedParentLayoutNativeSize))
+                COMPlusThrowOM();
+    
+            // size must be large enough to accomodate layout. If not, we use the layout size instead.
+            if (clstotalsize < calcTotalSize)
+            {
+                clstotalsize = calcTotalSize;
+            }
+            calcTotalSize = clstotalsize;   // use the size they told us 
+        } 
+        else
+        {
+            // The did not give us an explict size, so lets round up to a good size (for arrays) 
+            while (calcTotalSize % LargestAlignmentRequirement != 0)
+            {
+                if (!SafeAddUINT32(&calcTotalSize, 1))
+                    COMPlusThrowOM();
+            }
+        }
+        
+        // We'll cap the total native size at a (somewhat) arbitrary limit to ensure
+        // that we don't expose some overflow bug later on.
+        if (calcTotalSize >= MAX_SIZE_FOR_INTEROP)
+            COMPlusThrowOM();
+
+        // This is a zero-sized struct - need to record the fact and bump it up to 1.
+        if (calcTotalSize == 0)
+        {
+            pEEClassLayoutInfoOut->SetIsZeroSized(TRUE);
+            calcTotalSize = 1;
+        }
+    
+        pEEClassLayoutInfoOut->m_cbNativeSize = calcTotalSize;
+    
+        // The packingSize acts as a ceiling on all individual alignment
+        // requirements so it follows that the largest alignment requirement
+        // is also capped.
+        _ASSERTE(LargestAlignmentRequirement <= packingSize);
+        pEEClassLayoutInfoOut->m_LargestAlignmentRequirementOfAllMembers = LargestAlignmentRequirement;
+    }
+
+
+
+    //=====================================================================
+    // Phase 4: Now we do the same thing again for managedsequential layout.
+    //=====================================================================
+    if (!fDisqualifyFromManagedSequential)
+    {
+        BYTE   LargestAlignmentRequirement = 1;
+        UINT32 cbCurOffset = 0;
+    
+        if (pParentMT && pParentMT->IsManagedSequential())
+        {
+            // Treat base class as an initial member.
+            if (!SafeAddUINT32(&cbCurOffset, pParentMT->GetNumInstanceFieldBytes()))
+                COMPlusThrowOM();
+    
+            BYTE alignmentRequirement = 0;
+                
+            alignmentRequirement = min(packingSize, pParentLayoutInfo->m_ManagedLargestAlignmentRequirementOfAllMembers);
+    
+            LargestAlignmentRequirement = max(LargestAlignmentRequirement, alignmentRequirement);                                          
+        }
+    
+        // The current size of the structure as a whole, we start at 1, because we disallow 0 sized structures.
+        // NOTE: We do not need to do the same checking for zero-sized types as phase 3 because only ValueTypes
+        //       can be ManagedSequential and ValueTypes can not be inherited from.
+        unsigned calcTotalSize = 1;
+     
+        LayoutRawFieldInfo **pSortWalk;
+        for (pSortWalk = pSortArray, i=cInstanceFields; i; i--, pSortWalk++)
+        {
+            pfwalk = *pSortWalk;
+    
+            BYTE alignmentRequirement = ((BYTE)(pfwalk->m_managedAlignmentReq));
+            if (!(alignmentRequirement == 1 ||
+                     alignmentRequirement == 2 ||
+                     alignmentRequirement == 4 ||
+                  alignmentRequirement == 8 ||
+                  alignmentRequirement == 16 ||
+                  alignmentRequirement == 32))
+            {
+                COMPlusThrowHR(COR_E_INVALIDPROGRAM, BFA_METADATA_CORRUPT);
+            }
+            
+            alignmentRequirement = min(alignmentRequirement, packingSize);
+            
+            LargestAlignmentRequirement = max(LargestAlignmentRequirement, alignmentRequirement);
+            
+            _ASSERTE(alignmentRequirement <= 32);
+            
+            // Insert enough padding to align the current data member.
+            while (cbCurOffset % alignmentRequirement)
+            {
+                if (!SafeAddUINT32(&cbCurOffset, 1))
+                    COMPlusThrowOM();
+            }
+            
+            // Insert current data member.
+            pfwalk->m_managedOffset = cbCurOffset;
+            
+            // if we overflow we will catch it below
+            cbCurOffset += pfwalk->m_managedSize;
+            
+            unsigned fieldEnd = pfwalk->m_managedOffset + pfwalk->m_managedSize;
+            if (fieldEnd < pfwalk->m_managedOffset)
+                COMPlusThrowOM();
+            
+                // size of the structure is the size of the last field.  
+            if (fieldEnd > calcTotalSize)
+                calcTotalSize = fieldEnd;
+            
+#ifdef _DEBUG
+            // @perf: If the type is blittable, the managed and native layouts have to be identical
+            // so they really shouldn't be calculated twice. Until this code has been well tested and
+            // stabilized, however, it is useful to compute both and assert that they are equal in the blittable
+            // case.
+            if (pEEClassLayoutInfoOut->IsBlittable())
+            {
+                _ASSERTE(pfwalk->m_managedOffset == pfwalk->m_offset);
+                _ASSERTE(pfwalk->m_managedSize   == pfwalk->m_cbNativeSize);
+            }
+#endif
+        } //for
+        
+        ULONG clstotalsize = 0;
+        if (FAILED(pInternalImport->GetClassTotalSize(cl, &clstotalsize)))
+        {
+            clstotalsize = 0;
+        }
+        
+        if (clstotalsize != 0)
+        {
+            pEEClassLayoutInfoOut->SetHasExplicitSize(TRUE);
+            
+            if (pParentMT && pParentMT->IsManagedSequential())
+            {
+                // Treat base class as an initial member.
+                UINT32 parentSize = pParentMT->GetNumInstanceFieldBytes();
+                if (!SafeAddULONG(&clstotalsize, parentSize))
+                    COMPlusThrowOM();
+            }
+    
+            // size must be large enough to accomodate layout. If not, we use the layout size instead.
+            if (clstotalsize < calcTotalSize)
+            {
+                clstotalsize = calcTotalSize;
+            }
+            calcTotalSize = clstotalsize;   // use the size they told us 
+        } 
+        else
+        {
+            // The did not give us an explict size, so lets round up to a good size (for arrays) 
+            while (calcTotalSize % LargestAlignmentRequirement != 0)
+            {
+                if (!SafeAddUINT32(&calcTotalSize, 1))
+                    COMPlusThrowOM();
+            }
+        } 
+    
+        pEEClassLayoutInfoOut->m_cbManagedSize = calcTotalSize;
+
+        // The packingSize acts as a ceiling on all individual alignment
+        // requirements so it follows that the largest alignment requirement
+        // is also capped.
+        _ASSERTE(LargestAlignmentRequirement <= packingSize);
+        pEEClassLayoutInfoOut->m_ManagedLargestAlignmentRequirementOfAllMembers = LargestAlignmentRequirement;
+
+#ifdef _DEBUG
+            // @perf: If the type is blittable, the managed and native layouts have to be identical
+            // so they really shouldn't be calculated twice. Until this code has been well tested and
+            // stabilized, however, it is useful to compute both and assert that they are equal in the blittable
+            // case.
+            if (pEEClassLayoutInfoOut->IsBlittable())
+            {
+                _ASSERTE(pEEClassLayoutInfoOut->m_cbManagedSize == pEEClassLayoutInfoOut->m_cbNativeSize);
+                _ASSERTE(pEEClassLayoutInfoOut->m_ManagedLargestAlignmentRequirementOfAllMembers == pEEClassLayoutInfoOut->m_LargestAlignmentRequirementOfAllMembers);
+            }
+#endif
+    } //if
+
+    pEEClassLayoutInfoOut->SetIsManagedSequential(!fDisqualifyFromManagedSequential);
+
+#ifdef _DEBUG
+    {
+        BOOL illegalMarshaler = FALSE;
+        
+        LOG((LF_INTEROP, LL_INFO100000, "\n\n"));
+        LOG((LF_INTEROP, LL_INFO100000, "%s.%s\n", szNamespace, szName));
+        LOG((LF_INTEROP, LL_INFO100000, "Packsize      = %lu\n", (ULONG)packingSize));
+        LOG((LF_INTEROP, LL_INFO100000, "Max align req = %lu\n", (ULONG)(pEEClassLayoutInfoOut->m_LargestAlignmentRequirementOfAllMembers)));
+        LOG((LF_INTEROP, LL_INFO100000, "----------------------------\n"));
+        for (pfwalk = pInfoArrayOut; pfwalk->m_MD != mdFieldDefNil; pfwalk++)
+        {
+            LPCUTF8 fieldname;
+            if (FAILED(pInternalImport->GetNameOfFieldDef(pfwalk->m_MD, &fieldname)))
+            {
+                fieldname = "??";
+            }
+            LOG((LF_INTEROP, LL_INFO100000, "+%-5lu  ", (ULONG)(pfwalk->m_offset)));
+            LOG((LF_INTEROP, LL_INFO100000, "%s", fieldname));
+            LOG((LF_INTEROP, LL_INFO100000, "\n"));
+
+            if (((FieldMarshaler*)&pfwalk->m_FieldMarshaler)->GetNStructFieldType() == NFT_ILLEGAL)
+                illegalMarshaler = TRUE;             
+        }
+
+        // If we are dealing with a non trivial parent, determine if it has any illegal marshallers.
+        if (fHasNonTrivialParent)
+        {
+            FieldMarshaler *pParentFM = pParentMT->GetLayoutInfo()->GetFieldMarshalers();
+            for (i = 0; i < pParentMT->GetLayoutInfo()->m_numCTMFields; i++)
+            {
+                if (pParentFM->GetNStructFieldType() == NFT_ILLEGAL)
+                    illegalMarshaler = TRUE;                                 
+                ((BYTE*&)pParentFM) += MAXFIELDMARSHALERSIZE;
+            }
+        }
+        
+        LOG((LF_INTEROP, LL_INFO100000, "+%-5lu   EOS\n", (ULONG)(pEEClassLayoutInfoOut->m_cbNativeSize)));
+        LOG((LF_INTEROP, LL_INFO100000, "Allocated %d %s field marshallers for %s.%s\n", pEEClassLayoutInfoOut->m_numCTMFields, (illegalMarshaler ? "pointless" : "usable"), szNamespace, szName));
+    }
+#endif
+    return;
+}
+#ifdef _PREFAST_
+#pragma warning(pop)
+#endif // _PREFAST_
+#endif // DACCESS_COMPILE

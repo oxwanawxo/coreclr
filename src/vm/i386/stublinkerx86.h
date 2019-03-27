@@ -437,6 +437,7 @@ class StubLinkerCPU : public StubLinker
 #ifdef _TARGET_AMD64_
 
         static Stub * CreateTailCallCopyArgsThunk(CORINFO_SIG_INFO * pSig,
+                                                  MethodDesc* pMD,
                                                   CorInfoHelperTailCallSpecialHandling flags);
 
 #endif // _TARGET_AMD64_
@@ -598,71 +599,6 @@ struct NDirectImportPrecode : StubPrecode {
 typedef DPTR(NDirectImportPrecode) PTR_NDirectImportPrecode;
 
 #endif // HAS_NDIRECT_IMPORT_PRECODE
-
-
-#ifdef HAS_REMOTING_PRECODE
-
-// Precode with embedded remoting interceptor
-struct RemotingPrecode {
-
-#ifdef _WIN64
-    static const int Type = XXX;       // NYI
-    // mov r10,pMethodDesc
-    // call PrecodeRemotingThunk
-    // jmp Prestub/Stub/NativeCode
-#else
-    static const int Type = 0x90;
-    // mov eax,pMethodDesc
-    // nop
-    // call PrecodeRemotingThunk
-    // jmp Prestub/Stub/NativeCode
-#endif // _WIN64
-
-    IN_WIN64(USHORT m_movR10;)
-    IN_WIN32(BYTE   m_movEAX;)
-    TADDR           m_pMethodDesc;
-    BYTE            m_type;
-    BYTE            m_call;
-    INT32           m_callRel32;
-    BYTE            m_jmp;
-    INT32           m_rel32;
-
-    void Init(MethodDesc* pMD, LoaderAllocator *pLoaderAllocator = NULL);
-
-    TADDR GetMethodDesc()
-    {
-        LIMITED_METHOD_CONTRACT; 
-        SUPPORTS_DAC;
-
-        return m_pMethodDesc;
-    }
-
-    PCODE GetTarget()
-    { 
-        LIMITED_METHOD_DAC_CONTRACT;
-
-        return rel32Decode(PTR_HOST_MEMBER_TADDR(RemotingPrecode, this, m_rel32));
-    }
-
-    BOOL SetTargetInterlocked(TADDR target, TADDR expected)
-    {
-        CONTRACTL
-        {
-            THROWS;
-            GC_TRIGGERS;
-        }
-        CONTRACTL_END;
-
-        EnsureWritableExecutablePages(&m_rel32);
-        return rel32SetInterlocked(&m_rel32, target, expected, (MethodDesc*)GetMethodDesc());
-    }
-};
-IN_WIN64(static_assert_no_msg(offsetof(RemotingPrecode, m_movR10) == OFFSETOF_PRECODE_TYPE);)
-IN_WIN64(static_assert_no_msg(offsetof(RemotingPrecode, m_type) == OFFSETOF_PRECODE_TYPE_MOV_R10);)
-IN_WIN32(static_assert_no_msg(offsetof(RemotingPrecode, m_type) == OFFSETOF_PRECODE_TYPE);)
-typedef DPTR(RemotingPrecode) PTR_RemotingPrecode;
-
-#endif // HAS_REMOTING_PRECODE
 
 
 #ifdef HAS_FIXUP_PRECODE

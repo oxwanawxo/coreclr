@@ -22,8 +22,8 @@ EventPipeBuffer::EventPipeBuffer(unsigned int bufferSize)
 
     m_pBuffer = new BYTE[bufferSize];
     memset(m_pBuffer, 0, bufferSize);
-    m_pCurrent = m_pBuffer;
     m_pLimit = m_pBuffer + bufferSize;
+    m_pCurrent = GetNextAlignedAddress(m_pBuffer);
 
     m_mostRecentTimeStamp.QuadPart = 0;
     m_pLastPoppedEvent = NULL;
@@ -54,37 +54,47 @@ bool EventPipeBuffer::WriteEvent(Thread *pThread, EventPipeSession &session, Eve
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        PRECONDITION(pThread != NULL);
+        PRECONDITION(((size_t)m_pCurrent % AlignmentSize) == 0);
     }
     CONTRACTL_END;
 
     // Calculate the size of the event.
     unsigned int eventSize = sizeof(EventPipeEventInstance) + payload.GetSize();
-
+    
     // Make sure we have enough space to write the event.
     if(m_pCurrent + eventSize >= m_pLimit)
     {
         return false;
     }
 
-    // Calculate the location of the data payload.
-    BYTE *pDataDest = m_pCurrent + sizeof(EventPipeEventInstance);
-
     bool success = true;
     EX_TRY
     {
+        // Calculate the location of the data payload.
+        BYTE *pDataDest = payload.GetSize() == 0 ? NULL : m_pCurrent + sizeof(EventPipeEventInstance);
+
         // Placement-new the EventPipeEventInstance.
+        // if pthread is NULL, it's likely we are running in something like a GC thread which is not a Thread object, so it can't have an activity ID set anyway
+
+        StackContents s;
+        memset((void*)&s, 0, sizeof(s));
+        if (event.NeedStack() && !session.RundownEnabled() && pStack == NULL)
+        {
+            EventPipe::WalkManagedStackForCurrentThread(s);
+            pStack = &s;
+        }
+
         EventPipeEventInstance *pInstance = new (m_pCurrent) EventPipeEventInstance(
             session,
             event,
-            pThread->GetOSThreadId(),
+            (pThread == NULL) ? ::GetCurrentThreadId() : pThread->GetOSThreadId(),
             pDataDest,
             payload.GetSize(),
-            pActivityId,
+            (pThread == NULL) ? NULL : pActivityId,
             pRelatedActivityId);
 
         // Copy the stack if a separate stack trace was provided.
-        if(pStack != NULL)
+        if (pStack != NULL)
         {
             StackContents *pInstanceStack = pInstance->GetStack();
             pStack->CopyTo(pInstanceStack);
@@ -110,7 +120,7 @@ bool EventPipeBuffer::WriteEvent(Thread *pThread, EventPipeSession &session, Eve
     if(success)
     {
         // Advance the current pointer past the event.
-        m_pCurrent += eventSize;
+        m_pCurrent = GetNextAlignedAddress(m_pCurrent + eventSize);
     }
 
     return success;
@@ -134,7 +144,7 @@ void EventPipeBuffer::Clear()
     CONTRACTL_END;
 
     memset(m_pBuffer, 0, (size_t)(m_pLimit - m_pBuffer));
-    m_pCurrent = m_pBuffer;
+    m_pCurrent = GetNextAlignedAddress(m_pBuffer);
     m_mostRecentTimeStamp.QuadPart = 0;
     m_pLastPoppedEvent = NULL;
 }
@@ -154,9 +164,10 @@ EventPipeEventInstance* EventPipeBuffer::GetNext(EventPipeEventInstance *pEvent,
     if(pEvent == NULL)
     {
         // If this buffer contains an event, select it.
-        if(m_pCurrent > m_pBuffer)
+        BYTE *pFirstAlignedInstance = GetNextAlignedAddress(m_pBuffer);
+        if(m_pCurrent > pFirstAlignedInstance)
         {
-            pNextInstance = (EventPipeEventInstance*)m_pBuffer;
+            pNextInstance = (EventPipeEventInstance*)pFirstAlignedInstance;
         }
         else
         {
@@ -172,9 +183,17 @@ EventPipeEventInstance* EventPipeBuffer::GetNext(EventPipeEventInstance *pEvent,
             return NULL;
         }
 
-        // We have a pointer within the bounds of the buffer.
-        // Find the next event by skipping the current event with it's data payload immediately after the instance.
-        pNextInstance = (EventPipeEventInstance *)(pEvent->GetData() + pEvent->GetDataLength());
+        if (pEvent->GetData())
+        {
+            // We have a pointer within the bounds of the buffer.
+            // Find the next event by skipping the current event with it's data payload immediately after the instance.
+            pNextInstance = (EventPipeEventInstance *)GetNextAlignedAddress(const_cast<BYTE *>(pEvent->GetData() + pEvent->GetDataLength()));
+        }
+        else
+        {
+            // In case we do not have a payload, the next instance is right after the current instance
+            pNextInstance = (EventPipeEventInstance*)GetNextAlignedAddress((BYTE*)(pEvent + 1));
+        }
 
         // Check to see if we've reached the end of the written portion of the buffer.
         if((BYTE*)pNextInstance >= m_pCurrent)
@@ -245,14 +264,14 @@ bool EventPipeBuffer::EnsureConsistency()
     CONTRACTL_END;
 
     // Check to see if the buffer is empty.
-    if(m_pBuffer == m_pCurrent)
+    if(GetNextAlignedAddress(m_pBuffer) == m_pCurrent)
     {
         // Make sure that the buffer size is greater than zero.
         _ASSERTE(m_pBuffer != m_pLimit);
     }
 
     // Validate the contents of the filled portion of the buffer.
-    BYTE *ptr = m_pBuffer;
+    BYTE *ptr = GetNextAlignedAddress(m_pBuffer);
     while(ptr < m_pCurrent)
     {
         // Validate the event.
@@ -263,7 +282,7 @@ bool EventPipeBuffer::EnsureConsistency()
         _ASSERTE((pInstance->GetData() != NULL && pInstance->GetDataLength() > 0) || (pInstance->GetData() == NULL && pInstance->GetDataLength() == 0));
 
         // Skip the event.
-        ptr += sizeof(*pInstance) + pInstance->GetDataLength();
+        ptr = GetNextAlignedAddress(ptr + sizeof(*pInstance) + pInstance->GetDataLength());
     }
 
     // When we're done walking the filled portion of the buffer,

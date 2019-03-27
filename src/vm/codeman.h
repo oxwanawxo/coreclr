@@ -68,6 +68,7 @@ Abstract:
 #include "shash.h"
 #include "pedecoder.h"
 #include "gcinfo.h"
+#include "eexcp.h"
 
 #if defined(WIN64EXCEPTIONS) && !defined(USE_INDIRECT_CODEHEADER)
 #error "WIN64EXCEPTIONS requires USE_INDIRECT_CODEHEADER"
@@ -1120,12 +1121,11 @@ public:
         CrstHolder m_lockHolder;
         HeapList *m_pHeapList;
         LoaderAllocator *m_pLoaderAllocator;
-        BaseDomain *m_pDomain;
         MethodSectionIterator m_Iterator;
         MethodDesc *m_pCurrent;
 
     public:
-        CodeHeapIterator(BaseDomain *pDomainFilter = NULL, LoaderAllocator *pLoaderAllocatorFilter = NULL);
+        CodeHeapIterator(LoaderAllocator *pLoaderAllocatorFilter = NULL);
         ~CodeHeapIterator();
         BOOL Next();
 
@@ -1256,7 +1256,6 @@ public:
         CONTRACTL {
             NOTHROW;
             GC_NOTRIGGER;
-            SO_TOLERANT;
             SUPPORTS_DAC;
         } CONTRACTL_END;
 
@@ -1742,7 +1741,9 @@ public:
 class EECodeInfo
 {
     friend BOOL EEJitManager::JitCodeToMethodInfo(RangeSection * pRangeSection, PCODE currentPC, MethodDesc** ppMethodDesc, EECodeInfo * pCodeInfo);
+#ifdef FEATURE_PREJIT
     friend BOOL NativeImageJitManager::JitCodeToMethodInfo(RangeSection * pRangeSection, PCODE currentPC, MethodDesc** ppMethodDesc, EECodeInfo * pCodeInfo);
+#endif
 #ifdef FEATURE_READYTORUN
     friend BOOL ReadyToRunJitManager::JitCodeToMethodInfo(RangeSection * pRangeSection, PCODE currentPC, MethodDesc** ppMethodDesc, EECodeInfo * pCodeInfo);
 #endif

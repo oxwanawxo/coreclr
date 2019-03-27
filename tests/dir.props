@@ -8,17 +8,18 @@
     <OsEnvironment Condition="'$(OsEnvironment)'==''">$(OS)</OsEnvironment>
   </PropertyGroup>
   
-  <!-- Build Tools Versions -->
+  <Import Project="dir.sdkbuild.props" Condition="'$(UsingMicrosoftNETSdk)' == 'true'"  />
+
   <PropertyGroup>
-    <RoslynVersion>1.0.0-rc3-20150510-01</RoslynVersion>
-    <RoslynPackageName>Microsoft.Net.ToolsetCompilers</RoslynPackageName>
+    <LangVersion>8.0</LangVersion>
+    <UseSharedCompilation>true</UseSharedCompilation>
   </PropertyGroup>
 
     <!--
      Switching to the .NET Core version of the BuildTools tasks seems to break numerous scenarios, such as VS intellisense and resource designer
      as well as running the build on mono. Until we can get these sorted out we will continue using the .NET 4.5 version of the tasks.
      
-     It also breaks building any C# project with dotnet.exe on Windows. The windows version of BuildTools doesn't appear to download the .Net Core
+     It also breaks building any C# project with dotnet.exe on Windows. The windows version of BuildTools doesn't appear to download the .NET Core
      Roslyn NuGet package which has a Csc task supporting OverrideToolHost, but the default BuildTools CSharpCore targets file does specify 
      OverrideToolHost. The result is that building anything in C# when RunningOnCore=true on Windows fails in Csc task with a parameter not supported error.
      
@@ -28,13 +29,12 @@
      -->  
   <PropertyGroup>  
     <RunningOnCore>false</RunningOnCore>
-    <RunningOnCore Condition="'$(MSBuildRuntimeType)' == 'Core'">true</RunningOnCore>
+    <RunningOnCore Condition="'$(MSBuildRuntimeType)' == 'core'">true</RunningOnCore>
     <BuildToolsTargetsDesktop>false</BuildToolsTargetsDesktop>
     <BuildToolsTargetsDesktop Condition="'$(RunningOnCore)' != 'true'">true</BuildToolsTargetsDesktop>
     <BuildToolsTargets45>$(BuildToolsTargetsDesktop)</BuildToolsTargets45>
     <RunningOnUnix Condition="('$(RunningOnUnix)' == '') And ('$(MSBuildRuntimeType)' == 'Core') And ('$(OS)'!='Windows_NT')">true</RunningOnUnix>
     <UseBuildTools>true</UseBuildTools>
-    <UseBuildTools Condition="'$(OS)'=='Windows_NT' And '$(RunningOnCore)' == 'true'">false</UseBuildTools>
   </PropertyGroup>  
 
   <!-- Common repo directories -->
@@ -44,10 +44,9 @@
     <SourceDir>$(ProjectDir)src\</SourceDir>
     <PackagesDir>$(ProjectDir)..\packages\</PackagesDir>
     <ToolsDir Condition="'$(ToolsDir)'==''">$(ProjectDir)..\Tools\</ToolsDir>
-    <DotnetCliPath Condition="'$(DotnetCliPath)'==''">$(ToolsDir)dotnetcli\</DotnetCliPath>
+    <DotnetCliPath Condition="'$(DotnetCliPath)'==''">$(ProjectDir)..\.dotnet\</DotnetCliPath>
     <BuildToolsTaskDir Condition="'$(BuildToolsTargets45)' == 'true'">$(ToolsDir)net46\</BuildToolsTaskDir>
     <OverrideToolHost Condition="'$(OS)' != 'Windows_NT'">$(DotnetCliPath)dotnet</OverrideToolHost>
-    <CSharpCoreTargetsPath Condition="('$(BuildToolsTargetsDesktop)' != 'true') And ('$(UseBuildTools)'=='true')">$(ToolsDir)\Microsoft.CSharp.Core.targets</CSharpCoreTargetsPath>
     <!-- We don't use any of MSBuild's resolution logic for resolving the framework, so just set these two properties to any folder that exists to skip
          the GenerateReferenceAssemblyPaths task (not target) and to prevent it from outputting a warning (MSB3644). -->
     <_TargetFrameworkDirectories Condition="'$(BuildToolsTargetsDesktop)' != 'true'">$(MSBuildThisFileDirectory)/Documentation</_TargetFrameworkDirectories>
@@ -64,6 +63,8 @@
     <BinDir Condition="'$(__BinDir)'==''">$(RootBinDir)Product\$(BuildOS).$(BuildArch).$(BuildType)\</BinDir>
 
     <CoreCLRBinDir>$(RootBinDir)Product\$(__BuildOS).$(__BuildArch).$(__BuildType)\</CoreCLRBinDir>
+
+    <AltJitArch>$(__AltJitArch)</AltJitArch>
   </PropertyGroup>
 
 <!-- Default Test platform to deploy the netstandard compiled tests to -->
@@ -76,7 +77,9 @@
 
   <!-- Output paths -->
   <PropertyGroup>
-    <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">$(RootBinDir)obj\</BaseIntermediateOutputPath>
+    <!-- When not using the SKD, we want to set this property here so
+         that BuildVersionFile gets the correct value. -->
+    <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == '' Or '$(UsingMicrosoftNETSdk)' != 'true'">$(RootBinDir)obj\</BaseIntermediateOutputPath>
     <IntermediateOutputPath Condition="'$(IntermediateOutputPath)' == ''">$(BaseIntermediateOutputPath)\$(BuildOS).$(BuildArch).$(BuildType)</IntermediateOutputPath>
     <OutputPath Condition="'$(OutputPath)' == ''">$(BaseIntermediateOutputPath)\$(BuildOS).$(BuildArch).$(BuildType)</OutputPath>
   </PropertyGroup>
@@ -105,8 +108,7 @@
   </PropertyGroup>
 
   <!-- Use Roslyn Compilers to build -->
-  <Import Project="$(RoslynPropsFile)" Condition="'$(RunningOnUnix)'!='true' and Exists('$(RoslynPropsFile)') and '$(UseRoslynCompilers)'!='false' and '$(RoslynIncompatibleMsbuildVersion)' != 'true'" />
-  <Import Project="$(RoslynPropsFile)" Condition="'$(RunningOnUnix)'=='true' and Exists('$(RoslynPropsFile)') and '$(RoslynIncompatibleMsbuildVersion)' != 'true'" />
+  <Import Project="$(RoslynPropsFile)" Condition="Exists('$(RoslynPropsFile)')" />
 
   <PropertyGroup Condition="'$(BuildAllProjects)'=='true'">
     <!-- When we do a traversal build we get all packages up front, don't restore them again -->

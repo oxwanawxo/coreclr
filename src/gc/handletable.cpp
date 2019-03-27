@@ -80,7 +80,7 @@ __inline PTR_HandleTable Table(HHANDLETABLE hTable)
 /*
  * HndCreateHandleTable
  *
- * Alocates and initializes a handle table.
+ * Allocates and initializes a handle table.
  *
  */
 HHANDLETABLE HndCreateHandleTable(const uint32_t *pTypeFlags, uint32_t uTypeCount, ADIndex uADIndex)
@@ -184,8 +184,10 @@ void HndDestroyHandleTable(HHANDLETABLE hTable)
     // fetch the handle table pointer
     HandleTable *pTable = Table(hTable);
 
+#ifdef ENABLE_PERF_COUNTERS
     // decrement handle count by number of handles in this table
-    COUNTER_ONLY(GetPerfCounters().m_GC.cHandles -= HndCountHandles(hTable));
+    GetPerfCounters().m_GC.cHandles -= HndCountHandles(hTable);
+#endif
 
     // We are going to free the memory for this HandleTable.
     // Let us reset the copy in g_pHandleTableArray to NULL.
@@ -297,17 +299,8 @@ OBJECTHANDLE HndCreateHandle(HHANDLETABLE hTable, uint32_t uType, OBJECTREF obje
         {
             MODE_ANY;
         }
-        SO_INTOLERANT;
     }
     CONTRACTL_END;
-
-#if defined( _DEBUG) && !defined(FEATURE_REDHAWK)
-    if (g_pConfig->ShouldInjectFault(INJECTFAULT_HANDLETABLE))
-    {
-        FAULT_NOT_FATAL();
-        return NULL;
-    }
-#endif // _DEBUG && !FEATURE_REDHAWK
 
     // If we are creating a variable-strength handle, verify that the
     // requested variable handle type is valid.
@@ -364,18 +357,15 @@ void ValidateFetchObjrefForHandle(OBJECTREF objref, ADIndex appDomainIndex)
 {
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_MODE_COOPERATIVE;
     STATIC_CONTRACT_DEBUG_ONLY;
 
     BEGIN_DEBUG_ONLY_CODE;
     VALIDATEOBJECTREF (objref);
 
-    AppDomain *pDomain = SystemDomain::GetAppDomainAtIndex(appDomainIndex);
-
-    // Access to a handle in unloaded domain is not allowed
-    _ASSERTE(pDomain != NULL);
-    _ASSERTE(!pDomain->NoAccessToHandleTable());
+#ifndef DACCESS_COMPILE
+    _ASSERTE(GCToEEInterface::AppDomainCanAccessHandleTable(appDomainIndex.m_dwIndex));
+#endif // DACCESS_COMPILE
 
     END_DEBUG_ONLY_CODE;
 }
@@ -384,7 +374,6 @@ void ValidateAssignObjrefForHandle(OBJECTREF objref, ADIndex appDomainIndex)
 {
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_MODE_COOPERATIVE;
     STATIC_CONTRACT_DEBUG_ONLY;
 
@@ -392,12 +381,9 @@ void ValidateAssignObjrefForHandle(OBJECTREF objref, ADIndex appDomainIndex)
 
     VALIDATEOBJECTREF (objref);
 
-    AppDomain *pDomain = SystemDomain::GetAppDomainAtIndex(appDomainIndex);
-
-    // Access to a handle in unloaded domain is not allowed
-    _ASSERTE(pDomain != NULL);
-    _ASSERTE(!pDomain->NoAccessToHandleTable());
-
+#ifndef DACCESS_COMPILE
+    _ASSERTE(GCToEEInterface::AppDomainCanAccessHandleTable(appDomainIndex.m_dwIndex));
+#endif // DACCESS_COMPILE
     END_DEBUG_ONLY_CODE;
 }
 
@@ -415,12 +401,12 @@ void ValidateAppDomainForHandle(OBJECTHANDLE handle)
 #else
     BEGIN_DEBUG_ONLY_CODE;
     ADIndex id = HndGetHandleADIndex(handle);
-    AppDomain *pUnloadingDomain = SystemDomain::AppDomainBeingUnloaded();
-    if (!pUnloadingDomain || pUnloadingDomain->GetIndex() != id)
+    ADIndex unloadingDomain(GCToEEInterface::GetIndexOfAppDomainBeingUnloaded());
+    if (unloadingDomain != id)
     {
         return;
     }
-    if (!pUnloadingDomain->NoAccessToHandleTable())
+    if (GCToEEInterface::AppDomainCanAccessHandleTable(unloadingDomain.m_dwIndex))
     {
         return;
     }
@@ -445,7 +431,6 @@ void HndDestroyHandle(HHANDLETABLE hTable, uint32_t uType, OBJECTHANDLE handle)
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_TOLERANT; 
         CAN_TAKE_LOCK;     // because of TableFreeSingleHandleToCache
     }
     CONTRACTL_END;
@@ -491,7 +476,6 @@ void HndDestroyHandleOfUnknownType(HHANDLETABLE hTable, OBJECTHANDLE handle)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -603,16 +587,14 @@ void HndLogSetEvent(OBJECTHANDLE handle, _UNCHECKED_OBJECTREF value)
 {
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_MODE_COOPERATIVE;
 
 #if !defined(DACCESS_COMPILE) && defined(FEATURE_EVENT_TRACE)
-    if (ETW_EVENT_ENABLED(MICROSOFT_WINDOWS_DOTNETRUNTIME_PRIVATE_PROVIDER_Context, SetGCHandle) ||
-        ETW_EVENT_ENABLED(MICROSOFT_WINDOWS_DOTNETRUNTIME_PROVIDER_Context, SetGCHandle))
+    if (EVENT_ENABLED(SetGCHandle) || EVENT_ENABLED(PrvSetGCHandle))
     {
         uint32_t hndType = HandleFetchType(handle);
         ADIndex appDomainIndex = HndGetHandleADIndex(handle);   
-        AppDomain* pAppDomain = SystemDomain::GetAppDomainAtIndex(appDomainIndex);
+        void* pAppDomain = GCToEEInterface::GetAppDomainAtIndex(appDomainIndex.m_dwIndex);
         uint32_t generation = value != 0 ? g_theGCHeap->WhichGeneration(value) : 0;
         FIRE_EVENT(SetGCHandle, (void *)handle, (void *)value, hndType, generation, (uint64_t)pAppDomain);
         FIRE_EVENT(PrvSetGCHandle, (void *) handle, (void *)value, hndType, generation, (uint64_t)pAppDomain);
@@ -628,7 +610,7 @@ void HndLogSetEvent(OBJECTHANDLE handle, _UNCHECKED_OBJECTREF value)
             // to this structure as our closure's context pointer.
             struct ClosureCapture
             {
-                AppDomain* pAppDomain;
+                void* pAppDomain;
                 Object* overlapped;
             };
 
@@ -660,7 +642,6 @@ void HndWriteBarrier(OBJECTHANDLE handle, OBJECTREF objref)
 {
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_MODE_COOPERATIVE;
 
     // unwrap the objectref we were given

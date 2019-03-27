@@ -85,20 +85,9 @@ namespace BINDER_SPACE
                 DWORD *pdwImageType,
                 ICLRPrivResource ** ppIResource);
 
-        STDMETHOD(VerifyBind)(
-                IAssemblyName * pIAssemblyName,
-                ICLRPrivAssembly *pAssembly,
-                ICLRPrivAssemblyInfo *pAssemblyInfo);
-
         STDMETHOD(GetBinderID)(UINT_PTR *pBinderId);
 
-        STDMETHOD(FindAssemblyBySpec)(
-                LPVOID pvAppDomain,
-                LPVOID pvAssemblySpec,
-                HRESULT * pResult,
-                ICLRPrivAssembly ** ppAssembly);
-
-        STDMETHOD(GetBinderFlags)(DWORD *pBinderFlags);
+        STDMETHOD(GetLoaderAllocator)(LPVOID* pLoaderAllocator);
 
         // --------------------------------------------------------------------
         // Assembly methods
@@ -136,6 +125,11 @@ namespace BINDER_SPACE
         
         static PEKIND GetSystemArchitecture();
         static BOOL IsValidArchitecture(PEKIND kArchitecture);
+
+		inline ICLRPrivBinder* GetBinder()
+		{
+			return m_pBinder;
+		}
 
 #ifndef CROSSGEN_COMPILE
     protected:
@@ -194,11 +188,6 @@ public:
         {
             _ASSERTE(m_pBinder == NULL || m_pBinder == pBinder);
             m_pBinder = pBinder;
-        }
-
-        inline ICLRPrivBinder* GetBinder()
-        {
-            return m_pBinder;
         }
         
         friend class ::CLRPrivBinderCoreCLR;

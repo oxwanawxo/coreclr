@@ -883,67 +883,6 @@ void ThisPtrRetBufPrecode::Init(MethodDesc* pMD, LoaderAllocator *pLoaderAllocat
 }
 
 
-#ifdef HAS_REMOTING_PRECODE
-
-void RemotingPrecode::Init(MethodDesc* pMD, LoaderAllocator *pLoaderAllocator)
-{
-    WRAPPER_NO_CONTRACT;
-
-    int n = 0;
-
-    m_rgCode[n++] = 0xb502; // push {r1,lr}
-    m_rgCode[n++] = 0x4904; // ldr r1, [pc, #16]   ; =m_pPrecodeRemotingThunk
-    m_rgCode[n++] = 0x4788; // blx r1
-    m_rgCode[n++] = 0xe8bd; // pop {r1,lr}
-    m_rgCode[n++] = 0x4002;
-    m_rgCode[n++] = 0xf8df; // ldr pc, [pc, #12]    ; =m_pLocalTarget
-    m_rgCode[n++] = 0xf00c;
-    m_rgCode[n++] = 0xbf00; // nop                  ; padding for alignment
-
-    _ASSERTE(n == _countof(m_rgCode));
-
-    m_pMethodDesc = (TADDR)pMD;
-    m_pPrecodeRemotingThunk = GetEEFuncEntryPoint(PrecodeRemotingThunk);
-    m_pLocalTarget = GetPreStubEntryPoint();
-}
-
-#ifdef FEATURE_NATIVE_IMAGE_GENERATION
-void RemotingPrecode::Fixup(DataImage *image, ZapNode *pCodeNode)
-{
-    WRAPPER_NO_CONTRACT;
-
-    if (pCodeNode)
-        image->FixupFieldToNode(this, offsetof(RemotingPrecode, m_pLocalTarget),
-                                pCodeNode,
-                                THUMB_CODE,
-                                IMAGE_REL_BASED_PTR);
-    else
-        image->FixupFieldToNode(this, offsetof(RemotingPrecode, m_pLocalTarget),
-                                image->GetHelperThunk(CORINFO_HELP_EE_PRESTUB),
-                                0,
-                                IMAGE_REL_BASED_PTR);
-
-    image->FixupFieldToNode(this, offsetof(RemotingPrecode, m_pPrecodeRemotingThunk),
-                            image->GetHelperThunk(CORINFO_HELP_EE_REMOTING_THUNK),
-                            0,
-                            IMAGE_REL_BASED_PTR);
-
-    image->FixupField(this, offsetof(RemotingPrecode, m_pMethodDesc),
-                      (void*)GetMethodDesc(),
-                      0,
-                      IMAGE_REL_BASED_PTR);
-}
-#endif // FEATURE_NATIVE_IMAGE_GENERATION
-
-void CTPMethodTable::ActivatePrecodeRemotingThunk()
-{
-    // Nothing to do for ARM version of remoting precode (we don't burn the TP MethodTable pointer into
-    // PrecodeRemotingThunk directly).
-}
-
-#endif // HAS_REMOTING_PRECODE
-
-
 #ifndef CROSSGEN_COMPILE
 /*
 Rough pseudo-code of interface dispatching:
@@ -975,11 +914,6 @@ Note that ResolveWorkerChainLookupAsmStub currently points directly
 to ResolveWorkerAsmStub; in the future, this could be separate.
 */
 
-void LookupHolder::InitializeStatic()
-{
-    // Nothing to initialize
-}
-
 void  LookupHolder::Initialize(PCODE resolveWorkerTarget, size_t dispatchToken)
 {
     // Called directly by JITTED code
@@ -996,11 +930,6 @@ void  LookupHolder::Initialize(PCODE resolveWorkerTarget, size_t dispatchToken)
     _stub._token               = dispatchToken;
     _ASSERTE(4 == LookupStub::entryPointLen);
 }
-
-void DispatchHolder::InitializeStatic()
-{
-    // Nothing to initialize
-};
 
 void  DispatchHolder::Initialize(PCODE implTarget, PCODE failTarget, size_t expectedMT)
 {
@@ -1072,10 +1001,6 @@ void  DispatchHolder::Initialize(PCODE implTarget, PCODE failTarget, size_t expe
     _stub._expectedMT = DWORD(expectedMT);
     _stub._failTarget = failTarget;
     _stub._implTarget = implTarget;
-}
-
-void ResolveHolder::InitializeStatic()
-{
 }
 
 void ResolveHolder::Initialize(PCODE resolveWorkerTarget, PCODE patcherTarget,
@@ -1678,8 +1603,17 @@ VOID StubLinkerCPU::EmitShuffleThunk(ShuffleEntry *pShuffleEntryArray)
     ThumbEmitEpilog();
 }
 
+#ifndef CROSSGEN_COMPILE
+
 void StubLinkerCPU::ThumbEmitCallManagedMethod(MethodDesc *pMD, bool fTailcall)
 {
+    bool isRelative = MethodTable::VTableIndir2_t::isRelative
+                      && pMD->IsVtableSlot();
+
+#ifndef FEATURE_NGEN_RELOCS_OPTIMIZATIONS
+    _ASSERTE(!isRelative);
+#endif
+
     // Use direct call if possible.
     if (pMD->HasStableEntryPoint())
     {
@@ -1691,14 +1625,47 @@ void StubLinkerCPU::ThumbEmitCallManagedMethod(MethodDesc *pMD, bool fTailcall)
         // mov r12, #slotaddress
         ThumbEmitMovConstant(ThumbReg(12), (TADDR)pMD->GetAddrOfSlot());
 
+        if (isRelative)
+        {
+            if (!fTailcall)
+            {
+                // str r4, [sp, 0]
+                ThumbEmitStoreRegIndirect(ThumbReg(4), thumbRegSp, 0);
+            }
+
+            // mov r4, r12
+            ThumbEmitMovRegReg(ThumbReg(4), ThumbReg(12));
+        }
+
         // ldr r12, [r12]
         ThumbEmitLoadRegIndirect(ThumbReg(12), ThumbReg(12), 0);
+
+        if (isRelative)
+        {
+            // add r12, r4
+            ThumbEmitAddReg(ThumbReg(12), ThumbReg(4));
+
+            if (!fTailcall)
+            {
+                // ldr r4, [sp, 0]
+                ThumbEmitLoadRegIndirect(ThumbReg(4), thumbRegSp, 0);
+            }
+        }
     }
 
     if (fTailcall)
     {
-        // bx r12
-        ThumbEmitJumpRegister(ThumbReg(12));
+        if (!isRelative)
+        {
+            // bx r12
+            ThumbEmitJumpRegister(ThumbReg(12));
+        }
+        else
+        {
+            // Replace LR with R12 on stack: hybrid-tail call, same as for EmitShuffleThunk
+            // str r12, [sp, 4]
+            ThumbEmitStoreRegIndirect(ThumbReg(12), thumbRegSp, 4);
+        }
     }
     else
     {
@@ -1707,7 +1674,6 @@ void StubLinkerCPU::ThumbEmitCallManagedMethod(MethodDesc *pMD, bool fTailcall)
     }
 }
 
-#ifndef CROSSGEN_COMPILE
 // Common code used to generate either an instantiating method stub or an unboxing stub (in the case where the
 // unboxing stub also needs to provide a generic instantiation parameter). The stub needs to add the
 // instantiation parameter provided in pHiddenArg and re-arrange the rest of the incoming arguments as a
@@ -1835,6 +1801,13 @@ void StubLinkerCPU::ThumbEmitCallWithGenericInstantiationParameter(MethodDesc *p
         }
     }
 
+    bool isRelative = MethodTable::VTableIndir2_t::isRelative
+                      && pMD->IsVtableSlot();
+
+#ifndef FEATURE_NGEN_RELOCS_OPTIMIZATIONS
+    _ASSERTE(!isRelative);
+#endif
+
     // Update descriptor count to the actual number used.
     cArgDescriptors = idxCurrentDesc;
 
@@ -1927,7 +1900,17 @@ void StubLinkerCPU::ThumbEmitCallWithGenericInstantiationParameter(MethodDesc *p
         }
 
         // Emit a tail call to the target method.
+        if (isRelative)
+        {
+            ThumbEmitProlog(1, 0, FALSE);
+        }
+
         ThumbEmitCallManagedMethod(pMD, true);
+
+        if (isRelative)
+        {
+            ThumbEmitEpilog();
+        }
     }
     else
     {
@@ -1936,7 +1919,9 @@ void StubLinkerCPU::ThumbEmitCallWithGenericInstantiationParameter(MethodDesc *p
         // Calculate the size of the new stack frame:
         //
         //            +------------+
-        //      SP -> |            | <-+
+        //      SP -> |            | <-- Space for helper arg, if isRelative is true
+        //            +------------+
+        //            |            | <-+
         //            :            :   | Outgoing arguments
         //            |            | <-+
         //            +------------+
@@ -1967,6 +1952,12 @@ void StubLinkerCPU::ThumbEmitCallWithGenericInstantiationParameter(MethodDesc *p
         DWORD cbStackArgs = (pLastArg->m_idxDst + 1) * 4;
         DWORD cbStackFrame = cbStackArgs + sizeof(GSCookie) + sizeof(StubHelperFrame);
         cbStackFrame = ALIGN_UP(cbStackFrame, 8);
+
+        if (isRelative)
+        {
+            cbStackFrame += 4;
+        }
+
         DWORD cbStackFrameWithoutSavedRegs = cbStackFrame - (13 * 4); // r0-r11,lr
 
         // Prolog:
@@ -2175,8 +2166,25 @@ void StubLinkerCPU::EmitUnboxMethodStub(MethodDesc *pMD)
         //  add r0, #4
         ThumbEmitIncrement(ThumbReg(0), 4);
 
+        bool isRelative = MethodTable::VTableIndir2_t::isRelative
+                          && pMD->IsVtableSlot();
+
+#ifndef FEATURE_NGEN_RELOCS_OPTIMIZATIONS
+        _ASSERTE(!isRelative);
+#endif
+
+        if (isRelative)
+        {
+            ThumbEmitProlog(1, 0, FALSE);
+        }
+
         // Tail call the real target.
         ThumbEmitCallManagedMethod(pMD, true /* tail call */);
+
+        if (isRelative)
+        {
+            ThumbEmitEpilog();
+        }
     }
 }
 
@@ -2286,7 +2294,6 @@ void TailCallFrame::InitFromContext(T_CONTEXT * pContext)
 }
 
 #endif // !DACCESS_COMPILE
-#endif // !CROSSGEN_COMPILE
 
 void FaultingExceptionFrame::UpdateRegDisplay(const PREGDISPLAY pRD) 
 { 
@@ -2445,7 +2452,8 @@ void HijackFrame::UpdateRegDisplay(const PREGDISPLAY pRD)
 
      SyncRegDisplayToCurrentContext(pRD);
 }
-#endif
+#endif // FEATURE_HIJACK
+#endif // !CROSSGEN_COMPILE
 
 class UMEntryThunk * UMEntryThunk::Decode(void *pCallback)
 {
@@ -2902,7 +2910,7 @@ void StubLinkerCPU::ThumbEmitCondRegJump(CodeLabel *target, BOOL nonzero, ThumbR
     EmitLabelRef(target, reinterpret_cast<ThumbCondJump&>(gThumbCondJump), variation);
 }
 
-unsigned int StubLinkerCPU::HashMulticastInvoke(MetaSig *pSig)
+UINT_PTR StubLinkerCPU::HashMulticastInvoke(MetaSig *pSig)
 {
     // Generate a hash key as follows:
     // Bit0-2   : num of general purpose registers used 
@@ -3079,6 +3087,7 @@ void StubLinkerCPU::ThumbCopyOneTailCallArg(UINT * pnSrcAlign, const ArgLocDesc 
 
 
 Stub * StubLinkerCPU::CreateTailCallCopyArgsThunk(CORINFO_SIG_INFO * pSig,
+                                                  MethodDesc* pMD,
                                                   CorInfoHelperTailCallSpecialHandling flags)
 {
     STANDARD_VM_CONTRACT;
@@ -3325,8 +3334,8 @@ Stub * StubLinkerCPU::CreateTailCallCopyArgsThunk(CORINFO_SIG_INFO * pSig,
         pSl->ThumbEmitJumpRegister(thumbRegLr);
     }
 
-
-    return pSl->Link();
+    LoaderHeap* pHeap = pMD->GetLoaderAllocator()->GetStubHeap();
+    return pSl->Link(pHeap);
 }
 
 
@@ -3364,6 +3373,16 @@ void emitCOMStubCall (ComCallMethodDesc *pCOMMethod, PCODE target)
 }
 #endif // FEATURE_COMINTEROP
 
+void MovRegImm(BYTE* p, int reg, TADDR imm)
+{
+    LIMITED_METHOD_CONTRACT;
+    *(WORD *)(p + 0) = 0xF240;
+    *(WORD *)(p + 2) = (UINT16)(reg << 8);
+    *(WORD *)(p + 4) = 0xF2C0;
+    *(WORD *)(p + 6) = (UINT16)(reg << 8);
+    PutThumb2Mov32((UINT16 *)p, imm);
+}
+
 #ifndef DACCESS_COMPILE
 
 #ifndef CROSSGEN_COMPILE
@@ -3387,16 +3406,6 @@ void emitCOMStubCall (ComCallMethodDesc *pCOMMethod, PCODE target)
     while (p < pStart + cbAligned) { *(WORD *)p = 0xdefe; p += 2; } \
     ClrFlushInstructionCache(pStart, cbAligned); \
     return (PCODE)((TADDR)pStart | THUMB_CODE)
-
-static void MovRegImm(BYTE* p, int reg, TADDR imm)
-{
-    LIMITED_METHOD_CONTRACT;
-    *(WORD *)(p + 0) = 0xF240;
-    *(WORD *)(p + 2) = (UINT16)(reg << 8);
-    *(WORD *)(p + 4) = 0xF2C0;
-    *(WORD *)(p + 6) = (UINT16)(reg << 8);
-    PutThumb2Mov32((UINT16 *)p, imm);
-}
 
 PCODE DynamicHelpers::CreateHelper(LoaderAllocator * pAllocator, TADDR arg, PCODE target)
 {

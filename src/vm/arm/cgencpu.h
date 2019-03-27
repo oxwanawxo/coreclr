@@ -102,7 +102,11 @@ EXTERN_C void setFPReturn(int fpSize, INT64 retVal);
 // as large as the largest FieldMarshaler subclass. This requirement
 // is guarded by an assert.
 //=======================================================================
+#ifdef _WIN64
+#define MAXFIELDMARSHALERSIZE               40
+#else
 #define MAXFIELDMARSHALERSIZE               24
+#endif
 
 //**********************************************************************
 // Parameter size
@@ -964,6 +968,7 @@ public:
 #endif // FEATURE_SHARE_GENERIC_CODE
 
     static Stub * CreateTailCallCopyArgsThunk(CORINFO_SIG_INFO * pSig,
+                                              MethodDesc* pMD,
                                               CorInfoHelperTailCallSpecialHandling flags);
 
 private:
@@ -983,6 +988,11 @@ inline BOOL IsUnmanagedValueTypeReturnedByRef(UINT sizeofvaluetype)
     // by reference.
     return (sizeofvaluetype > 4);
 }
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable:4359) // Prevent "warning C4359: 'UMEntryThunkCode': Alignment specifier is less than actual alignment (8), and will be ignored." in crossbitness scenario
+#endif // _MSC_VER
 
 struct DECLSPEC_ALIGN(4) UMEntryThunkCode
 {
@@ -1008,6 +1018,10 @@ struct DECLSPEC_ALIGN(4) UMEntryThunkCode
         return 0;
     }
 };
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif // _MSC_VER
 
 struct HijackArgs
 {
@@ -1081,7 +1095,7 @@ inline BOOL ClrFlushInstructionCache(LPCVOID pCodeAddr, size_t sizeOfCode)
 
 EXTERN_C VOID STDCALL PrecodeFixupThunk();
 
-#define PRECODE_ALIGNMENT           CODE_SIZE_ALIGN
+#define PRECODE_ALIGNMENT           sizeof(void*)
 #define SIZEOF_PRECODE_BASE         CODE_SIZE_ALIGN
 #define OFFSETOF_PRECODE_TYPE       0
 
@@ -1318,64 +1332,6 @@ struct ThisPtrRetBufPrecode {
 };
 typedef DPTR(ThisPtrRetBufPrecode) PTR_ThisPtrRetBufPrecode;
 
-
-#ifdef HAS_REMOTING_PRECODE
-
-// Precode with embedded remoting interceptor
-struct RemotingPrecode {
-
-    static const int Type = 0x02;
-
-    // push {r1,lr}
-    // ldr r1, [pc, #16]    ; =m_pPrecodeRemotingThunk
-    // blx r1
-    // pop {r1,lr}
-    // ldr pc, [pc, #12]    ; =m_pLocalTarget
-    // nop                  ; padding for alignment
-    // dcd m_pMethodDesc
-    // dcd m_pPrecodeRemotingThunk
-    // dcd m_pLocalTarget
-    WORD    m_rgCode[8];
-    TADDR   m_pMethodDesc;
-    TADDR   m_pPrecodeRemotingThunk;
-    TADDR   m_pLocalTarget;
-
-    void Init(MethodDesc* pMD, LoaderAllocator *pLoaderAllocator = NULL);
-
-    TADDR GetMethodDesc()
-    {
-        LIMITED_METHOD_DAC_CONTRACT; 
-        return m_pMethodDesc;
-    }
-
-    PCODE GetTarget()
-    { 
-        LIMITED_METHOD_DAC_CONTRACT; 
-        return m_pLocalTarget;
-    }
-
-    BOOL SetTargetInterlocked(TADDR target, TADDR expected)
-    {
-        CONTRACTL
-        {
-            THROWS;
-            GC_TRIGGERS;
-        }
-        CONTRACTL_END;
-
-        EnsureWritableExecutablePages(&m_pLocalTarget);
-        return FastInterlockCompareExchange((LONG*)&m_pLocalTarget, (LONG)target, (LONG)expected) == (LONG)expected;
-    }
-
-#ifdef FEATURE_PREJIT
-    void Fixup(DataImage *image, ZapNode *pCodeNode);
-#endif
-};
-typedef DPTR(RemotingPrecode) PTR_RemotingPrecode;
-
-EXTERN_C void PrecodeRemotingThunk();
-
-#endif // HAS_REMOTING_PRECODE
 
 //**********************************************************************
 // Miscellaneous

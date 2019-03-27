@@ -44,12 +44,30 @@ struct HWIntrinsicInfo
         LowerCmpUZero = (1UL << 0), // Unsigned zero compare form must be lowered
     };
 
-    NamedIntrinsic intrinsicID;
-    const char*    intrinsicName;
+    NamedIntrinsic id;
+    const char*    name;
     uint64_t       isaflags;
     Form           form;
     Flags          flags;
     instruction    instrs[3];
+
+    static const HWIntrinsicInfo& lookup(NamedIntrinsic id);
+    static int lookupNumArgs(const GenTreeHWIntrinsic* node);
+
+    static bool isFullyImplementedIsa(InstructionSet isa);
+    static bool isScalarIsa(InstructionSet isa);
+
+    // Member lookup
+
+    static NamedIntrinsic lookupId(NamedIntrinsic id)
+    {
+        return lookup(id).id;
+    }
+
+    static const char* lookupName(NamedIntrinsic id)
+    {
+        return lookup(id).name;
+    }
 };
 
 #endif // FEATURE_HW_INTRINSICS

@@ -30,6 +30,11 @@ struct CallDescrData
     UINT32                      fpReturnSize;
     PCODE                       pTarget;
 
+#ifdef CALLDESCR_RETBUFFARGREG
+    // Pointer to return buffer arg location
+    UINT64*                     pRetBuffArg;
+#endif
+
     //
     // Return value
     //
@@ -84,7 +89,7 @@ private:
     ArgIterator m_argIt;
 
 #ifdef _DEBUG 
-    __declspec(noinline) void LogWeakAssert()
+    NOINLINE void LogWeakAssert()
     {
         LIMITED_METHOD_CONTRACT;
         LOG((LF_ASSERT, LL_WARNING, "%s::%s\n", m_pMD->m_pszDebugClassName, m_pMD->m_pszDebugMethodName));
@@ -537,13 +542,11 @@ enum EEToManagedCallFlags
             CURRENT_THREAD->HandleThreadAbort();                                \
         }                                                                       \
     }                                                                           \
-    BEGIN_SO_TOLERANT_CODE(CURRENT_THREAD);                                     \
     INSTALL_CALL_TO_MANAGED_EXCEPTION_HOLDER();                                 \
     INSTALL_COMPLUS_EXCEPTION_HANDLER_NO_DECLARE();
 
 #define END_CALL_TO_MANAGED()                                                   \
     UNINSTALL_COMPLUS_EXCEPTION_HANDLER();                                      \
-    END_SO_TOLERANT_CODE;                                                       \
 }
 
 /***********************************************************************/
@@ -561,6 +564,7 @@ enum DispatchCallSimpleFlags
 #define STRINGREF_TO_ARGHOLDER(x) (LPVOID)STRINGREFToObject(x)
 #define PTR_TO_ARGHOLDER(x) (LPVOID)x
 #define DWORD_TO_ARGHOLDER(x)   (LPVOID)(SIZE_T)x
+#define BOOL_TO_ARGHOLDER(x) DWORD_TO_ARGHOLDER(!!(x))   
 
 #define INIT_VARIABLES(count)                               \
         DWORD   __numArgs = count;                          \

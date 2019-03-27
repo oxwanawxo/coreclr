@@ -39,7 +39,6 @@
 #include "listlock.h"
 #include "methodimpl.h"
 #include "guidfromname.h"
-#include "stackprobe.h"
 #include "encee.h"
 #include "encee.h"
 #include "comsynchronizable.h"
@@ -232,7 +231,6 @@ InteropMethodTableData *MethodTableBuilder::BuildInteropVTable(AllocMemTracker *
     CheckPointHolder cph(pThread->m_MarshalAlloc.GetCheckpoint()); //hold checkpoint for autorelease
 
     HRESULT hr = S_OK;
-    BaseDomain *bmtDomain = pThisMT->GetDomain();
     Module *pModule = pThisMT->GetModule();
     mdToken cl = pThisMT->GetCl();
     MethodTable *pParentMethodTable = pThisMT->GetParentMethodTable();
@@ -273,7 +271,6 @@ InteropMethodTableData *MethodTableBuilder::BuildInteropVTable(AllocMemTracker *
     }
     
     SetBMTData(
-        bmtDomain,
         &bmtError,
         &bmtProp,
         &bmtVT,
@@ -288,7 +285,6 @@ InteropMethodTableData *MethodTableBuilder::BuildInteropVTable(AllocMemTracker *
     if (pThisMT->IsEnum()) SetEnum();
     if (pThisMT->HasLayout()) SetHasLayout();
     if (pThisMT->IsDelegate()) SetIsDelegate();
-    if (pThisMT->IsContextful()) SetContextful();
 #ifdef FEATURE_COMINTEROP
     if(pThisMT->GetClass()->IsComClassInterface()) SetIsComClassInterface();
 #endif
@@ -337,7 +333,7 @@ InteropMethodTableData *MethodTableBuilder::BuildInteropVTable(AllocMemTracker *
 
     // resolve unresolved interfaces, determine an upper bound on the size of the interface map,
     // and determine the size of the largest interface (in # slots)
-    BuildInteropVTable_ResolveInterfaces(bmtDomain, pBuildingInterfaceList, &bmtType, &bmtInterface, &bmtVT, &bmtParent, bmtError);
+    BuildInteropVTable_ResolveInterfaces(pBuildingInterfaceList, &bmtType, &bmtInterface, &bmtVT, &bmtParent, bmtError);
 
     // Enumerate this class's members
     EnumerateMethodImpls();
@@ -388,7 +384,7 @@ InteropMethodTableData *MethodTableBuilder::BuildInteropVTable(AllocMemTracker *
     }
 
     // Determine vtable placement for each member in this class
-    BuildInteropVTable_PlaceMembers(bmtDomain,&bmtType, wNumInterfaces, pBuildingInterfaceList, &bmtMethod,
+    BuildInteropVTable_PlaceMembers(&bmtType, wNumInterfaces, pBuildingInterfaceList, &bmtMethod,
                                     &bmtError, &bmtProp, &bmtParent, &bmtInterface, &bmtMethodImpl, &bmtVT);
 
     // First copy what we can leverage from the parent's interface map.
@@ -451,7 +447,6 @@ InteropMethodTableData *MethodTableBuilder::BuildInteropVTable(AllocMemTracker *
             &bmtParent);
 
         BuildInteropVTable_PlaceMethodImpls(
-            bmtDomain,
             &bmtType,
             &bmtMethodImpl,
             &bmtError,
@@ -684,7 +679,6 @@ VOID MethodTableBuilder::BuildInteropVTable_InterfaceList(
 #pragma warning(disable:21000) // Suppress PREFast warning about overly large function
 #endif
 VOID MethodTableBuilder::BuildInteropVTable_PlaceMembers(
-    BaseDomain *bmtDomain,
     bmtTypeInfo* bmtType,
                            DWORD numDeclaredInterfaces,
                            BuildingInterfaceInfo_t *pBuildingInterfaceList, 
@@ -963,7 +957,6 @@ VOID MethodTableBuilder::BuildInteropVTable_PlaceMembers(
                 if(tokMember == bmtMethodImpl->rgMethodImplTokens[m].methodBody)
                 {
                     MethodDesc* desc = NULL;
-                    BOOL fIsMethod;
                     mdToken mdDecl = bmtMethodImpl->rgMethodImplTokens[m].methodDecl;
                     Substitution *pDeclSubst = &bmtMethodImpl->pMethodDeclSubsts[m];
 
@@ -1041,7 +1034,6 @@ VOID MethodTableBuilder::BuildInteropVTable_PlaceMembers(
 // Resolve unresolved interfaces, determine an upper bound on the size of the interface map,
 // and determine the size of the largest interface (in # slots)
 VOID MethodTableBuilder::BuildInteropVTable_ResolveInterfaces(
-                                BaseDomain *bmtDomain, 
                                 BuildingInterfaceInfo_t *pBuildingInterfaceList, 
                                 bmtTypeInfo* bmtType, 
                                 bmtInterfaceInfo* bmtInterface, 
@@ -1054,7 +1046,6 @@ VOID MethodTableBuilder::BuildInteropVTable_ResolveInterfaces(
     {
         STANDARD_VM_CHECK;
         PRECONDITION(CheckPointer(this));
-        PRECONDITION(CheckPointer(bmtDomain));
         PRECONDITION(CheckPointer(bmtInterface));
         PRECONDITION(CheckPointer(bmtVT));
         PRECONDITION(CheckPointer(bmtParent));
@@ -1547,7 +1538,6 @@ VOID MethodTableBuilder::BuildInteropVTable_PlaceVtableMethods(
 // We should have collected all the method impls. Cycle through them creating the method impl
 // structure that holds the information about which slots are overridden.
 VOID MethodTableBuilder::BuildInteropVTable_PlaceMethodImpls(
-        BaseDomain *bmtDomain,
         bmtTypeInfo* bmtType,
         bmtMethodImplInfo* bmtMethodImpl,
         bmtErrorInfo* bmtError, 
@@ -2415,12 +2405,6 @@ VOID    MethodTableBuilder::EnumerateClassMethods()
 
         WORD numGenericMethodArgs = (WORD) hEnumTyPars.EnumGetCount();
 
-        // We do not want to support context-bound objects with generic methods.
-        if (IsContextful() && numGenericMethodArgs > 0)
-        {
-            BuildMethodTableThrowException(IDS_CLASSLOAD_CONTEXT_BOUND_GENERIC_METHOD);
-        }
-
         if (numGenericMethodArgs != 0)
         {
             for (unsigned methIdx = 0; methIdx < numGenericMethodArgs; methIdx++)
@@ -2612,9 +2596,15 @@ VOID    MethodTableBuilder::EnumerateClassMethods()
             }
         }
 
-#ifndef FEATURE_DEFAULT_INTERFACES
         // Some interface checks.
-        if (fIsClassInterface)
+        // We only need them if default interface method support is disabled or if this is fragile crossgen
+#if !defined(FEATURE_DEFAULT_INTERFACES) || defined(FEATURE_NATIVE_IMAGE_GENERATION)
+        if (fIsClassInterface
+#if defined(FEATURE_DEFAULT_INTERFACES)
+            // Only fragile crossgen wasn't upgraded to deal with default interface methods.
+            && !IsReadyToRunCompilation()
+#endif
+            )
         {
             if (IsMdVirtual(dwMemberAttrs))
             {
@@ -2622,17 +2612,17 @@ VOID    MethodTableBuilder::EnumerateClassMethods()
                 {
                     BuildMethodTableThrowException(BFA_VIRTUAL_NONAB_INT_METHOD);
                 }
-            } 
+            }
             else
             {
-                // Instance field/method
+                // Instance method
                 if (!IsMdStatic(dwMemberAttrs))
                 {
                     BuildMethodTableThrowException(BFA_NONVIRT_INST_INT_METHOD);
                 }
             }
         }
-#endif
+#endif // !defined(FEATURE_DEFAULT_INTERFACES) || defined(FEATURE_NATIVE_IMAGE_GENERATION)
 
         // No synchronized methods in ValueTypes
         if(fIsClassValueType && IsMiSynchronized(dwImplFlags))
@@ -2962,7 +2952,6 @@ VOID    MethodTableBuilder::AllocateMethodWorkingMemory()
     {
         STANDARD_VM_CHECK;
         PRECONDITION(CheckPointer(this));
-        PRECONDITION(CheckPointer(bmtDomain));
         PRECONDITION(CheckPointer(bmtMethod));
         PRECONDITION(CheckPointer(bmtVT));
         PRECONDITION(CheckPointer(bmtInterface));
@@ -3569,7 +3558,6 @@ MethodNameHash *MethodTableBuilder::CreateMethodChainHash(MethodTable *pMT)
 
 //*******************************************************************************
 void MethodTableBuilder::SetBMTData(
-    BaseDomain *bmtDomain,
     bmtErrorInfo *bmtError,
     bmtProperties *bmtProp,
     bmtVtable *bmtVT,
@@ -3580,7 +3568,6 @@ void MethodTableBuilder::SetBMTData(
     bmtMethodImplInfo *bmtMethodImpl)
 {
     LIMITED_METHOD_CONTRACT;
-    this->bmtDomain = bmtDomain;
     this->bmtError = bmtError;
     this->bmtProp = bmtProp;
     this->bmtVT = bmtVT;
@@ -3595,7 +3582,6 @@ void MethodTableBuilder::SetBMTData(
 void MethodTableBuilder::NullBMTData()
 {
     LIMITED_METHOD_CONTRACT;
-    this->bmtDomain = NULL;
     this->bmtError = NULL;
     this->bmtProp = NULL;
     this->bmtVT = NULL;

@@ -147,10 +147,8 @@ public:
     //    JitHashTable always starts out empty, with no allocation overhead.
     //    Call Reallocate to prime with an initial size if desired.
     //
-    JitHashTable(Allocator* alloc) : m_alloc(alloc), m_table(nullptr), m_tableSizeInfo(), m_tableCount(0), m_tableMax(0)
+    JitHashTable(Allocator alloc) : m_alloc(alloc), m_table(nullptr), m_tableSizeInfo(), m_tableCount(0), m_tableMax(0)
     {
-        assert(m_alloc != nullptr);
-
 #ifndef __GNUC__ // these crash GCC
         static_assert_no_msg(Behavior::s_growth_factor_numerator > Behavior::s_growth_factor_denominator);
         static_assert_no_msg(Behavior::s_density_factor_numerator < Behavior::s_density_factor_denominator);
@@ -236,15 +234,25 @@ public:
     // Arguments:
     //    k - the key
     //    v - the value
+    //    kind - Normal, we are not allowed to overwrite
+    //           Overwrite, we are allowed to overwrite
+    //           currently only used by CHK/DBG builds in an assert.
     //
     // Return Value:
-    //    `true` if the key already exists, `false` otherwise.
+    //    `true` if the key exists and was overwritten,
+    //    `false` otherwise.
     //
     // Notes:
-    //    If the key already exists then its associated value is updated to
-    //    the new value.
+    //    If the key already exists and kind is Normal
+    //    this method will assert
     //
-    bool Set(Key k, Value v)
+    enum SetKind
+    {
+        None,
+        Overwrite
+    };
+
+    bool Set(Key k, Value v, SetKind kind = None)
     {
         CheckGrowth();
 
@@ -259,6 +267,7 @@ public:
         }
         if (pN != nullptr)
         {
+            assert(kind == Overwrite);
             pN->m_val = v;
             return true;
         }
@@ -361,7 +370,7 @@ public:
                 pN = pNext;
             }
         }
-        m_alloc->Free(m_table);
+        m_alloc.deallocate(m_table);
 
         m_table         = nullptr;
         m_tableSizeInfo = JitPrimeInfo();
@@ -391,7 +400,7 @@ public:
     }
 
     // Get the allocator used by this hash table.
-    Allocator* GetAllocator()
+    Allocator GetAllocator()
     {
         return m_alloc;
     }
@@ -513,7 +522,7 @@ public:
         JitPrimeInfo newPrime = NextPrime(newTableSize);
         newTableSize          = newPrime.prime;
 
-        Node** newTable = (Node**)m_alloc->ArrayAlloc(newTableSize, sizeof(Node*));
+        Node** newTable = m_alloc.template allocate<Node*>(newTableSize);
 
         for (unsigned i = 0; i < newTableSize; i++)
         {
@@ -539,7 +548,7 @@ public:
 
         if (m_table != nullptr)
         {
-            m_alloc->Free(m_table);
+            m_alloc.deallocate(m_table);
         }
 
         m_table         = newTable;
@@ -763,19 +772,19 @@ private:
         {
         }
 
-        void* operator new(size_t sz, Allocator* alloc)
+        void* operator new(size_t sz, Allocator alloc)
         {
-            return alloc->Alloc(sz);
+            return alloc.template allocate<unsigned char>(sz);
         }
 
-        void operator delete(void* p, Allocator* alloc)
+        void operator delete(void* p, Allocator alloc)
         {
-            alloc->Free(p);
+            alloc.deallocate(p);
         }
     };
 
     // Instance members
-    Allocator*   m_alloc;         // Allocator to use in this table.
+    Allocator    m_alloc;         // Allocator to use in this table.
     Node**       m_table;         // pointer to table
     JitPrimeInfo m_tableSizeInfo; // size of table (a prime) and information about it
     unsigned     m_tableCount;    // number of elements in table

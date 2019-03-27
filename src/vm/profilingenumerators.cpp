@@ -45,7 +45,6 @@ BOOL ProfilerFunctionEnum::Init(BOOL fWithReJITIDs)
         // reader lock to prevent things from changing while reading...
         CAN_TAKE_LOCK;
 
-        SO_NOT_MAINLINE;
     } CONTRACTL_END;
 
     EEJitManager::CodeHeapIterator heapIterator;
@@ -166,8 +165,6 @@ HRESULT IterateAppDomains(CallbackObject * callbackObj,
         MODE_ANY;
         CAN_TAKE_LOCK;
         // (See comments in code:ProfToEEInterfaceImpl::EnumModules for info about contracts.)
-
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -177,33 +174,16 @@ HRESULT IterateAppDomains(CallbackObject * callbackObj,
     // AD available in catch-up enumeration
     //     < AppDomainCreationFinished issued
     //     < AD NOT available from catch-up enumeration
-    //     < AppDomainShutdownStarted issued
     //     
     // The AppDomainIterator constructor parameter m_bActive is set to be TRUE below,
-    // meaning only AppDomains in the range [STAGE_ACTIVE;STAGE_CLOSED) will be included
+    // meaning only AppDomains in stage STAGE_ACTIVE or higher will be included
     // in the iteration.
     //     * AppDomainCreationFinished (with S_OK hrStatus) is issued once the AppDomain
     //         reaches STAGE_ACTIVE.
-    //     * AppDomainShutdownStarted is issued while the AppDomain is in STAGE_EXITED,
-    //         just before it hits STAGE_FINALIZING. (STAGE_EXITED < STAGE_CLOSED)
-    //     * To prevent AppDomains from appearing in the enumeration after we would have
-    //         sent the AppDomainShutdownStarted event for them, we must add an
-    //         additional check in the enumeration loop to exclude ADs such that
-    //         pAppDomain->IsUnloading() (i.e., > STAGE_UNLOAD_REQUESTED). Thus, for an
-    //         AD for which AppDomainShutdownStarted callback is issued, we have AD >=
-    //         STAGE_EXITED > STAGE_UNLOAD_REQUESTED, and thus, that AD will be excluded
-    //         by the pAppDomain->IsUnloading() check.
     AppDomainIterator appDomainIterator(TRUE);
     while (appDomainIterator.Next())
     {
         AppDomain * pAppDomain = appDomainIterator.GetDomain();
-        if (pAppDomain->IsUnloading())
-        {
-            // Must skip app domains that are in the process of unloading, to ensure
-            // the rules around which entities the profiler should find in the
-            // enumeration. See code:#ProfilerEnumAppDomains for details.
-            continue;
-        }
 
         // Of course, the AD could start unloading here, but if it does we're guaranteed
         // the profiler has had a chance to see the Unload callback for the AD, and thus
@@ -271,9 +251,6 @@ HRESULT IterateUnsharedModules(AppDomain * pAppDomain,
     //     * AssemblyLoadFinished is issued once the Assembly reaches
     //         code:FILE_LOAD_LOADLIBRARY
     //     * AssemblyUnloadStarted is issued as a result of either:
-    //         * AppDomain unloading. In this case such assemblies / modules would be
-    //             excluded by the AD iterator above, because it excludes ADs if
-    //             pAppDomain->IsUnloading()
     //         * Collectible assemblies unloading. Such assemblies will no longer be
     //             enumerable.
     //
@@ -294,19 +271,13 @@ HRESULT IterateUnsharedModules(AppDomain * pAppDomain,
     // DomainAssembly instances.
     AppDomain::AssemblyIterator domainAssemblyIterator = 
         pAppDomain->IterateAssembliesEx(
-            (AssemblyIterationFlags) (kIncludeAvailableToProfilers | kIncludeExecution | kIncludeIntrospection));
+            (AssemblyIterationFlags) (kIncludeAvailableToProfilers | kIncludeExecution));
     CollectibleAssemblyHolder<DomainAssembly *> pDomainAssembly;
     
     while (domainAssemblyIterator.Next(pDomainAssembly.This()))
     {
         _ASSERTE(pDomainAssembly != NULL);
         _ASSERTE(pDomainAssembly->GetAssembly() != NULL);
-
-        // We're only adding unshared assemblies / modules
-        if (pDomainAssembly->GetAssembly()->IsDomainNeutral())
-        {
-            continue;
-        }
 
         // #ProfilerEnumModules (See also code:#ProfilerEnumGeneral)
         // 
@@ -501,7 +472,6 @@ HRESULT ProfilerModuleEnum::Init()
         CAN_TAKE_LOCK;
         // (See comments in code:ProfToEEInterfaceImpl::EnumModules for info about contracts.)
 
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -530,38 +500,6 @@ HRESULT ProfilerModuleEnum::Init()
         return hr;
     }
 
-    // Next, find all SHARED modules that have a corresponding DomainModule loaded into
-    // at least one AppDomain with a load level high enough that it should be visible to
-    // profilers. For each such shared module, add it once to the enumerator. Note that
-    // enumerating assemblies/modules from the SharedDomain uses different internal CLR
-    // interators than enumerating DomainAssemblies/DomainModules from AppDomains. So we
-    // need to special case the iteration here. We could probably factor the following
-    // into yet more iterator helpers the same way we've already done for the
-    // DomainAssembly/DomainModule iterators above, but it's unclear how useful that
-    // would be.
-    SharedDomain::SharedAssemblyIterator sharedAssemblyIterator;
-    while (sharedAssemblyIterator.Next())
-    {
-        Assembly * pAssembly = sharedAssemblyIterator.GetAssembly();
-        Assembly::ModuleIterator moduleIterator = pAssembly->IterateModules();
-        while (moduleIterator.Next())
-        {
-            Module * pModule = moduleIterator.GetModule();
-
-            // Create an instance of this helper class (IterateAppDomainsForSharedModule)
-            // to remember which Module we're testing. This will be used as our callback
-            // for when we iterate AppDomains trying to find at least one AD that has loaded
-            // pModule enough that pModule would be made visible to profilers.
-            IterateAppDomainsForSharedModule iterateAppDomainsForSharedModule(&m_elements, pModule);
-            hr = IterateAppDomains<IterateAppDomainsForSharedModule>(
-                &iterateAppDomainsForSharedModule,
-                &IterateAppDomainsForSharedModule::AddSharedModuleForAppDomain);
-            if (FAILED(hr))
-            {
-                return hr;
-            }
-        }
-    }
     return S_OK;
 }
 
@@ -591,7 +529,6 @@ HRESULT IterateAppDomainContainingModule::AddAppDomainContainingModule(AppDomain
         GC_TRIGGERS;
         MODE_ANY;
         CAN_TAKE_LOCK;
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -629,7 +566,6 @@ HRESULT IterateAppDomainContainingModule::PopulateArray()
         GC_TRIGGERS;
         MODE_ANY;
         CAN_TAKE_LOCK;
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -658,7 +594,6 @@ HRESULT ProfilerThreadEnum::Init()
         GC_NOTRIGGER;
         MODE_ANY;
         CAN_TAKE_LOCK;
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 

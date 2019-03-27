@@ -342,13 +342,10 @@ MethodTable* Module::CreateArrayMethodTable(TypeHandle elemTypeHnd, CorElementTy
     // Allocate space for optional members
     // We always have a non-virtual slot array, see assert at end
     cbMT += MethodTable::GetOptionalMembersAllocationSize(dwMultipurposeSlotsMask,
-                                                          FALSE,                           // RemotableMethodInfo
                                                           FALSE,                           // GenericsStaticsInfo
                                                           FALSE,                           // GuidInfo
                                                           FALSE,                           // CCWTemplate
                                                           FALSE,                           // RCWPerTypeData
-                                                          FALSE,                           // RemotingVtsInfo
-                                                          FALSE,                           // ContextStatic
                                                           FALSE);                          // TokenOverflow
 
     // This is the offset of the beginning of the interface map
@@ -374,7 +371,7 @@ MethodTable* Module::CreateArrayMethodTable(TypeHandle elemTypeHnd, CorElementTy
     // If none, we need to allocate space for the slots
     if (!canShareVtableChunks)
     {
-        cbMT += numVirtuals * sizeof(PCODE);
+        cbMT += numVirtuals * sizeof(MethodTable::VTableIndir2_t);
     }
 
     // Canonical methodtable has an array of non virtual slots pointed to by the optional member
@@ -431,13 +428,6 @@ MethodTable* Module::CreateArrayMethodTable(TypeHandle elemTypeHnd, CorElementTy
         pClass->SetRank (Rank);
         pClass->SetArrayElementType (elemType);
         pClass->SetMethodTable (pMT);
-
-#if defined(_DEBUG)
-        // Non-covariant arrays of agile types are agile
-        if (elemType != ELEMENT_TYPE_CLASS && elemTypeHnd.IsAppDomainAgile())
-            pClass->SetAppDomainAgile();
-        pClass->SetAppDomainAgilityDone();
-#endif
 
         // Fill In the method table
         pClass->SetNumMethods(numVirtuals + numNonVirtualSlots);
@@ -499,7 +489,7 @@ MethodTable* Module::CreateArrayMethodTable(TypeHandle elemTypeHnd, CorElementTy
     _ASSERTE(pMT->IsClassPreInited());
 
     // Set BaseSize to be size of non-data portion of the array
-    DWORD baseSize = ObjSizeOf(ArrayBase);
+    DWORD baseSize = ARRAYBASE_BASESIZE;
     if (arrayKind == ELEMENT_TYPE_ARRAY)
         baseSize += Rank*sizeof(DWORD)*2;
 
@@ -544,7 +534,7 @@ MethodTable* Module::CreateArrayMethodTable(TypeHandle elemTypeHnd, CorElementTy
             else 
             {
                 // Use the locally allocated chunk
-                it.SetIndirectionSlot((PTR_PCODE)(pMemory+cbArrayClass+offsetOfUnsharedVtableChunks));
+                it.SetIndirectionSlot((MethodTable::VTableIndir2_t *)(pMemory+cbArrayClass+offsetOfUnsharedVtableChunks));
                 offsetOfUnsharedVtableChunks += it.GetSize();
             }
         }
@@ -553,8 +543,11 @@ MethodTable* Module::CreateArrayMethodTable(TypeHandle elemTypeHnd, CorElementTy
         if (!canShareVtableChunks)
         {
             // Copy top level class's vtable - note, vtable is contained within the MethodTable
+            MethodTable::MethodDataWrapper hParentMTData(MethodTable::GetMethodData(pParentClass, FALSE));
             for (UINT32 i = 0; i < numVirtuals; i++)
-                pMT->SetSlot(i, pParentClass->GetSlot(i));
+            {
+                pMT->CopySlotFrom(i, hParentMTData, pParentClass);
+            }
         }
 
         if (pClass != NULL)
@@ -682,7 +675,7 @@ MethodTable* Module::CreateArrayMethodTable(TypeHandle elemTypeHnd, CorElementTy
             // This equals the offset of the first pointer if this were an array of entirely pointers, plus the offset of the
             // first pointer in the value class
             pSeries->SetSeriesOffset(ArrayBase::GetDataPtrOffset(pMT)
-                + (sortedSeries[0]->GetSeriesOffset()) - sizeof (Object) );
+                + (sortedSeries[0]->GetSeriesOffset()) - OBJECT_SIZE);
             for (index = 0; index < nSeries; index ++)
             {
                 size_t numPtrsInBytes = sortedSeries[index]->GetSeriesSize()
@@ -701,7 +694,7 @@ MethodTable* Module::CreateArrayMethodTable(TypeHandle elemTypeHnd, CorElementTy
                 else
                 {
                     skip = sortedSeries[0]->GetSeriesOffset() + pElemMT->GetBaseSize()
-                         - ObjSizeOf(Object) - currentOffset;
+                         - OBJECT_BASESIZE - currentOffset;
                 }
 
                 _ASSERTE(!"Module::CreateArrayMethodTable() - unaligned GC info" || IS_ALIGNED(skip, TARGET_POINTER_SIZE));
@@ -788,10 +781,9 @@ public:
         BOOL fHasLowerBounds = pMT->GetInternalCorElementType() == ELEMENT_TYPE_ARRAY;
 
         DWORD dwTotalLocalNum = NewLocal(ELEMENT_TYPE_I4);
-        DWORD dwFactorLocalNum = NewLocal(ELEMENT_TYPE_I4);
         DWORD dwLengthLocalNum = NewLocal(ELEMENT_TYPE_I4);
 
-        mdToken tokPinningHelper = GetToken(MscorlibBinder::GetField(FIELD__PINNING_HELPER__M_DATA));
+        mdToken tokRawData = GetToken(MscorlibBinder::GetField(FIELD__RAW_DATA__DATA));
 
         ILCodeLabel * pRangeExceptionLabel = NewCodeLabel();
         ILCodeLabel * pRangeExceptionLabel1 = NewCodeLabel();
@@ -800,16 +792,13 @@ public:
         ILCodeLabel * pTypeMismatchExceptionLabel = NULL;
 
         UINT rank = pMT->GetRank();
-        UINT idx = rank;
         UINT firstIdx = 0;
         UINT hiddenArgIdx = rank;
         _ASSERTE(rank>0);
 
-		
 #ifndef _TARGET_X86_
         if(m_pMD->GetArrayFuncIndex() == ArrayMethodDesc::ARRAY_FUNC_ADDRESS)
         {
-            idx++;
             firstIdx = 1;
             hiddenArgIdx = 0;
         }
@@ -827,13 +816,13 @@ public:
                 m_pCode->EmitBRFALSE(pTypeCheckOK); //Storing NULL is OK
                 
                 m_pCode->EmitLDARG(rank); // return param
-                m_pCode->EmitLDFLDA(tokPinningHelper);
+                m_pCode->EmitLDFLDA(tokRawData);
                 m_pCode->EmitLDC(Object::GetOffsetOfFirstField());
                 m_pCode->EmitSUB();
                 m_pCode->EmitLDIND_I(); // TypeHandle
 
                 m_pCode->EmitLoadThis();
-                m_pCode->EmitLDFLDA(tokPinningHelper);
+                m_pCode->EmitLDFLDA(tokRawData);
                 m_pCode->EmitLDC(Object::GetOffsetOfFirstField());
                 m_pCode->EmitSUB();
                 m_pCode->EmitLDIND_I(); // Array MT
@@ -861,13 +850,13 @@ public:
                 m_pCode->EmitLDARG(hiddenArgIdx); // hidden param
                 m_pCode->EmitBRFALSE(pTypeCheckPassed);
                 m_pCode->EmitLDARG(hiddenArgIdx);
-                m_pCode->EmitLDFLDA(tokPinningHelper);          
+                m_pCode->EmitLDFLDA(tokRawData);          
                 m_pCode->EmitLDC(offsetof(ParamTypeDesc, m_Arg) - (Object::GetOffsetOfFirstField()+2));
                 m_pCode->EmitADD();
                 m_pCode->EmitLDIND_I();
                 
                 m_pCode->EmitLoadThis();
-                m_pCode->EmitLDFLDA(tokPinningHelper);
+                m_pCode->EmitLDFLDA(tokRawData);
                 m_pCode->EmitLDC(Object::GetOffsetOfFirstField());
                 m_pCode->EmitSUB();
                 m_pCode->EmitLDIND_I(); // Array MT
@@ -885,7 +874,7 @@ public:
         {
             // check if the array is SZArray.
             m_pCode->EmitLoadThis();
-            m_pCode->EmitLDFLDA(tokPinningHelper);
+            m_pCode->EmitLDFLDA(tokRawData);
             m_pCode->EmitLDC(Object::GetOffsetOfFirstField());
             m_pCode->EmitSUB();
             m_pCode->EmitLDIND_I();
@@ -899,7 +888,7 @@ public:
             // it is SZArray
             // bounds check
             m_pCode->EmitLoadThis();
-            m_pCode->EmitLDFLDA(tokPinningHelper);
+            m_pCode->EmitLDFLDA(tokRawData);
             m_pCode->EmitLDC(ArrayBase::GetOffsetOfNumComponents() - Object::GetOffsetOfFirstField());
             m_pCode->EmitADD();
             m_pCode->EmitLDIND_I4();
@@ -907,33 +896,33 @@ public:
             m_pCode->EmitBLE_UN(pRangeExceptionLabel);
 
             m_pCode->EmitLoadThis();
-            m_pCode->EmitLDFLDA(tokPinningHelper);
+            m_pCode->EmitLDFLDA(tokRawData);
             m_pCode->EmitLDC(ArrayBase::GetBoundsOffset(pMT) - Object::GetOffsetOfFirstField());
             m_pCode->EmitADD();
-            m_pCode->EmitLDARG(firstIdx);          
+            m_pCode->EmitLDARG(firstIdx);
             m_pCode->EmitBR(pCheckDone);
             m_pCode->EmitLabel(pNotSZArray);
         }
 
-        while(idx-- > firstIdx)
+        for (UINT i = 0; i < rank; i++)
         {
             // Cache length
             m_pCode->EmitLoadThis();
-            m_pCode->EmitLDFLDA(tokPinningHelper);
-            m_pCode->EmitLDC((ArrayBase::GetBoundsOffset(pMT) - Object::GetOffsetOfFirstField()) + (idx-firstIdx)*sizeof(DWORD));
+            m_pCode->EmitLDFLDA(tokRawData);
+            m_pCode->EmitLDC((ArrayBase::GetBoundsOffset(pMT) - Object::GetOffsetOfFirstField()) + i*sizeof(DWORD));
             m_pCode->EmitADD();
             m_pCode->EmitLDIND_I4();
             m_pCode->EmitSTLOC(dwLengthLocalNum);
 
             // Fetch index
-            m_pCode->EmitLDARG(idx);
+            m_pCode->EmitLDARG(firstIdx + i);
 
             if (fHasLowerBounds)
             {
                 // Load lower bound
                 m_pCode->EmitLoadThis();
-                m_pCode->EmitLDFLDA(tokPinningHelper);
-                m_pCode->EmitLDC((ArrayBase::GetLowerBoundsOffset(pMT) - Object::GetOffsetOfFirstField()) + (idx-firstIdx)*sizeof(DWORD));
+                m_pCode->EmitLDFLDA(tokRawData);
+                m_pCode->EmitLDC((ArrayBase::GetLowerBoundsOffset(pMT) - Object::GetOffsetOfFirstField()) + i*sizeof(DWORD));
                 m_pCode->EmitADD();
                 m_pCode->EmitLDIND_I4();
 
@@ -947,37 +936,27 @@ public:
             m_pCode->EmitBGE_UN(pRangeExceptionLabel1);
 
             // Add to the running total if we have one already
-            if ((idx-firstIdx) != (rank - 1))
+            if (i > 0)
             {
-                m_pCode->EmitLDLOC(dwFactorLocalNum);
-                m_pCode->EmitMUL();
                 m_pCode->EmitLDLOC(dwTotalLocalNum);
+                m_pCode->EmitLDLOC(dwLengthLocalNum);
+                m_pCode->EmitMUL();
                 m_pCode->EmitADD();
             }
             m_pCode->EmitSTLOC(dwTotalLocalNum);
-
-            // Update factor if this is not the last iteration
-            if ((idx-firstIdx) != 0)
-            {
-                m_pCode->EmitLDLOC(dwLengthLocalNum);
-                if ((idx-firstIdx) != (rank - 1))
-                {
-                    m_pCode->EmitLDLOC(dwFactorLocalNum);
-                    m_pCode->EmitMUL();
-                }
-                m_pCode->EmitSTLOC(dwFactorLocalNum);                
-            }
         }
 
         // Compute element address
         m_pCode->EmitLoadThis();
-        m_pCode->EmitLDFLDA(tokPinningHelper);
+        m_pCode->EmitLDFLDA(tokRawData);
         m_pCode->EmitLDC(ArrayBase::GetDataPtrOffset(pMT) - Object::GetOffsetOfFirstField());
         m_pCode->EmitADD();
         m_pCode->EmitLDLOC(dwTotalLocalNum);
-        
+
         m_pCode->EmitLabel(pCheckDone);
-        
+
+        m_pCode->EmitCONV_U();
+
         SIZE_T elemSize = pMT->GetComponentSize();
         if (elemSize != 1)
         {
@@ -1302,7 +1281,6 @@ void ArrayStubCache::CompileStub(const BYTE *pRawStub,
 UINT ArrayStubCache::Length(const BYTE *pRawStub)
 {
     LIMITED_METHOD_CONTRACT;
-    STATIC_CONTRACT_SO_TOLERANT;
     return ((ArrayOpScript*)pRawStub)->Length();
 }
 

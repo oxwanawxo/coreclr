@@ -10,6 +10,12 @@
 
 #ifdef FEATURE_PERFTRACING
 
+#ifndef __GNUC__
+__declspec(thread) ThreadEventBufferList ThreadEventBufferList::gCurrentThreadEventBufferList;
+#else // !__GNUC__
+thread_local ThreadEventBufferList ThreadEventBufferList::gCurrentThreadEventBufferList;
+#endif // !__GNUC__
+
 EventPipeBufferManager::EventPipeBufferManager()
 {
     CONTRACTL
@@ -29,6 +35,7 @@ EventPipeBufferManager::EventPipeBufferManager()
     m_numBuffersStolen = 0;
     m_numBuffersLeaked = 0;
     m_numEventsStored = 0;
+    m_numEventsDropped = 0;
     m_numEventsWritten = 0;
 #endif // _DEBUG
 }
@@ -53,16 +60,6 @@ EventPipeBufferManager::~EventPipeBufferManager()
             EventPipeBufferList *pThreadBufferList = pCurElem->GetValue();
             if (!pThreadBufferList->OwnedByThread())
             {
-                Thread *pThread = NULL;
-                while ((pThread = ThreadStore::GetThreadList(pThread)) != NULL)
-                {
-                    if (pThread->GetEventPipeBufferList() == pThreadBufferList)
-                    {
-                        pThread->SetEventPipeBufferList(NULL);
-                        break;
-                    }
-                }
-
                 // We don't delete buffers themself because they can be in-use
                 delete(pThreadBufferList);
             }
@@ -76,14 +73,13 @@ EventPipeBufferManager::~EventPipeBufferManager()
     }
 }
 
-EventPipeBuffer* EventPipeBufferManager::AllocateBufferForThread(Thread *pThread, unsigned int requestSize)
+EventPipeBuffer* EventPipeBufferManager::AllocateBufferForThread(EventPipeSession &session, unsigned int requestSize)
 {
     CONTRACTL
     {
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        PRECONDITION(pThread != NULL);
         PRECONDITION(requestSize > 0);
     }
     CONTRACTL_END;
@@ -94,7 +90,8 @@ EventPipeBuffer* EventPipeBufferManager::AllocateBufferForThread(Thread *pThread
     // Determine if the requesting thread has at least one buffer.
     // If not, we guarantee that each thread gets at least one (to prevent thrashing when the circular buffer size is too small).
     bool allocateNewBuffer = false;
-    EventPipeBufferList *pThreadBufferList = pThread->GetEventPipeBufferList();
+    EventPipeBufferList *pThreadBufferList = ThreadEventBufferList::Get();
+
     if(pThreadBufferList == NULL)
     {
         pThreadBufferList = new (nothrow) EventPipeBufferList(this);
@@ -110,7 +107,7 @@ EventPipeBuffer* EventPipeBufferManager::AllocateBufferForThread(Thread *pThread
         }
 
         m_pPerThreadBufferList->InsertTail(pElem);
-        pThread->SetEventPipeBufferList(pThreadBufferList);
+        ThreadEventBufferList::Set(pThreadBufferList);
         allocateNewBuffer = true;
     }
 
@@ -133,11 +130,14 @@ EventPipeBuffer* EventPipeBufferManager::AllocateBufferForThread(Thread *pThread
         }
     }
 
+    // Only steal buffers from other threads if the session being written to is a
+    // file-based session.  Streaming sessions will simply drop events.
+    // TODO: Add dropped events telemetry here.
     EventPipeBuffer *pNewBuffer = NULL;
-    if(!allocateNewBuffer)
+    if(!allocateNewBuffer && (session.GetSessionType() == EventPipeSessionType::File))
     {
         // We can't allocate a new buffer.
-        // Find the oldest buffer, zero it, and re-purpose it for this thread.
+        // Find the oldest buffer, de-allocate it, and re-purpose it for this thread.
 
         // Find the thread that contains the oldest stealable buffer, and get its list of buffers.
         EventPipeBufferList *pListToStealFrom = FindThreadToStealFrom();
@@ -179,7 +179,7 @@ EventPipeBuffer* EventPipeBufferManager::AllocateBufferForThread(Thread *pThread
         // Pick the base buffer size based.  Debug builds have a smaller size to stress the allocate/steal path more.
         unsigned int baseBufferSize =
 #ifdef _DEBUG
-            5 * 1024; // 5K
+            30 * 1024; // 30K
 #else
             100 * 1024; // 100K
 #endif
@@ -190,6 +190,13 @@ EventPipeBuffer* EventPipeBufferManager::AllocateBufferForThread(Thread *pThread
         if(bufferSize < requestSize)
         {
             bufferSize = requestSize;
+        }
+
+        // Don't allow the buffer size to exceed 1MB.
+        const unsigned int maxBufferSize = 1024 * 1024;
+        if(bufferSize > maxBufferSize)
+        {
+            bufferSize = maxBufferSize;
         }
 
         // EX_TRY is used here as opposed to new (nothrow) because
@@ -315,9 +322,6 @@ bool EventPipeBufferManager::WriteEvent(Thread *pThread, EventPipeSession &sessi
         return false;
     }
 
-    // The event is still enabled.  Mark that the thread is now writing an event.
-    pThread->SetEventWriteInProgress(true);
-
     // Check one more time to make sure that the event is still enabled.
     // We do this because we might be trying to disable tracing and free buffers, so we
     // must make sure that the event is enabled after we mark that we're writing to avoid
@@ -330,7 +334,9 @@ bool EventPipeBufferManager::WriteEvent(Thread *pThread, EventPipeSession &sessi
     // See if the thread already has a buffer to try.
     bool allocNewBuffer = false;
     EventPipeBuffer *pBuffer = NULL;
-    EventPipeBufferList *pThreadBufferList = pThread->GetEventPipeBufferList();
+
+    EventPipeBufferList *pThreadBufferList = ThreadEventBufferList::Get();
+
     if(pThreadBufferList == NULL)
     {
         allocNewBuffer = true;
@@ -347,8 +353,14 @@ bool EventPipeBufferManager::WriteEvent(Thread *pThread, EventPipeSession &sessi
         }
         else
         {
+            // The event is still enabled.  Mark that the thread is now writing an event.
+            pThreadBufferList->SetThreadEventWriteInProgress(true);
+
             // Attempt to write the event to the buffer.  If this fails, we should allocate a new buffer.
             allocNewBuffer = !pBuffer->WriteEvent(pEventThread, session, event, payload, pActivityId, pRelatedActivityId, pStack);
+
+            // Mark that the thread is no longer writing an event.
+            pThreadBufferList->SetThreadEventWriteInProgress(false);
         }
     }
 
@@ -363,7 +375,7 @@ bool EventPipeBufferManager::WriteEvent(Thread *pThread, EventPipeSession &sessi
         // to switch to preemptive mode here.
 
         unsigned int requestSize = sizeof(EventPipeEventInstance) + payload.GetSize();
-        pBuffer = AllocateBufferForThread(pThread, requestSize);
+        pBuffer = AllocateBufferForThread(session, requestSize);
     }
 
     // Try to write the event after we allocated (or stole) a buffer.
@@ -371,16 +383,25 @@ bool EventPipeBufferManager::WriteEvent(Thread *pThread, EventPipeSession &sessi
     // This is the second time if this thread did have one or more buffers, but they were full.
     if(allocNewBuffer && pBuffer != NULL)
     {
+        // By this point, a new buffer list has been allocated so we should fetch it again before using it.
+        pThreadBufferList = ThreadEventBufferList::Get();
+        // The event is still enabled.  Mark that the thread is now writing an event.
+        pThreadBufferList->SetThreadEventWriteInProgress(true);
         allocNewBuffer = !pBuffer->WriteEvent(pEventThread, session, event, payload, pActivityId, pRelatedActivityId, pStack);
+
+        // Mark that the thread is no longer writing an event.
+        pThreadBufferList->SetThreadEventWriteInProgress(false);
     }
 
-    // Mark that the thread is no longer writing an event.
-     pThread->SetEventWriteInProgress(false);
 
 #ifdef _DEBUG
     if(!allocNewBuffer)
     {
         InterlockedIncrement(&m_numEventsStored);
+    }
+    else
+    {
+        InterlockedIncrement(&m_numEventsDropped);
     }
 #endif // _DEBUG
     return !allocNewBuffer;
@@ -458,6 +479,64 @@ void EventPipeBufferManager::WriteAllBuffersToFile(EventPipeFile *pFile, LARGE_I
     }
 }
 
+EventPipeEventInstance* EventPipeBufferManager::GetNextEvent()
+{
+    CONTRACTL
+    {
+        NOTHROW;
+        GC_NOTRIGGER;
+        MODE_ANY;
+    }
+    CONTRACTL_END;
+
+    // Take the lock before walking the buffer list.
+    SpinLockHolder _slh(&m_lock);
+
+    // Naively walk the circular buffer, getting the event stream in timestamp order.
+    LARGE_INTEGER stopTimeStamp;
+    QueryPerformanceCounter(&stopTimeStamp);
+    while (true)
+    {
+        EventPipeEventInstance *pOldestInstance = NULL;
+        EventPipeBuffer *pOldestContainingBuffer = NULL;
+        EventPipeBufferList *pOldestContainingList = NULL;
+        SListElem<EventPipeBufferList*> *pElem = m_pPerThreadBufferList->GetHead();
+        while (pElem != NULL)
+        {
+            EventPipeBufferList *pBufferList = pElem->GetValue();
+
+            // Peek the next event out of the list.
+            EventPipeBuffer *pContainingBuffer = NULL;
+            EventPipeEventInstance *pNext = pBufferList->PeekNextEvent(stopTimeStamp, &pContainingBuffer);
+            if (pNext != NULL)
+            {
+                // If it's the oldest event we've seen, then save it.
+                if ((pOldestInstance == NULL) ||
+                    (pOldestInstance->GetTimeStamp()->QuadPart > pNext->GetTimeStamp()->QuadPart))
+                {
+                    pOldestInstance = pNext;
+                    pOldestContainingBuffer = pContainingBuffer;
+                    pOldestContainingList = pBufferList;
+                }
+            }
+
+            pElem = m_pPerThreadBufferList->GetNext(pElem);
+        }
+
+        if (pOldestInstance == NULL)
+        {
+            // We're done.  There are no more events.
+            return NULL;
+        }
+
+        // Pop the event from the buffer.
+        pOldestContainingList->PopNextEvent(stopTimeStamp);
+
+        // Return the oldest event that hasn't yet been processed.
+        return pOldestInstance;
+    }
+}
+
 void EventPipeBufferManager::DeAllocateBuffers()
 {
     CONTRACTL
@@ -469,75 +548,6 @@ void EventPipeBufferManager::DeAllocateBuffers()
     CONTRACTL_END;
 
     _ASSERTE(EnsureConsistency());
-
-    // Take the thread store lock because we're going to iterate through the thread list.
-    {
-        ThreadStoreLockHolder tsl;
-
-        // Take the buffer manager manipulation lock.
-        SpinLockHolder _slh(&m_lock);
-
-        Thread *pThread = NULL;
-        while ((pThread = ThreadStore::GetThreadList(pThread)) != NULL)
-        {
-            // Get the thread's buffer list.
-            EventPipeBufferList *pBufferList = pThread->GetEventPipeBufferList();
-            if(pBufferList != NULL)
-            {
-                // Attempt to free the buffer list.
-                // If the thread is using its buffer list skip it.
-                // This means we will leak a single buffer, but if tracing is re-enabled, that buffer can be used again.
-                if(!pThread->GetEventWriteInProgress())
-                {
-                    EventPipeBuffer *pBuffer = pBufferList->GetAndRemoveHead();
-                    while(pBuffer != NULL)
-                    {
-                        DeAllocateBuffer(pBuffer);
-                        pBuffer = pBufferList->GetAndRemoveHead();
-                    }
-
-                    // Remove the list entry from the per thread buffer list.
-                    SListElem<EventPipeBufferList*> *pElem = m_pPerThreadBufferList->GetHead();
-                    while(pElem != NULL)
-                    {
-                        EventPipeBufferList* pEntry = pElem->GetValue();
-                        if(pEntry == pBufferList)
-                        {
-                            pElem = m_pPerThreadBufferList->FindAndRemove(pElem);
-
-                            // In DEBUG, make sure that the element was found and removed.
-                            _ASSERTE(pElem != NULL);
-
-                            SListElem<EventPipeBufferList*> *pCurElem = pElem;
-                            pElem = m_pPerThreadBufferList->GetNext(pElem);
-                            delete(pCurElem);
-                        }
-                        else
-                        {
-                            pElem = m_pPerThreadBufferList->GetNext(pElem);
-                        }
-                    }
-
-                    // Remove the list reference from the thread.
-                    pThread->SetEventPipeBufferList(NULL);
-
-                    // Now that all of the list elements have been freed, free the list itself.
-                    delete(pBufferList);
-                    pBufferList = NULL;
-                }
-#ifdef _DEBUG
-                else
-                {
-                    // We can't deallocate the buffers.
-                    m_numBuffersLeaked += pBufferList->GetCount();
-                }
-#endif // _DEBUG            
-            }
-        }
-    }
-
-    // Now that we've walked through all of the threads, let's see if there are any other buffers
-    // that belonged to threads that died during tracing.  We can free these now.
 
     // Take the buffer manager manipulation lock
     SpinLockHolder _slh(&m_lock);
@@ -573,8 +583,9 @@ void EventPipeBufferManager::DeAllocateBuffers()
         {
             pElem = m_pPerThreadBufferList->GetNext(pElem);
         }
-    } 
+    }
 }
+
 
 #ifdef _DEBUG
 bool EventPipeBufferManager::EnsureConsistency()
@@ -605,6 +616,7 @@ EventPipeBufferList::EventPipeBufferList(EventPipeBufferManager *pManager)
     m_bufferCount = 0;
     m_pReadBuffer = NULL;
     m_ownedByThread = true;
+    m_threadEventWriteInProgress = false;
 
 #ifdef _DEBUG
     m_pCreatingThread = GetThread();
@@ -777,40 +789,25 @@ EventPipeEventInstance* EventPipeBufferList::PopNextEvent(LARGE_INTEGER beforeTi
     EventPipeBuffer *pContainingBuffer = NULL;
     EventPipeEventInstance *pNext = PeekNextEvent(beforeTimeStamp, &pContainingBuffer);
 
+    // Check to see if we need to clean-up the buffer that contained the previously popped event.
+    if(pContainingBuffer->GetPrevious() != NULL)
+    {
+            // Remove the previous node.  The previous node should always be the head node.
+            EventPipeBuffer *pRemoved = GetAndRemoveHead();
+            _ASSERTE(pRemoved != pContainingBuffer);
+            _ASSERTE(pContainingBuffer == GetHead());
+
+            // De-allocate the buffer.
+            m_pManager->DeAllocateBuffer(pRemoved);
+    }
+
     // If the event is non-NULL, pop it.
     if(pNext != NULL && pContainingBuffer != NULL)
     {
         pContainingBuffer->PopNext(beforeTimeStamp);
-
-        // If the buffer is not the last buffer in the list and it has been drained, de-allocate it.
-        if((pContainingBuffer->GetNext() != NULL) && (pContainingBuffer->PeekNext(beforeTimeStamp) == NULL))
-        {
-            // This buffer must be the head node of the list.
-            _ASSERTE(pContainingBuffer->GetPrevious() == NULL);
-            EventPipeBuffer *pRemoved = GetAndRemoveHead();
-            _ASSERTE(pRemoved == pContainingBuffer);
-
-            // De-allocate the buffer.
-            m_pManager->DeAllocateBuffer(pRemoved);
-
-            // Reset the read buffer so that it becomes the head node on next peek or pop operation.
-            m_pReadBuffer = NULL;
-        }
     }
 
     return pNext;
-}
-
-bool EventPipeBufferList::OwnedByThread()
-{
-    LIMITED_METHOD_CONTRACT;
-    return m_ownedByThread;
-}
-
-void EventPipeBufferList::SetOwnedByThread(bool value)
-{
-    LIMITED_METHOD_CONTRACT;
-    m_ownedByThread = value;
 }
 
 #ifdef _DEBUG
@@ -889,5 +886,14 @@ bool EventPipeBufferList::EnsureConsistency()
     return true;
 }
 #endif // _DEBUG
+
+ThreadEventBufferList::~ThreadEventBufferList()
+{
+    // Before the thread dies, mark its buffers as no longer owned
+    // so that they can be cleaned up after the thread dies.
+    // EventPipeBufferList *pList = GetThreadEventBufferList();
+    if (m_pThreadEventBufferList != NULL)
+        m_pThreadEventBufferList->SetOwnedByThread(false);
+}
 
 #endif // FEATURE_PERFTRACING

@@ -19,7 +19,6 @@ internal class ScanProjectFiles
     private static bool s_tryAndFix = true;
     private static int s_projCount = 0;
     private static int s_needsFixCount = 0;
-    private static int s_deferredFixCount = 0;
     private static int s_fixedCount = 0;
 
     private static int Main(string[] args)
@@ -93,8 +92,8 @@ internal class ScanProjectFiles
 
         }
 
-        Console.WriteLine("{0} projects, {1} needed fixes, {2} fixes deferred, {3} were fixed",
-            s_projCount, s_needsFixCount, s_deferredFixCount, s_fixedCount);
+        Console.WriteLine("{0} projects, {1} needed fixes, {2} were fixed",
+            s_projCount, s_needsFixCount, s_fixedCount);
 
         // Return error status if there are unfixed projects
         return (s_needsFixCount == 0 ? 100 : -1);
@@ -123,11 +122,15 @@ internal class ScanProjectFiles
             bool hasReleaseCondition = false;
             bool hasDebugCondition = false;
             string oddness = null;
+            string optimizeOddness = null;
             string debugVal = null;
+            string optimizeVal = null;
             bool needsFix = false;
             XElement bestPropertyGroupNode = null;
             XElement lastPropertyGroupNode = null;
             List<XElement> debugTypePropertyGroupNodes = new List<XElement>();
+            List<XElement> optimizePropertyGroupNodes = new List<XElement>();
+
             foreach (XElement prop in props)
             {
                 lastPropertyGroupNode = prop;
@@ -186,6 +189,24 @@ internal class ScanProjectFiles
                         }
                     }
                 }
+
+                XElement optimize = prop.Element(nn + "Optimize");
+                if (optimize != null)
+                {
+                    optimizePropertyGroupNodes.Add(optimize);
+                    string newOptimizeVal = optimize.Value;
+                    if (string.IsNullOrWhiteSpace(newOptimizeVal))
+                    {
+                        newOptimizeVal = "False";
+                    }
+
+                    if (optimizeVal != null && !optimizeVal.Equals(newOptimizeVal, StringComparison.InvariantCultureIgnoreCase))
+                    {
+                        optimizeOddness = "MultipleConflictValues";
+                    }
+
+                    optimizeVal = newOptimizeVal;
+                }
             }
 
             if (oddness == null)
@@ -201,6 +222,7 @@ internal class ScanProjectFiles
             }
 
             bool hasDebugType = debugTypePropertyGroupNodes.Count > 0;
+            bool hasOptimize = optimizePropertyGroupNodes.Count > 0;
 
             // Analyze suffix convention mismatches
             string suffixNote = "SuffixNone";
@@ -218,7 +240,8 @@ internal class ScanProjectFiles
                     {
                         if (debugVal.Equals("pdbonly", StringComparison.OrdinalIgnoreCase)
                             || debugVal.Equals("none", StringComparison.OrdinalIgnoreCase)
-                            || debugVal.Equals("blank", StringComparison.OrdinalIgnoreCase))
+                            || debugVal.Equals("blank", StringComparison.OrdinalIgnoreCase)
+                            || debugVal.Equals("embedded", StringComparison.OrdinalIgnoreCase))
                         {
                             suffixNote = "SuffixRelOk";
                         }
@@ -253,24 +276,6 @@ internal class ScanProjectFiles
                 needsFix = true;
             }
 
-            // If there is no debug type at all, we generally want to
-            // turn this into a release/optimize test. However for the
-            // CodeGenBringUpTests we want to introduce the full spectrum
-            // of flavors. We'll skip them for now.
-            bool isBringUp = projFile.Contains("CodeGenBringUpTests");
-
-            if (needsFix)
-            {
-                if (!isBringUp)
-                {
-                    s_needsFixCount++;
-                }
-                else
-                {
-                    s_deferredFixCount++;
-                }
-            }
-
             if (needsFix || !s_showNeedsFixOnly)
             {
                 if (!hasDebugType)
@@ -291,6 +296,44 @@ internal class ScanProjectFiles
                 }
             }
 
+            if (optimizeOddness != null)
+            {
+                needsFix = true;
+            }
+
+            if (!needsFix)
+            {
+                if (isOptTypeTest)
+                {
+                    needsFix = DetermineIfOptimizeSettingNeedsFix(true, optimizeVal);
+                }
+                else if (isNotOptTypeTest)
+                {
+                    needsFix = DetermineIfOptimizeSettingNeedsFix(false, optimizeVal);
+                }
+            }
+
+            if (needsFix || !s_showNeedsFixOnly)
+            {
+                if (!hasOptimize)
+                {
+                    Console.WriteLine("{0} Optimize-n/a", projFile);
+                }
+                else if (optimizeOddness != null)
+                {
+                    Console.WriteLine("{0} Optimize-Odd-{1}", projFile, optimizeOddness);
+                }
+                else
+                {
+                    Console.WriteLine("{0} Optimize-{1}-Conflict", projFile, optimizeVal);
+                }
+            }
+
+            if (needsFix)
+            {
+                s_needsFixCount++;
+            }
+
             // If a fix is needed, give it a shot!
             if (!needsFix || !tryUpdate)
             {
@@ -307,12 +350,6 @@ internal class ScanProjectFiles
             if (bestPropertyGroupNode == null)
             {
                 Console.WriteLine(".... no prop group, can't fix");
-                return false;
-            }
-
-            if (isBringUp)
-            {
-                Console.WriteLine("Bring up test, deferring fix");
                 return false;
             }
 
@@ -437,5 +474,30 @@ internal class ScanProjectFiles
         }
 
         return updated;
+    }
+
+    /// <summary>
+    /// Determines if optimize setting needs to fix.
+    /// </summary>
+    /// <param name="isOptType">Whether a optimization is specified. This is the baseline for checking.</param>
+    /// <param name="optimizeVal">The optimize value in the project file's <Optimize /> property.</param>
+    /// <returns>True if a fix is needed. Otherwise false.</returns>
+    private static bool DetermineIfOptimizeSettingNeedsFix(bool isOptType, string optimizeVal)
+    {
+        if (isOptType && optimizeVal == null)
+        {
+            return true;
+        }
+
+        if (optimizeVal != null)
+        {
+            string expectedOptimizeValue = isOptType.ToString();
+            if (!optimizeVal.Equals(expectedOptimizeValue, StringComparison.InvariantCultureIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

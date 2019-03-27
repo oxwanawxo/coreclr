@@ -6,13 +6,21 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Security;
-#if !CORECLR && !ES_BUILD_PN
+#if ES_BUILD_STANDALONE
 using System.Security.Permissions;
-#endif // !CORECLR && !ES_BUILD_PN
+#endif
+#if CORECLR && PLATFORM_WINDOWS
+using Internal.Win32;
+#endif
 using System.Threading;
 using System;
+
+#if ES_BUILD_STANDALONE
+using BitOperations = Microsoft.Diagnostics.Tracing.Internal.BitOperations;
+#endif
 
 #if !ES_BUILD_AGAINST_DOTNET_V35
 using Contract = System.Diagnostics.Contracts.Contract;
@@ -30,12 +38,19 @@ namespace Microsoft.Diagnostics.Tracing
 namespace System.Diagnostics.Tracing
 #endif
 {
+    internal enum EventProviderType
+    {
+        None = 0,
+        ETW,
+        EventPipe
+    };
+
     // New in CLR4.0
     internal enum ControllerCommand
     {
         // Strictly Positive numbers are for provider-specific commands, negative number are for 'shared' commands. 256
-        // The first 256 negative numbers are reserved for the framework.  
-        Update = 0,                 // Not used by EventPrividerBase.  
+        // The first 256 negative numbers are reserved for the framework.
+        Update = 0, // Not used by EventProviderBase.
         SendManifest = -1,
         Enable = -2,
         Disable = -3,
@@ -45,9 +60,9 @@ namespace System.Diagnostics.Tracing
     /// Only here because System.Diagnostics.EventProvider needs one more extensibility hook (when it gets a 
     /// controller callback)
     /// </summary>
-#if !CORECLR && !ES_BUILD_PN
+#if ES_BUILD_STANDALONE
     [System.Security.Permissions.HostProtection(MayLeakOnAbort = true)]
-#endif // !CORECLR && !ES_BUILD_PN
+#endif
     internal partial class EventProvider : IDisposable
     {
         // This is the windows EVENT_DATA_DESCRIPTOR structure.  We expose it because this is what
@@ -120,15 +135,28 @@ namespace System.Diagnostics.Tracing
         // it registers a callback from native code you MUST dispose it BEFORE shutdown, otherwise
         // you may get native callbacks during shutdown when we have destroyed the delegate.  
         // EventSource has special logic to do this, no one else should be calling EventProvider.  
-        internal EventProvider()
+        internal EventProvider(EventProviderType providerType)
         {
+            switch (providerType)
+            {
+                case EventProviderType.ETW:
 #if PLATFORM_WINDOWS
-            m_eventProvider = new EtwEventProvider();
-#elif FEATURE_PERFTRACING
-            m_eventProvider = new EventPipeEventProvider();
+                    m_eventProvider = new EtwEventProvider();
 #else
-            m_eventProvider = new NoOpEventProvider();
+                    m_eventProvider = new NoOpEventProvider();
 #endif
+                    break;
+                case EventProviderType.EventPipe:
+#if FEATURE_PERFTRACING
+                    m_eventProvider = new EventPipeEventProvider();
+#else
+                    m_eventProvider = new NoOpEventProvider();
+#endif
+                    break;
+                default:
+                    m_eventProvider = new NoOpEventProvider();
+                    break;
+            };
         }
 
         /// <summary>
@@ -184,14 +212,15 @@ namespace System.Diagnostics.Tracing
             //
             // check if the object has been already disposed
             //
-            if (m_disposed) return;
+            if (m_disposed)
+                return;
 
             // Disable the provider.  
             m_enabled = false;
 
             // Do most of the work under a lock to avoid shutdown race.
 
-            long registrationHandle = 0;  
+            long registrationHandle = 0;
             lock (EventListener.EventListenersLock)
             {
                 // Double check
@@ -260,6 +289,19 @@ namespace System.Diagnostics.Tracing
                     m_allKeywordMask = allKeyword;
 
                     List<Tuple<SessionInfo, bool>> sessionsChanged = GetSessions();
+
+                    // The GetSessions() logic was here to support the idea that different ETW sessions
+                    // could have different user-defined filters.   (I believe it is currently broken but that is another matter.)
+                    // However in particular GetSessions() does not support EventPipe, only ETW, which is
+                    // the immediate problem.   We work-around establishing the invariant that we always get a
+                    // OnControllerCallback under all circumstances, even if we can't find a delta in the
+                    // ETW logic.  This fixes things for the EventPipe case.
+                    //
+                    // All this session based logic should be reviewed and likely removed, but that is a larger
+                    // change that needs more careful staging.
+                    if (sessionsChanged.Count == 0)
+                        sessionsChanged.Add(new Tuple<SessionInfo, bool>(new SessionInfo(0, 0), true));
+
                     foreach (var session in sessionsChanged)
                     {
                         int sessionChanged = session.Item1.sessionIdBit;
@@ -389,10 +431,9 @@ namespace System.Diagnostics.Tracing
             return changedSessionList;
         }
 
-
         /// <summary>
-        /// This method is the callback used by GetSessions() when it calls into GetSessionInfo(). 
-        /// It updates a List{SessionInfo} based on the etwSessionId and matchAllKeywords that 
+        /// This method is the callback used by GetSessions() when it calls into GetSessionInfo().
+        /// It updates a List{SessionInfo} based on the etwSessionId and matchAllKeywords that
         /// GetSessionInfo() passes in.
         /// </summary>
         private static void GetSessionInfoCallback(int etwSessionId, long matchAllKeywords,
@@ -401,26 +442,29 @@ namespace System.Diagnostics.Tracing
             uint sessionIdBitMask = (uint)SessionMask.FromEventKeywords(unchecked((ulong)matchAllKeywords));
             // an ETW controller that specifies more than the mandated bit for our EventSource
             // will be ignored...
-            if (bitcount(sessionIdBitMask) > 1)
+            int val = BitOperations.PopCount(sessionIdBitMask);
+            if (val > 1)
                 return;
 
             if (sessionList == null)
                 sessionList = new List<SessionInfo>(8);
 
-            if (bitcount(sessionIdBitMask) == 1)
+            if (val == 1)
             {
                 // activity-tracing-aware etw session
-                sessionList.Add(new SessionInfo(bitindex(sessionIdBitMask) + 1, etwSessionId));
+                val = BitOperations.TrailingZeroCount(sessionIdBitMask);
             }
             else
             {
                 // legacy etw session
-                sessionList.Add(new SessionInfo(bitcount((uint)SessionMask.All) + 1, etwSessionId));
+                val = BitOperations.PopCount((uint)SessionMask.All);
             }
+
+            sessionList.Add(new SessionInfo(val + 1, etwSessionId));
         }
 
         private delegate void SessionInfoCallback(int etwSessionId, long matchAllKeywords, ref List<SessionInfo> sessionList);
-        
+
         /// <summary>
         /// This method enumerates over all active ETW sessions that have enabled 'this.m_Guid' 
         /// for the current process ID, calling 'action' for each session, and passing it the
@@ -458,7 +502,7 @@ namespace System.Diagnostics.Tracing
 
             var providerInfos = (UnsafeNativeMethods.ManifestEtw.TRACE_GUID_INFO*)buffer;
             var providerInstance = (UnsafeNativeMethods.ManifestEtw.TRACE_PROVIDER_INSTANCE_INFO*)&providerInfos[1];
-            int processId = unchecked((int)Win32Native.GetCurrentProcessId());
+            int processId = unchecked((int)Interop.Kernel32.GetCurrentProcessId());
             // iterate over the instances of the EventProvider in all processes
             for (int i = 0; i < providerInfos->InstanceCount; i++)
             {
@@ -475,7 +519,7 @@ namespace System.Diagnostics.Tracing
                 var structBase = (byte*)providerInstance;
                 providerInstance = (UnsafeNativeMethods.ManifestEtw.TRACE_PROVIDER_INSTANCE_INFO*)&structBase[providerInstance->NextOffset];
             }
-#else 
+#else
 #if !ES_BUILD_PCL && PLATFORM_WINDOWS  // TODO command arguments don't work on PCL builds...
             // This code is only used in the Nuget Package Version of EventSource.  because
             // the code above is using APIs baned from UWP apps.     
@@ -487,37 +531,41 @@ namespace System.Diagnostics.Tracing
 
             // Determine our session from what is in the registry.  
             string regKey = @"\Microsoft\Windows\CurrentVersion\Winevt\Publishers\{" + m_providerName + "}";
-            if (System.Runtime.InteropServices.Marshal.SizeOf(typeof(IntPtr)) == 8)
+            if (IntPtr.Size == 8)
                 regKey = @"Software" + @"\Wow6432Node" + regKey;
             else
                 regKey = @"Software" + regKey;
 
-            var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(regKey);
-            if (key != null)
+            using (var key = Registry.LocalMachine.OpenSubKey(regKey))
             {
-                foreach (string valueName in key.GetValueNames())
+                if (key != null)
                 {
-                    if (valueName.StartsWith("ControllerData_Session_", StringComparison.Ordinal))
+                    foreach (string valueName in key.GetValueNames())
                     {
-                        string strId = valueName.Substring(23);      // strip of the ControllerData_Session_
-                        int etwSessionId;
-                        if (int.TryParse(strId, out etwSessionId))
+                        if (valueName.StartsWith("ControllerData_Session_", StringComparison.Ordinal))
                         {
-                            // we need to assert this permission for partial trust scenarios
-                            (new RegistryPermission(RegistryPermissionAccess.Read, regKey)).Assert();
-                            var data = key.GetValue(valueName) as byte[];
-                            if (data != null)
+                            string strId = valueName.Substring(23);      // strip of the ControllerData_Session_
+                            int etwSessionId;
+                            if (int.TryParse(strId, out etwSessionId))
                             {
-                                var dataAsString = System.Text.Encoding.UTF8.GetString(data);
-                                int keywordIdx = dataAsString.IndexOf("EtwSessionKeyword", StringComparison.Ordinal);
-                                if (0 <= keywordIdx)
+#if ES_BUILD_STANDALONE
+                                // we need to assert this permission for partial trust scenarios
+                                (new RegistryPermission(RegistryPermissionAccess.Read, regKey)).Assert();
+#endif
+                                var data = key.GetValue(valueName) as byte[];
+                                if (data != null)
                                 {
-                                    int startIdx = keywordIdx + 18;
-                                    int endIdx = dataAsString.IndexOf('\0', startIdx);
-                                    string keywordBitString = dataAsString.Substring(startIdx, endIdx-startIdx);
-                                    int keywordBit;
-                                    if (0 < endIdx && int.TryParse(keywordBitString, out keywordBit))
-                                        action(etwSessionId, 1L << keywordBit, ref sessionList);
+                                    var dataAsString = System.Text.Encoding.UTF8.GetString(data);
+                                    int keywordIdx = dataAsString.IndexOf("EtwSessionKeyword", StringComparison.Ordinal);
+                                    if (0 <= keywordIdx)
+                                    {
+                                        int startIdx = keywordIdx + 18;
+                                        int endIdx = dataAsString.IndexOf('\0', startIdx);
+                                        string keywordBitString = dataAsString.Substring(startIdx, endIdx-startIdx);
+                                        int keywordBit;
+                                        if (0 < endIdx && int.TryParse(keywordBitString, out keywordBit))
+                                            action(etwSessionId, 1L << keywordBit, ref sessionList);
+                                    }
                                 }
                             }
                         }
@@ -562,23 +610,26 @@ namespace System.Diagnostics.Tracing
             {
 #if (!ES_BUILD_PCL && !ES_BUILD_PN && PLATFORM_WINDOWS)
                 string regKey = @"\Microsoft\Windows\CurrentVersion\Winevt\Publishers\{" + m_providerId + "}";
-                if (System.Runtime.InteropServices.Marshal.SizeOf(typeof(IntPtr)) == 8)
-                    regKey = @"HKEY_LOCAL_MACHINE\Software" + @"\Wow6432Node" + regKey;
+                if (IntPtr.Size == 8)
+                    regKey = @"Software" + @"\Wow6432Node" + regKey;
                 else
-                    regKey = @"HKEY_LOCAL_MACHINE\Software" + regKey;
+                    regKey = @"Software" + regKey;
 
                 string valueName = "ControllerData_Session_" + etwSessionId.ToString(CultureInfo.InvariantCulture);
 
                 // we need to assert this permission for partial trust scenarios
-#if !CORECLR
+#if ES_BUILD_STANDALONE
                 (new RegistryPermission(RegistryPermissionAccess.Read, regKey)).Assert();
 #endif
-                data = Microsoft.Win32.Registry.GetValue(regKey, valueName, null) as byte[];
-                if (data != null)
+                using (var key = Registry.LocalMachine.OpenSubKey(regKey))
                 {
-                    // We only used the persisted data from the registry for updates.   
-                    command = ControllerCommand.Update;
-                    return true;
+                    data = key?.GetValue(valueName, null) as byte[];
+                    if (data != null)
+                    {
+                        // We only used the persisted data from the registry for updates.   
+                        command = ControllerCommand.Update;
+                        return true;
+                    }
                 }
 #endif
             }
@@ -761,10 +812,10 @@ namespace System.Diagnostics.Tracing
                 *uintptr = (uint)data;
                 dataDescriptor->Ptr = (ulong)uintptr;
             }
-            else if (data is UInt64)
+            else if (data is ulong)
             {
                 dataDescriptor->Size = (uint)sizeof(ulong);
-                UInt64* ulongptr = (ulong*)dataBuffer;
+                ulong* ulongptr = (ulong*)dataBuffer;
                 *ulongptr = (ulong)data;
                 dataDescriptor->Ptr = (ulong)ulongptr;
             }
@@ -863,25 +914,18 @@ namespace System.Diagnostics.Tracing
             {
                 if (data is System.Enum)
                 {
-                    Type underlyingType = Enum.GetUnderlyingType(data.GetType());
-                    if (underlyingType == typeof(int))
+                    try
                     {
-#if !ES_BUILD_PCL
-                        data = ((IConvertible)data).ToInt32(null);
-#else
-                        data = (int)data;
-#endif
+                        Type underlyingType = Enum.GetUnderlyingType(data.GetType());
+                        if (underlyingType == typeof(ulong))
+                            data = (ulong)data;
+                        else if (underlyingType == typeof(long))
+                            data = (long)data;
+                        else
+                            data = (int)Convert.ToInt64(data);  // This handles all int/uint or below (we treat them like 32 bit ints)   
                         goto Again;
                     }
-                    else if (underlyingType == typeof(long))
-                    {
-#if !ES_BUILD_PCL
-                        data = ((IConvertible)data).ToInt64(null);
-#else
-                        data = (long)data;
-#endif
-                        goto Again;
-                    }
+                    catch { }   // On wierd cases (e.g. enums of type double), give up and for compat simply tostring.  
                 }
 
                 // To our eyes, everything else is a just a string
@@ -959,7 +1003,7 @@ namespace System.Diagnostics.Tracing
                     List<object> dataRefObj = new List<object>(s_etwAPIMaxRefObjCount);
                     EventData* userData = stackalloc EventData[2 * argCount];
                     for (int i = 0; i < 2 * argCount; i++)
-                        userData[i] = default(EventData);
+                        userData[i] = default;
                     EventData* userDataPtr = (EventData*)userData;
                     byte* dataBuffer = stackalloc byte[s_basicTypeAllocationBufferSize * 2 * argCount]; // Assume 16 chars for non-string argument
                     byte* currentBuffer = dataBuffer;
@@ -1197,23 +1241,6 @@ namespace System.Diagnostics.Tracing
         {
             return m_eventProvider.EventUnregister(registrationHandle);
         }
-
-        static int[] nibblebits = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 };
-        private static int bitcount(uint n)
-        {
-            int count = 0;
-            for (; n != 0; n = n >> 4)
-                count += nibblebits[n & 0x0f];
-            return count;
-        }
-        private static int bitindex(uint n)
-        {
-            Debug.Assert(bitcount(n) == 1);
-            int idx = 0;
-            while ((n & (1 << idx)) == 0)
-                idx++;
-            return idx;
-        }
     }
 
 #if PLATFORM_WINDOWS
@@ -1270,14 +1297,13 @@ namespace System.Diagnostics.Tracing
         }
 
         // Define an EventPipeEvent handle.
-        unsafe IntPtr IEventProvider.DefineEventHandle(uint eventID, string eventName, Int64 keywords, uint eventVersion, uint level, byte *pMetadata, uint metadataLength)
+        unsafe IntPtr IEventProvider.DefineEventHandle(uint eventID, string eventName, long keywords, uint eventVersion, uint level, byte* pMetadata, uint metadataLength)
         {
             throw new System.NotSupportedException();
         }
     }
 
-#elif !FEATURE_PERFTRACING
-
+#endif
     internal sealed class NoOpEventProvider : IEventProvider
     {
         unsafe uint IEventProvider.EventRegister(
@@ -1312,12 +1338,9 @@ namespace System.Diagnostics.Tracing
         }
 
         // Define an EventPipeEvent handle.
-        unsafe IntPtr IEventProvider.DefineEventHandle(uint eventID, string eventName, Int64 keywords, uint eventVersion, uint level, byte *pMetadata, uint metadataLength)
+        unsafe IntPtr IEventProvider.DefineEventHandle(uint eventID, string eventName, long keywords, uint eventVersion, uint level, byte* pMetadata, uint metadataLength)
         {
-            throw new System.NotSupportedException();
+            return IntPtr.Zero;
         }
     }
-
-#endif
 }
-

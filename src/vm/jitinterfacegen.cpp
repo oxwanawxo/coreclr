@@ -1,17 +1,13 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
+
 // ===========================================================================
 // File: JITinterfaceGen.CPP
 //
-
+// This contains the AMD64 version of InitJITHelpers1().
+//
 // ===========================================================================
-
-// This contains generic C versions of some of the routines
-// required by JITinterface.cpp. They are modeled after
-// X86 specific routines found in JIThelp.asm or JITinterfaceX86.cpp
-// More and more we're making AMD64 and IA64 specific versions of
-// the helpers as well, JitInterfaceGen.cpp sticks around for rotor...
 
 
 #include "common.h"
@@ -84,6 +80,9 @@ void InitJITHelpers1()
         SetJitHelperFunction(CORINFO_HELP_NEWARR_1_OBJ, JIT_NewArr1OBJ_MP_FastPortable);
 
         ECall::DynamicallyAssignFCallImpl(GetEEFuncEntryPoint(AllocateString_MP_FastPortable), ECall::FastAllocateString);
+#ifdef FEATURE_UTF8STRING
+        ECall::DynamicallyAssignFCallImpl(GetEEFuncEntryPoint(AllocateUtf8String_MP_FastPortable), ECall::FastAllocateUtf8String);
+#endif // FEATURE_UTF8STRING
 #else // FEATURE_PAL
         // if (multi-proc || server GC)
         if (GCHeapUtilities::UseThreadAllocationContexts())
@@ -95,6 +94,9 @@ void InitJITHelpers1()
             SetJitHelperFunction(CORINFO_HELP_NEWARR_1_OBJ, JIT_NewArr1OBJ_MP_InlineGetThread);
 
             ECall::DynamicallyAssignFCallImpl(GetEEFuncEntryPoint(AllocateStringFastMP_InlineGetThread), ECall::FastAllocateString);
+#ifdef FEATURE_UTF8STRING
+            ECall::DynamicallyAssignFCallImpl(GetEEFuncEntryPoint(AllocateUtf8String_MP_FastPortable), ECall::FastAllocateUtf8String);
+#endif // FEATURE_UTF8STRING
         }
         else
         {
@@ -109,6 +111,9 @@ void InitJITHelpers1()
             SetJitHelperFunction(CORINFO_HELP_NEWARR_1_OBJ, JIT_NewArr1OBJ_UP);
 
             ECall::DynamicallyAssignFCallImpl(GetEEFuncEntryPoint(AllocateStringFastUP), ECall::FastAllocateString);
+#ifdef FEATURE_UTF8STRING
+            ECall::DynamicallyAssignFCallImpl(GetEEFuncEntryPoint(AllocateUtf8String_MP_FastPortable), ECall::FastAllocateUtf8String);
+#endif // FEATURE_UTF8STRING
         }
 #endif // FEATURE_PAL
     }

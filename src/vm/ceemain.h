@@ -69,10 +69,6 @@ public:
     // Delete on TLS block
     static void DeleteTLS(void **pTlsData);
 
-    // Fiber switch notifications
-    static void SwitchIn();
-    static void SwitchOut();
-
     static void **CheckThreadState(DWORD slot, BOOL force = TRUE);
     static void **CheckThreadStateNoCreate(DWORD slot
 #ifdef _DEBUG
@@ -184,10 +180,6 @@ private:
     HANDLE STDMETHODCALLTYPE ClrGetProcessExecutableHeap();
     
 };
-
-#ifdef _DEBUG
-extern void DisableGlobalAllocStore ();
-#endif //_DEBUG 
 
 void SetLatchedExitCode (INT32 code);
 INT32 GetLatchedExitCode (void);

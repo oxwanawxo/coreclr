@@ -2,7 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-// 
+//
 
 using System;
 using System.Diagnostics.SymbolStore;
@@ -255,7 +255,7 @@ namespace System.Reflection.Emit
                 if (m_fixupData[i].m_fixupInstSize == 1)
                 {
                     //Verify that our one-byte arg will fit into a Signed Byte.
-                    if (updateAddr < SByte.MinValue || updateAddr > SByte.MaxValue)
+                    if (updateAddr < sbyte.MinValue || updateAddr > sbyte.MaxValue)
                     {
                         throw new NotSupportedException(SR.Format(SR.NotSupported_IllegalOneByteBranch, m_fixupData[i].m_fixupPos, updateAddr));
                     }
@@ -815,7 +815,7 @@ namespace System.Reflection.Emit
             PutInteger4(tempVal);
         }
 
-        public virtual void Emit(OpCode opcode, String str)
+        public virtual void Emit(OpCode opcode, string str)
         {
             // Puts the opcode onto the IL stream followed by the metadata token
             // represented by str.  The location of str is recorded for future
@@ -905,7 +905,7 @@ namespace System.Reflection.Emit
             else
             {
                 //Handle stloc_1, ldloc_1
-                if (tempVal > Byte.MaxValue)
+                if (tempVal > byte.MaxValue)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_BadInstructionOrIndexOutOfBound);
                 }
@@ -991,7 +991,7 @@ namespace System.Reflection.Emit
                 this.Emit(OpCodes.Endfinally);
             }
 
-            //Check if we've alredy set this label.
+            //Check if we've already set this label.
             //The only reason why we might have set this is if we have a finally block.
             if (m_labelList[endLabel.GetLabelValue()] == -1)
             {
@@ -1092,7 +1092,7 @@ namespace System.Reflection.Emit
             Label finallyEndLabel = this.DefineLabel();
             current.SetFinallyEndLabel(finallyEndLabel);
 
-            // generate leave for try clause                                                  
+            // generate leave for try clause
             this.Emit(OpCodes.Leave, finallyEndLabel);
             if (catchEndAddr == 0)
                 catchEndAddr = m_length;
@@ -1173,13 +1173,13 @@ namespace System.Reflection.Emit
             return Type.GetType("System.Console, System.Console", throwOnError: true);
         }
 
-        public virtual void EmitWriteLine(String value)
+        public virtual void EmitWriteLine(string value)
         {
             // Emits the IL to call Console.WriteLine with a string.
 
             Emit(OpCodes.Ldstr, value);
             Type[] parameterTypes = new Type[1];
-            parameterTypes[0] = typeof(String);
+            parameterTypes[0] = typeof(string);
             MethodInfo mi = GetConsoleType().GetMethod("WriteLine", parameterTypes);
             Emit(OpCodes.Call, mi);
         }
@@ -1191,7 +1191,7 @@ namespace System.Reflection.Emit
             // one of the types for which Console.WriteLine implements overloads. (e.g.
             // we do *not* call ToString on the locals.
 
-            Object cls;
+            object cls;
             if (m_methodBuilder == null)
             {
                 throw new ArgumentException(SR.InvalidOperation_BadILGeneratorUsage);
@@ -1223,7 +1223,7 @@ namespace System.Reflection.Emit
             // one of the types for which Console.WriteLine implements overloads. (e.g.
             // we do *not* call ToString on the fields.
 
-            Object cls;
+            object cls;
 
             if (fld == null)
             {
@@ -1300,7 +1300,7 @@ namespace System.Reflection.Emit
             return localBuilder;
         }
 
-        public virtual void UsingNamespace(String usingNamespace)
+        public virtual void UsingNamespace(string usingNamespace)
         {
             // Specifying the namespace to be used in evaluating locals and watches
             // for the current active lexical scope.
@@ -1576,7 +1576,7 @@ namespace System.Reflection.Emit
         // WARNING: This is not a generic function to determine the innerness
         // of an exception.  This is somewhat of a mis-nomer.  This gives a
         // random result for cases where the two exceptions being compared do
-        // not having a nesting relation. 
+        // not having a nesting relation.
         internal bool IsInner(__ExceptionInfo exc)
         {
             Debug.Assert(exc != null);
@@ -1610,14 +1610,12 @@ namespace System.Reflection.Emit
     }
 
 
-    /***************************
-    *
-    * Scope Tree is a class that track the scope structure within a method body
-    * It keeps track two parallel array. m_ScopeAction keeps track the action. It can be
-    * OpenScope or CloseScope. m_iOffset records the offset where the action
-    * takes place.
-    *
-    ***************************/
+    /// <summary>
+    /// Scope Tree is a class that track the scope structure within a method body
+    /// It keeps track two parallel array. m_ScopeAction keeps track the action. It can be
+    /// OpenScope or CloseScope. m_iOffset records the offset where the action
+    /// takes place.
+    /// </summary>
     internal enum ScopeAction
     {
         Open = 0x0,
@@ -1633,13 +1631,11 @@ namespace System.Reflection.Emit
             m_iCount = 0;
         }
 
-        /***************************
-        *
-        * Find the current active lexical scope. For example, if we have
-        * "Open Open Open Close",
-        * we will return 1 as the second BeginScope is currently active.
-        *
-        ***************************/
+        /// <summary>
+        /// Find the current active lexical scope. For example, if we have
+        /// "Open Open Open Close",
+        /// we will return 1 as the second BeginScope is currently active.
+        /// </summary>
         internal int GetCurrentActiveScopeIndex()
         {
             int cClose = 0;
@@ -1663,7 +1659,7 @@ namespace System.Reflection.Emit
         }
 
         internal void AddLocalSymInfoToCurrentScope(
-            String strName,
+            string strName,
             byte[] signature,
             int slot,
             int startOffset,
@@ -1678,7 +1674,7 @@ namespace System.Reflection.Emit
         }
 
         internal void AddUsingNamespaceToCurrentScope(
-            String strNamespace)
+            string strNamespace)
         {
             int i = GetCurrentActiveScopeIndex();
             if (m_localSymInfos[i] == null)
@@ -1711,11 +1707,9 @@ namespace System.Reflection.Emit
                 m_iOpenScopeCount--;
         }
 
-        /**************************
-        *
-        * Helper to ensure arrays are large enough
-        *
-        **************************/
+        /// <summary>
+        /// Helper to ensure arrays are large enough
+        /// </summary>
         internal void EnsureCapacity()
         {
             if (m_iCount == 0)
@@ -1773,11 +1767,9 @@ namespace System.Reflection.Emit
     }
 
 
-    /***************************
-    *
-    * This class tracks the line number info
-    *
-    ***************************/
+    /// <summary>
+    /// This class tracks the line number info
+    /// </summary>
     internal sealed class LineNumberInfo
     {
         internal LineNumberInfo()
@@ -1824,7 +1816,7 @@ namespace System.Reflection.Emit
                 }
             }
 
-            // cannot find an existing document so add one to the array                                       
+            // cannot find an existing document so add one to the array
             EnsureCapacity();
             m_iLastFound = m_DocumentCount;
             m_Documents[m_iLastFound] = new REDocument(document);
@@ -1832,11 +1824,9 @@ namespace System.Reflection.Emit
             return m_iLastFound;
         }
 
-        /**************************
-        *
-        * Helper to ensure arrays are large enough
-        *
-        **************************/
+        /// <summary>
+        /// Helper to ensure arrays are large enough
+        /// </summary>
         private void EnsureCapacity()
         {
             if (m_DocumentCount == 0)
@@ -1866,11 +1856,9 @@ namespace System.Reflection.Emit
     }
 
 
-    /***************************
-    *
-    * This class tracks the line number info
-    *
-    ***************************/
+    /// <summary>
+    /// This class tracks the line number info
+    /// </summary>
     internal sealed class REDocument
     {
         internal REDocument(ISymbolDocumentWriter document)
@@ -1901,11 +1889,9 @@ namespace System.Reflection.Emit
             checked { m_iLineNumberCount++; }
         }
 
-        /**************************
-        *
-        * Helper to ensure arrays are large enough
-        *
-        **************************/
+        /// <summary>
+        /// Helper to ensure arrays are large enough
+        /// </summary>
         private void EnsureCapacity()
         {
             if (m_iLineNumberCount == 0)

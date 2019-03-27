@@ -5,12 +5,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <locale.h>
-#include <xplatform.h>
+#include <platformdefines.h>
 
 #pragma warning( push )
 #pragma warning( disable : 4996)
 
-extern "C" DLL_EXPORT int _cdecl Sum(int a, int b)
+extern "C" DLL_EXPORT int __cdecl Sum(int a, int b)
 {
     return a + b;
 }

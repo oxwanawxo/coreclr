@@ -39,7 +39,7 @@ BBSweep              g_BBSweep;
 Volatile<LONG>       g_trtChgStamp = 0;
 Volatile<LONG>       g_trtChgInFlight = 0;
 
-char *               g_ExceptionFile;   // Source of the last thrown exception (COMPLUSThrow())
+const char *         g_ExceptionFile;   // Source of the last thrown exception (COMPLUSThrow())
 DWORD                g_ExceptionLine;   // ... ditto ...
 void *               g_ExceptionEIP;    // Managed EIP of the last guy to call JITThrow.
 #endif // _DEBUG
@@ -61,6 +61,9 @@ GPTR_IMPL(MethodTable,      g_pObjectClass);
 GPTR_IMPL(MethodTable,      g_pRuntimeTypeClass);
 GPTR_IMPL(MethodTable,      g_pCanonMethodTableClass);  // System.__Canon
 GPTR_IMPL(MethodTable,      g_pStringClass);
+#ifdef FEATURE_UTF8STRING
+GPTR_IMPL(MethodTable,      g_pUtf8StringClass);
+#endif // FEATURE_UTF8STRING
 GPTR_IMPL(MethodTable,      g_pArrayClass);
 GPTR_IMPL(MethodTable,      g_pSZArrayHelperClass);
 GPTR_IMPL(MethodTable,      g_pNullableClass);
@@ -149,11 +152,6 @@ ETW::CEtwTracer * g_pEtwTracer = NULL;
 
 #endif // #ifndef DACCESS_COMPILE
 
-#ifdef FEATURE_IPCMAN
-// support for IPCManager 
-GPTR_IMPL(IPCWriterInterface, g_pIPCManagerInterface);
-#endif // FEATURE_IPCMAN
-
 //
 // Support for the COM+ Debugger.
 //
@@ -234,11 +232,6 @@ bool dbg_fDrasticShutdown = false;
 bool g_fInControlC = false;
 
 //
-// Cached command line file provided by the host.
-//
-LPWSTR g_pCachedCommandLine = NULL;
-LPWSTR g_pCachedModuleFileName = 0;
-
 //
 // IJW needs the shim HINSTANCE
 //

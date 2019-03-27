@@ -21,12 +21,6 @@
 #include "ssabuilder.h"
 #include "treelifeupdater.h"
 
-template <typename T>
-inline static T* allocate_any(jitstd::allocator<void>& alloc, size_t count = 1)
-{
-    return jitstd::allocator<T>(alloc).allocate(count);
-}
-
 /**************************************************************************************
  *
  * Corresponding to the live definition pushes, pop the stack as we finish a sub-paths
@@ -44,7 +38,7 @@ void Compiler::optBlockCopyPropPopStacks(BasicBlock* block, LclNumToGenTreePtrSt
                 continue;
             }
             unsigned lclNum = tree->gtLclVarCommon.gtLclNum;
-            if (fgExcludeFromSsa(lclNum))
+            if (!lvaInSsa(lclNum))
             {
                 continue;
             }
@@ -53,7 +47,7 @@ void Compiler::optBlockCopyPropPopStacks(BasicBlock* block, LclNumToGenTreePtrSt
                 GenTreePtrStack* stack = nullptr;
                 curSsaName->Lookup(lclNum, &stack);
                 stack->Pop();
-                if (stack->Height() == 0)
+                if (stack->Empty())
                 {
                     curSsaName->Remove(lclNum);
                 }
@@ -159,8 +153,8 @@ void Compiler::optCopyProp(BasicBlock* block, GenTree* stmt, GenTree* tree, LclN
     }
     unsigned lclNum = tree->AsLclVarCommon()->GetLclNum();
 
-    // Skip address exposed variables.
-    if (fgExcludeFromSsa(lclNum))
+    // Skip non-SSA variables.
+    if (!lvaInSsa(lclNum))
     {
         return;
     }
@@ -272,8 +266,6 @@ void Compiler::optCopyProp(BasicBlock* block, GenTree* stmt, GenTree* tree, LclN
         }
 #endif
 
-        lvaTable[lclNum].decRefCnts(block->getBBWeight(this), this);
-        lvaTable[newLclNum].incRefCnts(block->getBBWeight(this), this);
         tree->gtLclVarCommon.SetLclNum(newLclNum);
         tree->AsLclVarCommon()->SetSsaNum(newSsaNum);
         gtUpdateSideEffects(stmt, tree);
@@ -295,7 +287,7 @@ void Compiler::optCopyProp(BasicBlock* block, GenTree* stmt, GenTree* tree, LclN
  */
 bool Compiler::optIsSsaLocal(GenTree* tree)
 {
-    return tree->IsLocal() && !fgExcludeFromSsa(tree->AsLclVarCommon()->GetLclNum());
+    return tree->IsLocal() && lvaInSsa(tree->AsLclVarCommon()->GetLclNum());
 }
 
 //------------------------------------------------------------------------------
@@ -310,7 +302,7 @@ bool Compiler::optIsSsaLocal(GenTree* tree)
 void Compiler::optBlockCopyProp(BasicBlock* block, LclNumToGenTreePtrStack* curSsaName)
 {
 #ifdef DEBUG
-    JITDUMP("Copy Assertion for BB%02u\n", block->bbNum);
+    JITDUMP("Copy Assertion for " FMT_BB "\n", block->bbNum);
     if (verbose)
     {
         printf("  curSsaName stack: ");
@@ -370,10 +362,10 @@ void Compiler::optBlockCopyProp(BasicBlock* block, LclNumToGenTreePtrStack* curS
                 GenTreePtrStack* stack;
                 if (!curSsaName->Lookup(lclNum, &stack))
                 {
-                    stack = new (curSsaName->GetAllocator()) GenTreePtrStack(this);
+                    stack = new (curSsaName->GetAllocator()) GenTreePtrStack(curSsaName->GetAllocator());
                 }
                 stack->Push(tree);
-                curSsaName->Set(lclNum, stack);
+                curSsaName->Set(lclNum, stack, LclNumToGenTreePtrStack::Overwrite);
             }
             // If we encounter first use of a param or this pointer add it as a live definition.
             // Since they are always live, do it only once.
@@ -383,7 +375,7 @@ void Compiler::optBlockCopyProp(BasicBlock* block, LclNumToGenTreePtrStack* curS
                 GenTreePtrStack* stack;
                 if (!curSsaName->Lookup(lclNum, &stack))
                 {
-                    stack = new (curSsaName->GetAllocator()) GenTreePtrStack(this);
+                    stack = new (curSsaName->GetAllocator()) GenTreePtrStack(curSsaName->GetAllocator());
                     stack->Push(tree);
                     curSsaName->Set(lclNum, stack);
                 }
@@ -431,10 +423,10 @@ void Compiler::optVnCopyProp()
         return;
     }
 
-    CompAllocator allocator(this, CMK_CopyProp);
+    CompAllocator allocator(getAllocator(CMK_CopyProp));
 
     // Compute the domTree to use.
-    BlkToBlkVectorMap* domTree = new (&allocator) BlkToBlkVectorMap(&allocator);
+    BlkToBlkVectorMap* domTree = new (allocator) BlkToBlkVectorMap(allocator);
     domTree->Reallocate(fgBBcount * 3 / 2); // Prime the allocation
     SsaBuilder::ComputeDominators(this, domTree);
 
@@ -453,9 +445,9 @@ void Compiler::optVnCopyProp()
     VarSetOps::AssignNoCopy(this, optCopyPropKillSet, VarSetOps::MakeEmpty(this));
 
     // The map from lclNum to its recently live definitions as a stack.
-    LclNumToGenTreePtrStack curSsaName(&allocator);
+    LclNumToGenTreePtrStack curSsaName(allocator);
 
-    BlockWorkStack* worklist = new (&allocator) BlockWorkStack(&allocator);
+    BlockWorkStack* worklist = new (allocator) BlockWorkStack(allocator);
 
     worklist->push_back(BlockWork(fgFirstBB));
     while (!worklist->empty())

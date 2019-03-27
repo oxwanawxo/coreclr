@@ -371,6 +371,12 @@ void Compiler::unwindPushMaskInt(regMaskTP maskInt)
 #if defined(_TARGET_UNIX_)
     if (generateCFIUnwindCodes())
     {
+        // If we are pushing LR, we should give unwind codes in terms of caller's PC
+        if (maskInt & RBM_LR)
+        {
+            maskInt = (maskInt & ~RBM_LR) | RBM_PC;
+        }
+        unwindPushPopMaskCFI(maskInt, false);
         return;
     }
 #endif // _TARGET_UNIX_
@@ -387,6 +393,7 @@ void Compiler::unwindPushMaskFloat(regMaskTP maskFloat)
 #if defined(_TARGET_UNIX_)
     if (generateCFIUnwindCodes())
     {
+        unwindPushPopMaskCFI(maskFloat, true);
         return;
     }
 #endif // _TARGET_UNIX_
@@ -399,7 +406,6 @@ void Compiler::unwindPopMaskInt(regMaskTP maskInt)
 #if defined(_TARGET_UNIX_)
     if (generateCFIUnwindCodes())
     {
-        unwindPushPopMaskCFI(maskInt, false);
         return;
     }
 #endif // _TARGET_UNIX_
@@ -428,7 +434,6 @@ void Compiler::unwindPopMaskFloat(regMaskTP maskFloat)
 #if defined(_TARGET_UNIX_)
     if (generateCFIUnwindCodes())
     {
-        unwindPushPopMaskCFI(maskFloat, true);
         return;
     }
 #endif // _TARGET_UNIX_
@@ -443,7 +448,7 @@ void Compiler::unwindAllocStack(unsigned size)
 #if defined(_TARGET_UNIX_)
     if (generateCFIUnwindCodes())
     {
-        if (compGeneratingEpilog)
+        if (compGeneratingProlog)
         {
             unwindAllocStackCFI(size);
         }
@@ -497,7 +502,7 @@ void Compiler::unwindSetFrameReg(regNumber reg, unsigned offset)
 #if defined(_TARGET_UNIX_)
     if (generateCFIUnwindCodes())
     {
-        if (compGeneratingEpilog)
+        if (compGeneratingProlog)
         {
             unwindSetFrameRegCFI(reg, offset);
         }
@@ -1775,7 +1780,7 @@ void UnwindInfo::InitUnwindInfo(Compiler* comp, emitLocation* startLoc, emitLoca
     // However, its constructor needs to be explicitly called, since the constructor for
     // UnwindInfo is not called.
 
-    uwiFragmentFirst.UnwindFragmentInfo::UnwindFragmentInfo(comp, startLoc, false);
+    new (&uwiFragmentFirst, jitstd::placement_t()) UnwindFragmentInfo(comp, startLoc, false);
 
     uwiFragmentLast = &uwiFragmentFirst;
 
@@ -2164,7 +2169,7 @@ DWORD DumpRegSetRange(const char* const rtype, DWORD start, DWORD end, DWORD lr)
 {
     assert(start <= end);
     DWORD printed  = 0;
-    DWORD rtypeLen = strlen(rtype);
+    DWORD rtypeLen = (DWORD)strlen(rtype);
 
     printf("{");
     ++printed;

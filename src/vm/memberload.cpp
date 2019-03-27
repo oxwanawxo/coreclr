@@ -37,7 +37,6 @@
 #include "dllimportcallback.h"
 #include "listlock.h"
 #include "methodimpl.h"
-#include "stackprobe.h"
 #include "encee.h"
 #include "comsynchronizable.h"
 #include "customattribute.h"
@@ -1076,7 +1075,6 @@ MemberLoader::FindMethod(
         THROWS;
         GC_TRIGGERS;
         INJECT_FAULT(COMPlusThrowOM(););
-        PRECONDITION(!pMT->IsTransparentProxy());
         MODE_ANY;
     } CONTRACT_END;
 
@@ -1181,7 +1179,7 @@ MemberLoader::FindMethodForInterfaceSlot(MethodTable * pMT, MethodTable *pInterf
 
     MethodDesc *pMDRet = NULL;
 
-    DispatchSlot ds(pMT->FindDispatchSlot(pInterface->GetTypeID(), (UINT32)slotNum));
+    DispatchSlot ds(pMT->FindDispatchSlot(pInterface->GetTypeID(), (UINT32)slotNum, FALSE /* throwOnConflict */));
     if (!ds.IsNull()) {
         pMDRet = ds.GetMethodDesc();
     }
@@ -1198,7 +1196,6 @@ MemberLoader::FindMethod(MethodTable * pMT, LPCUTF8 pwzName, LPHARDCODEDMETASIG 
         THROWS;
         GC_TRIGGERS;
         INJECT_FAULT(COMPlusThrowOM(););
-        PRECONDITION(!pMT->IsTransparentProxy());
         MODE_ANY;
     } CONTRACTL_END;
 
@@ -1215,7 +1212,6 @@ MemberLoader::FindMethod(MethodTable * pMT, mdMethodDef mb)
         THROWS;
         GC_TRIGGERS;
         INJECT_FAULT(COMPlusThrowOM(););
-        PRECONDITION(!pMT->IsTransparentProxy());
         MODE_ANY;
     } CONTRACTL_END;
 
@@ -1243,7 +1239,6 @@ MemberLoader::FindMethodByName(MethodTable * pMT, LPCUTF8 pszName, FM_Flags flag
         THROWS;
         GC_TRIGGERS;
         INJECT_FAULT(COMPlusThrowOM(););
-        PRECONDITION(!pMT->IsTransparentProxy());
         PRECONDITION(!pMT->IsArray());
         MODE_ANY;
     } CONTRACTL_END;
@@ -1479,18 +1474,7 @@ MemberLoader::FindField(MethodTable * pMT, LPCUTF8 pszName, PCCOR_SIGNATURE pSig
     
     // Retrieve the right comparition function to use.
     UTF8StringCompareFuncPtr StrCompFunc = bCaseSensitive ? strcmp : stricmpUTF8;
-    
-    // The following assert is very important, but we need to special case it enough
-    // to allow us access to the legitimate fields of a context proxy object.
-    CONSISTENCY_CHECK(!pMT->IsTransparentProxy() ||
-             !strcmp(pszName, "actualObject") ||
-             !strcmp(pszName, "contextID") ||
-             !strcmp(pszName, "_rp") ||
-             !strcmp(pszName, "_stubData") ||
-             !strcmp(pszName, "_pMT") ||
-             !strcmp(pszName, "_pInterfaceMT") ||
-             !strcmp(pszName, "_stub"));
-    
+
     // Array classes don't have fields, and don't have metadata
     if (pMT->IsArray())
         return NULL;

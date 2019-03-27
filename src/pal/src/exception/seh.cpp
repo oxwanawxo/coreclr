@@ -58,7 +58,7 @@ PHARDWARE_EXCEPTION_SAFETY_CHECK_FUNCTION g_safeExceptionCheckFunction = NULL;
 
 PGET_GCMARKER_EXCEPTION_CODE g_getGcMarkerExceptionCode = NULL;
 
-// Return address of the SEHProcessException, which is used to enable walking over 
+// Return address of the SEHProcessException, which is used to enable walking over
 // the signal handler trampoline on some Unixes where the libunwind cannot do that.
 void* g_SEHProcessExceptionReturnAddress = NULL;
 
@@ -78,10 +78,10 @@ Return value :
     TRUE  if SEH support initialization succeeded
     FALSE otherwise
 --*/
-BOOL 
+BOOL
 SEHInitialize (CPalThread *pthrCurrent, DWORD flags)
 {
-    if (!SEHInitializeSignals(flags))
+    if (!SEHInitializeSignals(pthrCurrent, flags))
     {
         ERROR("SEHInitializeSignals failed!\n");
         SEHCleanup();
@@ -101,9 +101,9 @@ Parameters :
     None
 
     (no return value)
-    
+
 --*/
-VOID 
+VOID
 SEHCleanup()
 {
     TRACE("Cleaning up SEH\n");
@@ -127,7 +127,7 @@ Return value:
     None
 --*/
 VOID
-PALAPI 
+PALAPI
 PAL_SetHardwareExceptionHandler(
     IN PHARDWARE_EXCEPTION_HANDLER exceptionHandler,
     IN PHARDWARE_EXCEPTION_SAFETY_CHECK_FUNCTION exceptionCheckFunction)
@@ -149,7 +149,7 @@ Return value:
     None
 --*/
 VOID
-PALAPI 
+PALAPI
 PAL_SetGetGcMarkerExceptionCode(
     IN PGET_GCMARKER_EXCEPTION_CODE getGcMarkerExceptionCode)
 {
@@ -172,7 +172,7 @@ Parameters:
     PAL_SEHException* ex - the exception to throw.
 --*/
 VOID
-PALAPI 
+PALAPI
 PAL_ThrowExceptionFromContext(CONTEXT* context, PAL_SEHException* ex)
 {
     // We need to make a copy of the exception off stack, since the "ex" is located in one of the stack
@@ -244,7 +244,7 @@ Parameters:
     PAL_SEHException* exception
 
 Return value:
-    Returns TRUE if the exception happened in managed code and the execution should 
+    Returns TRUE if the exception happened in managed code and the execution should
     continue (with possibly modified context).
     Returns FALSE if the exception happened in managed code and it was not handled.
     In case the exception was handled by calling a catch handler, it doesn't return at all.
@@ -364,16 +364,22 @@ PAL_ERROR SEHDisable(CPalThread *pthrCurrent)
 
 --*/
 
-CatchHardwareExceptionHolder::CatchHardwareExceptionHolder()
+extern "C"
+void
+PALAPI
+PAL_CatchHardwareExceptionHolderEnter()
 {
     CPalThread *pThread = InternalGetCurrentThread();
-    ++pThread->m_hardwareExceptionHolderCount;
+    pThread->IncrementHardwareExceptionHolderCount();
 }
 
-CatchHardwareExceptionHolder::~CatchHardwareExceptionHolder()
+extern "C"
+void
+PALAPI
+PAL_CatchHardwareExceptionHolderExit()
 {
     CPalThread *pThread = InternalGetCurrentThread();
-    --pThread->m_hardwareExceptionHolderCount;
+    pThread->DecrementHardwareExceptionHolderCount();
 }
 
 bool CatchHardwareExceptionHolder::IsEnabled()
@@ -388,48 +394,29 @@ bool CatchHardwareExceptionHolder::IsEnabled()
 
 --*/
 
-#ifdef __llvm__
-__thread 
-#else // __llvm__
-__declspec(thread)
-#endif // !__llvm__
-static NativeExceptionHolderBase *t_nativeExceptionHolderHead = nullptr;
+#if defined(__GNUC__)
+static __thread
+#else // __GNUC__
+__declspec(thread) static
+#endif // !__GNUC__
+NativeExceptionHolderBase *t_nativeExceptionHolderHead = nullptr;
 
-NativeExceptionHolderBase::NativeExceptionHolderBase()
+extern "C"
+NativeExceptionHolderBase **
+PAL_GetNativeExceptionHolderHead()
 {
-    m_head = nullptr;
-    m_next = nullptr;
-}
-
-NativeExceptionHolderBase::~NativeExceptionHolderBase()
-{
-    // Only destroy if Push was called
-    if (m_head != nullptr)
-    {
-        *m_head = m_next;
-        m_head = nullptr;
-        m_next = nullptr;
-    }
-}
-
-void 
-NativeExceptionHolderBase::Push()
-{
-    NativeExceptionHolderBase **head = &t_nativeExceptionHolderHead;
-    m_head = head;
-    m_next = *head;
-    *head = this;
+    return &t_nativeExceptionHolderHead;
 }
 
 NativeExceptionHolderBase *
-NativeExceptionHolderBase::FindNextHolder(NativeExceptionHolderBase *currentHolder, void *stackLowAddress, void *stackHighAddress)
+NativeExceptionHolderBase::FindNextHolder(NativeExceptionHolderBase *currentHolder, PVOID stackLowAddress, PVOID stackHighAddress)
 {
     NativeExceptionHolderBase *holder = (currentHolder == nullptr) ? t_nativeExceptionHolderHead : currentHolder->m_next;
 
     while (holder != nullptr)
     {
         if (((void *)holder >= stackLowAddress) && ((void *)holder < stackHighAddress))
-        { 
+        {
             return holder;
         }
         // Get next holder

@@ -11,6 +11,7 @@
 
 // ======================================================================================
 
+
 #include "common.h"
 
 #ifdef FEATURE_PROFAPI_ATTACH_DETACH 
@@ -38,48 +39,6 @@ ProfilingAPIAttachDetach::AttachThreadingMode ProfilingAPIAttachDetach::s_attach
     ProfilingAPIAttachDetach::kUninitialized;
 BOOL ProfilingAPIAttachDetach::s_fInitializeCalled = FALSE;
 
-// Both the trigger (via code:ProfilingAPIAttachClient) and the target profilee (via
-// code:ProfilingAPIAttachServer) use this constant to identify their own version.
-const VersionBlock ProfilingAPIAttachDetach::kCurrentProcessVersion(
-    CLR_MAJOR_VERSION,
-    CLR_MINOR_VERSION,
-    CLR_BUILD_VERSION,
-    CLR_BUILD_VERSION_QFE);
-
-// Note that the following two VersionBlocks are initialized with static numerals rather
-// than using the VER_* preproc defines, as we don't want these VersionBlocks to change
-// on us from version to version unless we explicitly make a choice to begin breaking
-// compatibility between triggers and profilees (and hopefully we won't need to do this
-// ever!).
-
-// A profilee compiled into this mscorwks.dll states that it can only interoperate with
-// triggers (i.e., AttachProfiler() implementations (pipe clients)) whose runtime version
-// is >= this constant.
-// 
-// This value should not change as new runtimes are released unless
-// code:ProfilingAPIAttachServer is modified to accept newer requests or send newer
-// response messages in a way incompatible with older code:ProfilingAPIAttachClient
-// objects implementing AttachProfiler(). And that is generally discouraged anyway.
-const VersionBlock ProfilingAPIAttachDetach::kMinimumAllowableTriggerVersion(
-    4,
-    0,
-    0,
-    0);
-
-// An AttachProfiler() implementation compiled into this mscorwks.dll, and called within
-// a trigger process, can only interoperate with target profilee apps (pipe servers)
-// whose runtime version is >= this constant.
-// 
-// This value should not change as new runtimes are released unless
-// code:ProfilingAPIAttachClient is modified to send newer request or interpret newer
-// response messages in a way incompatible with older code:ProfilingAPIAttachServer
-// objects implementing the pipe server. And that is generally discouraged anyway.
-const VersionBlock ProfilingAPIAttachDetach::kMinimumAllowableProfileeVersion(
-    4,
-    0,
-    0,
-    0);
-
 
 // ----------------------------------------------------------------------------
 // ProfilingAPIAttachDetach::OverlappedResultHolder implementation.  See 
@@ -103,7 +62,6 @@ HRESULT ProfilingAPIAttachDetach::OverlappedResultHolder::Initialize()
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_INTOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -730,7 +688,6 @@ HRESULT ProfilingAPIAttachDetach::Initialize()
 // Description: 
 //    Debug-only function that asserts if there appear to be changes to structures that
 //    are not allowed to change (for backward-compatibility reasons).  In particular:
-//         * VersionBlock must not change
 //         * BaseRequestMessage must not change
 //
 
@@ -738,14 +695,6 @@ HRESULT ProfilingAPIAttachDetach::Initialize()
 void ProfilingAPIAttachDetach::VerifyMessageStructureLayout()
 {
     LIMITED_METHOD_CONTRACT;
-
-    // If any of these asserts fire, then VersionBlock is changing its binary
-    // layout in an incompatible way. Bad!
-    _ASSERTE(sizeof(VersionBlock) == 16);
-    _ASSERTE(offsetof(VersionBlock, m_dwMajor) == 0);
-    _ASSERTE(offsetof(VersionBlock, m_dwMinor) == 4);
-    _ASSERTE(offsetof(VersionBlock, m_dwBuild) == 8);
-    _ASSERTE(offsetof(VersionBlock, m_dwQFE) == 12);
 
     // If any of these asserts fire, then GetVersionRequestMessage is changing its binary
     // layout in an incompatible way. Bad!
@@ -755,10 +704,10 @@ void ProfilingAPIAttachDetach::VerifyMessageStructureLayout()
 
     // If any of these asserts fire, then GetVersionResponseMessage is changing its binary
     // layout in an incompatible way. Bad!
-    _ASSERTE(sizeof(GetVersionResponseMessage) == 36);
+    _ASSERTE(sizeof(GetVersionResponseMessage) == 12);
     _ASSERTE(offsetof(GetVersionResponseMessage, m_hr) == 0);
     _ASSERTE(offsetof(GetVersionResponseMessage, m_profileeVersion) == 4);
-    _ASSERTE(offsetof(GetVersionResponseMessage, m_minimumAllowableTriggerVersion) == 20);
+    _ASSERTE(offsetof(GetVersionResponseMessage, m_minimumAllowableTriggerVersion) == 8);
 }
 
 #endif //_DEBUG
@@ -1192,55 +1141,6 @@ void ProfilingAPIAttachDetach::CreateAttachThread()
 }
 
 // ----------------------------------------------------------------------------
-// CLRProfilingClassFactoryImpl::CreateInstance
-// 
-// Description:
-//    A standard IClassFactory interface function to allow a profiling trigger 
-//    to query for IID_ICLRProfiling interface
-// 
-HRESULT CLRProfilingClassFactoryImpl::CreateInstance(IUnknown * pUnkOuter, REFIID riid, void ** ppv)
-{
-    CONTRACTL
-    {
-        NOTHROW;
-        GC_NOTRIGGER;
-        MODE_PREEMPTIVE;
-        SO_NOT_MAINLINE;
-    }
-    CONTRACTL_END;
-
-    if (ppv == NULL)
-        return E_POINTER;
-
-    *ppv = NULL;
-
-    NewHolder<CLRProfilingImpl> pProfilingImpl = new (nothrow) CLRProfilingImpl();
-    if (pProfilingImpl == NULL)
-        return E_OUTOFMEMORY;
-
-    HRESULT hr = pProfilingImpl->QueryInterface(riid, ppv);
-    if (SUCCEEDED(hr))
-    {
-        pProfilingImpl.SuppressRelease();
-    }
-
-    return hr;
-}
-
-// ----------------------------------------------------------------------------
-// CLRProfilingClassFactoryImpl::LockServer
-// 
-// Description:
-//    A standard IClassFactory interface function that doesn't do anything interesting here
-// 
-HRESULT CLRProfilingClassFactoryImpl::LockServer(BOOL fLock)
-{
-    LIMITED_METHOD_CONTRACT;
-
-    return S_OK;
-}
-
-// ----------------------------------------------------------------------------
 // CLRProfilingImpl::AttachProfiler
 // 
 // Description:
@@ -1260,7 +1160,6 @@ HRESULT CLRProfilingImpl::AttachProfiler(DWORD dwProfileeProcessID,
         GC_TRIGGERS;
         MODE_PREEMPTIVE;
         CAN_TAKE_LOCK;
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -1279,41 +1178,38 @@ HRESULT CLRProfilingImpl::AttachProfiler(DWORD dwProfileeProcessID,
                             wszRuntimeVersion);
 }
 
-// ----------------------------------------------------------------------------
-// ICLRProfilingGetClassObject
-// 
-// Description:
-//    A wrapper to create a CLRProfilingImpl object and to QueryInterface on the CLRProfilingImpl object
-// 
-HRESULT ICLRProfilingGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
+
+// Contract for public APIs. These must be NOTHROW.
+EXTERN_C const IID IID_ICLRProfiling;
+
+HRESULT
+CreateCLRProfiling(
+    __out void ** ppCLRProfilingInstance)
 {
     CONTRACTL
     {
         NOTHROW;
-        GC_NOTRIGGER;
-        MODE_PREEMPTIVE;
-        SO_NOT_MAINLINE;
-        PRECONDITION(rclsid == CLSID_CLRProfiling);
     }
     CONTRACTL_END;
 
-    if (ppv == NULL)
-        return E_POINTER;
+    HRESULT hrIgnore = S_OK; // ignored HResult
+    HRESULT hr = S_OK;
+    HMODULE hMod = NULL;
+    IUnknown * pCordb = NULL;
 
-    *ppv = NULL;
-
-    NewHolder<CLRProfilingClassFactoryImpl> pCLRProfilingClassFactoryImpl = new (nothrow) CLRProfilingClassFactoryImpl();
-    if (pCLRProfilingClassFactoryImpl == NULL)
+    LOG((LF_CORDB, LL_EVERYTHING, "Calling CreateCLRProfiling"));
+    
+    NewHolder<CLRProfilingImpl> pProfilingImpl = new (nothrow) CLRProfilingImpl();
+    if (pProfilingImpl == NULL)
         return E_OUTOFMEMORY;
 
-    HRESULT hr = pCLRProfilingClassFactoryImpl->QueryInterface(riid, ppv);
+    hr = pProfilingImpl->QueryInterface(IID_ICLRProfiling, ppCLRProfilingInstance);
     if (SUCCEEDED(hr))
     {
-        pCLRProfilingClassFactoryImpl.SuppressRelease();
+        pProfilingImpl.SuppressRelease();
+        return S_OK;
     }
-
-    return hr;
+    return E_FAIL;
 }
-
 
 #endif // FEATURE_PROFAPI_ATTACH_DETACH 

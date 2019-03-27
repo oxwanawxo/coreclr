@@ -1,11 +1,20 @@
-﻿using System;
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
+
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
+using System.Xml.Serialization;
 
 namespace R2RDump
 {
-    struct R2RSection
+    public struct R2RSection
     {
+        /// <summary>
+        /// based on <a href="https://github.com/dotnet/coreclr/blob/master/src/inc/readytorun.h">src/inc/readytorun.h</a> ReadyToRunSectionType
+        /// </summary>
         public enum SectionType
         {
             READYTORUN_SECTION_COMPILER_IDENTIFIER = 100,
@@ -24,17 +33,18 @@ namespace R2RDump
         /// <summary>
         /// The ReadyToRun section type
         /// </summary>
-        public SectionType Type { get; }
+        [XmlAttribute("Index")]
+        public SectionType Type { get; set; }
 
         /// <summary>
         /// The RVA to the section
         /// </summary>
-        public int RelativeVirtualAddress { get; }
+        public int RelativeVirtualAddress { get; set; }
 
         /// <summary>
         /// The size of the section
         /// </summary>
-        public int Size { get; }
+        public int Size { get; set; }
 
         public R2RSection(SectionType type, int rva, int size)
         {
@@ -43,13 +53,19 @@ namespace R2RDump
             Size = size;
         }
 
+        public void WriteTo(TextWriter writer, DumpOptions options)
+        {
+            writer.WriteLine($"Type:  {Enum.GetName(typeof(SectionType), Type)} ({Type:D})");
+            if (!options.Naked)
+            {
+                writer.WriteLine($"RelativeVirtualAddress: 0x{RelativeVirtualAddress:X8}");
+            }
+            writer.WriteLine($"Size: {Size} bytes");
+        }
+
         public override string ToString()
         {
-            StringBuilder sb = new StringBuilder();
-            sb.AppendFormat($"Type:  {Enum.GetName(typeof(SectionType), Type)} ({Type:D})\n");
-            sb.AppendFormat($"RelativeVirtualAddress: 0x{RelativeVirtualAddress:X8}\n");
-            sb.AppendFormat($"Size: {Size} bytes\n");
-            return sb.ToString();
+            throw new NotImplementedException();
         }
     }
 }

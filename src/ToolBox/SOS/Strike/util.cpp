@@ -1177,16 +1177,6 @@ void GetStaticFieldPTR(DWORD_PTR* pOutPtr, DacpDomainLocalModuleData* pDLMD, Dac
     }
     else
     {
-        if (pFlags && pMTD->bIsShared)
-        {
-            BYTE flags;
-            DWORD_PTR pTargetFlags = (DWORD_PTR) pDLMD->pClassData + RidFromToken(pMTD->cl) - 1;            
-            move_xp (flags, pTargetFlags);
-
-            *pFlags = flags;
-        }
-               
-        
         *pOutPtr = dwTmp;            
     }
     return;
@@ -1314,7 +1304,7 @@ void DisplaySharedStatic(ULONG64 dwModuleDomainID, DacpMethodTableData* pMT, Dac
     ExtOut(" <<\n");
 }
 
-void DisplayThreadStatic (DacpModuleData* pModule, DacpMethodTableData* pMT, DacpFieldDescData *pFD, BOOL fIsShared)
+void DisplayThreadStatic(DacpModuleData* pModule, DacpMethodTableData* pMT, DacpFieldDescData *pFD)
 {
     SIZE_T dwModuleIndex = (SIZE_T)pModule->dwModuleIndex;
     SIZE_T dwModuleDomainID = (SIZE_T)pModule->dwModuleID;
@@ -1336,31 +1326,6 @@ void DisplayThreadStatic (DacpModuleData* pModule, DacpMethodTableData* pMT, Dac
         if (vThread.osThreadId != 0)
         {   
             CLRDATA_ADDRESS appDomainAddr = vThread.domain;
-
-            // Get the DLM (we need this to check the ClassInit flags).
-            // It's annoying that we have to issue one request for
-            // domain-neutral modules and domain-specific modules.
-            DacpDomainLocalModuleData vDomainLocalModule;                
-            if (fIsShared)
-            {
-                if (g_sos->GetDomainLocalModuleDataFromAppDomain(appDomainAddr, (int)dwModuleDomainID, &vDomainLocalModule) != S_OK)
-                {
-                    // Not initialized, go to next thread
-                    // and continue looping
-                    CurThread = vThread.nextThread;
-                    continue;
-                }
-            }
-            else
-            {
-                if (g_sos->GetDomainLocalModuleDataFromModule(pMT->Module, &vDomainLocalModule) != S_OK)
-                {
-                    // Not initialized, go to next thread
-                    // and continue looping
-                    CurThread = vThread.nextThread;
-                    continue;
-                }
-            }
 
             // Get the TLM
             DacpThreadLocalModuleData vThreadLocalModule;
@@ -1384,17 +1349,6 @@ void DisplayThreadStatic (DacpModuleData* pModule, DacpMethodTableData* pMT, Dac
                 continue;
             }
 
-            Flags = 0;
-            GetDLMFlags(&vDomainLocalModule, pMT, &Flags);
-
-            if ((Flags&1) == 0) 
-            {
-                // Not initialized, go to next thread
-                // and continue looping
-                CurThread = vThread.nextThread;
-                continue;
-            }
-            
             ExtOut(" %x:", vThread.osThreadId);
             DisplayDataMember(pFD, dwTmp, FALSE);               
         }
@@ -1403,61 +1357,6 @@ void DisplayThreadStatic (DacpModuleData* pModule, DacpMethodTableData* pMT, Dac
         CurThread = vThread.nextThread;
     }
     ExtOut(" <<\n");
-}
-
-void DisplayContextStatic (DacpFieldDescData *pFD, size_t offset, BOOL fIsShared)
-{
-    ExtOut("\nDisplay of context static variables is not implemented yet\n");
-    /*
-    int numDomain;
-    DWORD_PTR *domainList = NULL;
-    GetDomainList (domainList, numDomain);
-    ToDestroy des0 ((void**)&domainList);
-    AppDomain vAppDomain;
-    Context vContext;
-    
-    ExtOut("    >> Domain:Value");
-    for (int i = 0; i < numDomain; i ++)
-    {
-        DWORD_PTR dwAddr = domainList[i];
-        if (dwAddr == 0) {
-            continue;
-        }
-        vAppDomain.Fill (dwAddr);
-        if (vAppDomain.m_pDefaultContext == 0)
-            continue;
-        dwAddr = (DWORD_PTR)vAppDomain.m_pDefaultContext;
-        vContext.Fill (dwAddr);
-        
-        if (fIsShared)
-            dwAddr = (DWORD_PTR)vContext.m_pSharedStaticData;
-        else
-            dwAddr = (DWORD_PTR)vContext.m_pUnsharedStaticData;
-        if (dwAddr == 0)
-            continue;
-        dwAddr += offsetof(STATIC_DATA, dataPtr);
-        dwAddr += offset;
-        if (safemove (dwAddr, dwAddr) == 0)
-            continue;
-        if (dwAddr == 0)
-            // We have not initialized this yet.
-            continue;
-        
-        dwAddr += pFD->dwOffset;
-        if (pFD->Type == ELEMENT_TYPE_CLASS
-            || pFD->Type == ELEMENT_TYPE_VALUETYPE)
-        {
-            if (safemove (dwAddr, dwAddr) == 0)
-                continue;
-        }
-        if (dwAddr == 0)
-            // We have not initialized this yet.
-            continue;
-        ExtOut(" %p:", (ULONG64)domainList[i]);
-        DisplayDataMember (pFD, dwAddr, FALSE);
-    }
-    ExtOut(" <<\n");
-    */
 }
 
 const char * ElementTypeName(unsigned type)
@@ -1547,7 +1446,7 @@ LPWSTR FormatTypeName (__out_ecount (maxChars) LPWSTR pszName, UINT maxChars)
 *                                                                      *
 *    This function is called to dump all fields of a managed object.   *  
 *    dwStartAddr specifies the beginning memory address.               *
-*    bFirst is used to avoid printing header everytime.                *
+*    bFirst is used to avoid printing header every time.               *
 *                                                                      *
 \**********************************************************************/
 void DisplayFields(CLRDATA_ADDRESS cdaMT, DacpMethodTableData *pMTD, DacpMethodTableFieldData *pMTFD, DWORD_PTR dwStartAddr, BOOL bFirst, BOOL bValueClass)
@@ -1561,8 +1460,6 @@ void DisplayFields(CLRDATA_ADDRESS cdaMT, DacpMethodTableData *pMTD, DacpMethodT
         numInstanceFields = 0;
     }
     
-    BOOL fIsShared = pMTD->bIsShared;
-
     if (pMTD->ParentMethodTable)
     {
         DacpMethodTableData vParentMethTable;
@@ -1610,7 +1507,7 @@ void DisplayFields(CLRDATA_ADDRESS cdaMT, DacpMethodTableData *pMTD, DacpMethodT
         dwAddr = vFieldDesc.NextField;
 
         DWORD offset = vFieldDesc.dwOffset;
-        if(!((vFieldDesc.bIsThreadLocal || vFieldDesc.bIsContextLocal || fIsShared) && vFieldDesc.bIsStatic))
+        if(!(vFieldDesc.bIsThreadLocal && vFieldDesc.bIsStatic))
         {
             if (!bValueClass)
             {
@@ -1649,13 +1546,10 @@ void DisplayFields(CLRDATA_ADDRESS cdaMT, DacpMethodTableData *pMTD, DacpMethodT
         
         ExtOut("%2s ", (IsElementValueType(vFieldDesc.Type)) ? "1" : "0");
 
-        if (vFieldDesc.bIsStatic && (vFieldDesc.bIsThreadLocal || vFieldDesc.bIsContextLocal))
+        if (vFieldDesc.bIsStatic && vFieldDesc.bIsThreadLocal)
         {
             numStaticFields ++;
-            if (fIsShared)
-                ExtOut("%8s %" POINTERSIZE "s", "shared", vFieldDesc.bIsThreadLocal ? "TLstatic" : "CLstatic");
-            else
-                ExtOut("%8s ", vFieldDesc.bIsThreadLocal ? "TLstatic" : "CLstatic");
+            ExtOut("%8s ", vFieldDesc.bIsThreadLocal ? "TLstatic" : "CLstatic");
 
             NameForToken_s(TokenFromRid(vFieldDesc.mb, mdtFieldDef), pImport, g_mdName, mdNameLen, false);
             ExtOut(" %S\n", g_mdName);
@@ -1671,14 +1565,8 @@ void DisplayFields(CLRDATA_ADDRESS cdaMT, DacpMethodTableData *pMTD, DacpMethodT
                     DacpModuleData vModule;
                     if (vModule.Request(g_sos,pMTD->Module) == S_OK)
                     {
-                        DisplayThreadStatic(&vModule, pMTD, &vFieldDesc, fIsShared);
+                        DisplayThreadStatic(&vModule, pMTD, &vFieldDesc);
                     }
-                }
-                else if (vFieldDesc.bIsContextLocal)
-                {
-                    DisplayContextStatic(&vFieldDesc,
-                                         pMTFD->wContextStaticOffset,
-                                         fIsShared);
                 }
             }
     
@@ -1687,47 +1575,24 @@ void DisplayFields(CLRDATA_ADDRESS cdaMT, DacpMethodTableData *pMTD, DacpMethodT
         {
             numStaticFields ++;
 
-            if (fIsShared)
+            ExtOut("%8s ", "static");
+
+            DacpDomainLocalModuleData vDomainLocalModule;
+
+            // The MethodTable isn't shared, so the module must not be loaded domain neutral.  We can
+            // get the specific DomainLocalModule instance without needing to know the AppDomain in advance.
+            if (g_sos->GetDomainLocalModuleDataFromModule(pMTD->Module, &vDomainLocalModule) != S_OK)
             {
-                ExtOut("%8s %" POINTERSIZE "s", "shared", "static");
-
-                NameForToken_s(TokenFromRid(vFieldDesc.mb, mdtFieldDef), pImport, g_mdName, mdNameLen, false);
-                ExtOut(" %S\n", g_mdName);
-
-                if (IsMiniDumpFile())
-                {
-                    ExtOut(" <no information>\n");
-                }
-                else
-                {
-                    DacpModuleData vModule;
-                    if (vModule.Request(g_sos,pMTD->Module) == S_OK)
-                    {
-                        DisplaySharedStatic(vModule.dwModuleID, pMTD, &vFieldDesc);
-                    }
-                }
+                ExtOut(" <no information>\n");
             }
             else
             {
-                ExtOut("%8s ", "static");
-                
-                DacpDomainLocalModuleData vDomainLocalModule;
-                
-                // The MethodTable isn't shared, so the module must not be loaded domain neutral.  We can
-                // get the specific DomainLocalModule instance without needing to know the AppDomain in advance.
-                if (g_sos->GetDomainLocalModuleDataFromModule(pMTD->Module, &vDomainLocalModule) != S_OK)
-                {
-                    ExtOut(" <no information>\n");
-                }
-                else
-                {
-                    DWORD_PTR dwTmp;
-                    GetStaticFieldPTR(&dwTmp, &vDomainLocalModule, pMTD, &vFieldDesc);
-                    DisplayDataMember(&vFieldDesc, dwTmp);
+                DWORD_PTR dwTmp;
+                GetStaticFieldPTR(&dwTmp, &vDomainLocalModule, pMTD, &vFieldDesc);
+                DisplayDataMember(&vFieldDesc, dwTmp);
 
-                    NameForToken_s(TokenFromRid(vFieldDesc.mb, mdtFieldDef), pImport, g_mdName, mdNameLen, false);
-                    ExtOut(" %S\n", g_mdName);
-                }
+                NameForToken_s(TokenFromRid(vFieldDesc.mb, mdtFieldDef), pImport, g_mdName, mdNameLen, false);
+                ExtOut(" %S\n", g_mdName);
             }
         }
         else
@@ -1772,7 +1637,7 @@ int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, __in_z LPCWSTR wszFieldName, BOOL 
 //                0 = field not found, 
 //              > 0 = offset to field from objAddr
 int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, CLRDATA_ADDRESS cdaMT, __in_z LPCWSTR wszFieldName,
-                        BOOL bFirst/*=TRUE*/)
+                        BOOL bFirst/*=TRUE*/, DacpFieldDescData* pDacpFieldDescData/*=NULL*/)
 {
 
 #define EXITPOINT(EXPR) do { if(!(EXPR)) { return -1; } } while (0)
@@ -1795,7 +1660,7 @@ int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, CLRDATA_ADDRESS cdaMT, __in_z LPCW
     if (dmtd.ParentMethodTable)
     {
         DWORD retVal = GetObjFieldOffset (cdaObj, dmtd.ParentMethodTable, 
-                                          wszFieldName, FALSE);
+                                          wszFieldName, FALSE, pDacpFieldDescData);
         if (retVal != 0)
         {
             // return in case of error or success.
@@ -1820,6 +1685,10 @@ int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, CLRDATA_ADDRESS cdaMT, __in_z LPCW
             NameForToken_s (TokenFromRid(vFieldDesc.mb, mdtFieldDef), pImport, g_mdName, mdNameLen, false);
             if (_wcscmp (wszFieldName, g_mdName) == 0)
             {
+                if (pDacpFieldDescData != NULL)
+                {
+                    *pDacpFieldDescData = vFieldDesc;
+                }
                 return offset;
             }
             numInstanceFields ++;                        
@@ -1830,6 +1699,66 @@ int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, CLRDATA_ADDRESS cdaMT, __in_z LPCW
 
     // Field name not found...
     return 0;
+
+#undef EXITPOINT    
+}
+
+
+// Return value: -1 = error
+//               -2 = not found
+//             >= 0 = offset to field from cdaValue
+int GetValueFieldOffset(CLRDATA_ADDRESS cdaMT, __in_z LPCWSTR wszFieldName, DacpFieldDescData* pDacpFieldDescData)
+{
+#define EXITPOINT(EXPR) do { if(!(EXPR)) { return -1; } } while (0)
+
+    const int NOT_FOUND = -2;
+    DacpMethodTableData dmtd;
+    DacpMethodTableFieldData vMethodTableFields;
+    DacpFieldDescData vFieldDesc;
+    DacpModuleData module;
+    static DWORD numInstanceFields = 0; // Static due to recursion visiting parents
+    numInstanceFields = 0;
+
+    EXITPOINT(vMethodTableFields.Request(g_sos, cdaMT) == S_OK);
+
+    EXITPOINT(dmtd.Request(g_sos, cdaMT) == S_OK);
+    EXITPOINT(module.Request(g_sos, dmtd.Module) == S_OK);
+    if (dmtd.ParentMethodTable)
+    {
+        DWORD retVal = GetValueFieldOffset(dmtd.ParentMethodTable, wszFieldName, pDacpFieldDescData);
+        if (retVal != (DWORD)NOT_FOUND)
+        {
+            // Return in case of error or success. Fall through for field-not-found.
+            return retVal;
+        }
+    }
+
+    CLRDATA_ADDRESS dwAddr = vMethodTableFields.FirstField;
+    ToRelease<IMetaDataImport> pImport = MDImportForModule(&module);
+
+    while (numInstanceFields < vMethodTableFields.wNumInstanceFields)
+    {
+        EXITPOINT(vFieldDesc.Request(g_sos, dwAddr) == S_OK);
+
+        if (!vFieldDesc.bIsStatic)
+        {
+            NameForToken_s(TokenFromRid(vFieldDesc.mb, mdtFieldDef), pImport, g_mdName, mdNameLen, false);
+            if (_wcscmp(wszFieldName, g_mdName) == 0)
+            {
+                if (pDacpFieldDescData != NULL)
+                {
+                    *pDacpFieldDescData = vFieldDesc;
+                }
+                return vFieldDesc.dwOffset;
+            }
+            numInstanceFields++;
+        }
+
+        dwAddr = vFieldDesc.NextField;
+    }
+
+    // Field name not found...
+    return NOT_FOUND;
 
 #undef EXITPOINT    
 }
@@ -2465,6 +2394,65 @@ BOOL IsStringObject (size_t obj)
     return FALSE;
 }
 
+BOOL IsDerivedFrom(CLRDATA_ADDRESS mtObj, __in_z LPCWSTR baseString)
+{
+    DacpMethodTableData dmtd;
+    CLRDATA_ADDRESS walkMT = mtObj;
+    while (walkMT != NULL)
+    {
+        if (dmtd.Request(g_sos, walkMT) != S_OK)
+        {
+            break;
+        }
+
+        NameForMT_s(TO_TADDR(walkMT), g_mdName, mdNameLen);
+        if (_wcscmp(baseString, g_mdName) == 0)
+        {
+            return TRUE;
+        }
+
+        walkMT = dmtd.ParentMethodTable;
+    }
+
+    return FALSE;
+}
+
+BOOL TryGetMethodDescriptorForDelegate(CLRDATA_ADDRESS delegateAddr, CLRDATA_ADDRESS* pMD)
+{
+    if (!sos::IsObject(delegateAddr, false))
+    {
+        return FALSE;
+    }
+
+    sos::Object delegateObj = TO_TADDR(delegateAddr);
+
+    for (int i = 0; i < 2; i++)
+    {
+        int offset;
+        if ((offset = GetObjFieldOffset(delegateObj.GetAddress(), delegateObj.GetMT(), i == 0 ? W("_methodPtrAux") : W("_methodPtr"))) != 0)
+        {
+            CLRDATA_ADDRESS methodPtr;
+            MOVE(methodPtr, delegateObj.GetAddress() + offset);
+            if (methodPtr != NULL)
+            {
+                if (g_sos->GetMethodDescPtrFromIP(methodPtr, pMD) == S_OK)
+                {
+                    return TRUE;
+                }
+
+                DacpCodeHeaderData codeHeaderData;
+                if (codeHeaderData.Request(g_sos, methodPtr) == S_OK)
+                {
+                    *pMD = codeHeaderData.MethodDescPtr;
+                    return TRUE;
+                }
+            }
+        }
+    }
+
+    return FALSE;
+}
+
 void DumpStackObjectsOutput(const char *location, DWORD_PTR objAddr, BOOL verifyFields)
 {
     // rule out pointers that are outside of the gc heap.
@@ -2691,7 +2679,8 @@ DWORD_PTR *ModuleFromName(__in_opt LPSTR mName, int *numModule)
     ArrayHolder<CLRDATA_ADDRESS> pAssemblyArray = NULL;
     ArrayHolder<CLRDATA_ADDRESS> pModules = NULL;
     int arrayLength = 0;
-    if (!ClrSafeInt<int>::addition(adsData.DomainCount, 2, arrayLength))
+    int numSpecialDomains = (adsData.sharedDomain != NULL) ? 2 : 1;
+    if (!ClrSafeInt<int>::addition(adsData.DomainCount, numSpecialDomains, arrayLength))
     {
         ExtOut("<integer overflow>\n");
         return NULL;
@@ -2705,8 +2694,11 @@ DWORD_PTR *ModuleFromName(__in_opt LPSTR mName, int *numModule)
     }
 
     pArray[0] = adsData.systemDomain;
-    pArray[1] = adsData.sharedDomain;
-    if (g_sos->GetAppDomainList(adsData.DomainCount, pArray.GetPtr()+2, NULL)!=S_OK)
+    if (adsData.sharedDomain != NULL)
+    {
+        pArray[1] = adsData.sharedDomain;
+    }
+    if (g_sos->GetAppDomainList(adsData.DomainCount, pArray.GetPtr()+numSpecialDomains, NULL)!=S_OK)
     {
         ExtOut("Unable to get array of AppDomains\n");
         return NULL;
@@ -2732,7 +2724,7 @@ DWORD_PTR *ModuleFromName(__in_opt LPSTR mName, int *numModule)
     char fileName[sizeof(StringData)/2];
     
     // Search all domains to find a module
-    for (int n = 0; n < adsData.DomainCount+2; n++)
+    for (int n = 0; n < adsData.DomainCount+numSpecialDomains; n++)
     {
         if (IsInterrupt())
         {
@@ -3470,7 +3462,8 @@ void GetDomainList (DWORD_PTR *&domainList, int &numDomain)
     // Do prefast integer checks before the malloc.
     size_t AllocSize;
     LONG DomainAllocCount;
-    if (!ClrSafeInt<LONG>::addition(adsData.DomainCount, 2, DomainAllocCount) ||
+    LONG NumExtraDomains = (adsData.sharedDomain != NULL) ? 2 : 1;
+    if (!ClrSafeInt<LONG>::addition(adsData.DomainCount, NumExtraDomains, DomainAllocCount) ||
         !ClrSafeInt<size_t>::multiply(DomainAllocCount, sizeof(PVOID), AllocSize) ||
         (domainList = new DWORD_PTR[DomainAllocCount]) == NULL)
     {
@@ -3478,7 +3471,10 @@ void GetDomainList (DWORD_PTR *&domainList, int &numDomain)
     }
 
     domainList[numDomain++] = (DWORD_PTR) adsData.systemDomain;
-    domainList[numDomain++] = (DWORD_PTR) adsData.sharedDomain;
+    if (adsData.sharedDomain != NULL)
+    {
+        domainList[numDomain++] = (DWORD_PTR) adsData.sharedDomain;
+    }
     
     CLRDATA_ADDRESS *pArray = new CLRDATA_ADDRESS[adsData.DomainCount];
     if (pArray==NULL)
@@ -4824,7 +4820,7 @@ HRESULT InitCorDebugInterface()
     if(g_pCorDebugProcess != NULL)
     {
         // ICorDebugProcess4 is currently considered a private experimental interface on ICorDebug, it might go away so
-        // we need to be sure to handle its absense gracefully
+        // we need to be sure to handle its absence gracefully
         ToRelease<ICorDebugProcess4> pProcess4 = NULL;
         if(SUCCEEDED(g_pCorDebugProcess->QueryInterface(__uuidof(ICorDebugProcess4), (void**)&pProcess4)))
         {
@@ -5451,6 +5447,7 @@ const char * const DMLFormats[] =
     "<exec cmd=\"!DumpRCW /d %s\">%s</exec>",       // DML_RCWrapper
     "<exec cmd=\"!DumpCCW /d %s\">%s</exec>",       // DML_CCWrapper
     "<exec cmd=\"!ClrStack -i %S %d\">%S</exec>",   // DML_ManagedVar
+    "<exec cmd=\"!DumpAsync -addr %s -tasks -completed -fields -stacks -roots\">%s</exec>", // DML_Async
 };
 
 void ConvertToLower(__out_ecount(len) char *buffer, size_t len)
@@ -6121,12 +6118,12 @@ HRESULT SymbolReader::LoadSymbolsForWindowsPDB(___in IMetaDataImport* pMD, ___in
     ToRelease<ISymUnmanagedBinder3> pSymBinder;
     if (FAILED(Status = CreateInstanceCustom(CLSID_CorSymBinder_SxS, 
                         IID_ISymUnmanagedBinder3, 
-                        W("diasymreader.dll"),
+                        NATIVE_SYMBOL_READER_DLL,
                         cciLatestFx|cciDacColocated|cciDbgPath, 
                         (void**)&pSymBinder)))
     {
         ExtOut("SOS Error: Unable to CoCreateInstance class=CLSID_CorSymBinder_SxS, interface=IID_ISymUnmanagedBinder3, hr=0x%x\n", Status);
-        ExtOut("This usually means the installation of .Net Framework on your machine is missing or needs repair\n");
+        ExtOut("This usually means SOS was unable to locate a suitable version of DiaSymReader. The dll searched for was '%S'\n", NATIVE_SYMBOL_READER_DLL);
         return Status;
     }
 

@@ -52,7 +52,6 @@ void StubHelpers::ValidateObjectInternal(Object *pObjUNSAFE, BOOL fValidateNextO
 	NOTHROW;
 	GC_NOTRIGGER;
 	MODE_ANY;
-	SO_TOLERANT;
 }
 	CONTRACTL_END;
 
@@ -284,7 +283,6 @@ FORCEINLINE static void *GetCOMIPFromRCW_GetTargetNoInterception(IUnknown *pUnk,
     _ASSERTE(pComInfo->m_pInterceptStub == NULL || pComInfo->m_pInterceptStub == (LPVOID)-1);
     _ASSERTE(!pComInfo->HasCopyCtorArgs());
 #endif // _TARGET_X86_
-    _ASSERTE(!NDirect::IsHostHookEnabled());
 
     LPVOID *lpVtbl = *(LPVOID **)pUnk;
     return lpVtbl[pComInfo->m_cachedComSlot];
@@ -740,12 +738,12 @@ void QCALLTYPE StubHelpers::InterfaceMarshaler__ClearNative(IUnknown * pUnk)
 {
     QCALL_CONTRACT;
 
-    BEGIN_QCALL_SO_TOLERANT;
+    BEGIN_QCALL;
 
     ULONG cbRef = SafeReleasePreemp(pUnk);
     LogInteropRelease(pUnk, cbRef, "InterfaceMarshalerBase::ClearNative: In/Out release");
 
-    END_QCALL_SO_TOLERANT;
+    END_QCALL;
 }
 #include <optdefault.h>
 
@@ -806,63 +804,6 @@ FCIMPL2(IUnknown*, StubHelpers::UriMarshaler__CreateNativeUriInstance, WCHAR* pR
     return pIUriRC;
 }
 FCIMPLEND
-
-ABI::Windows::UI::Xaml::Interop::INotifyCollectionChangedEventArgs* QCALLTYPE 
-StubHelpers::EventArgsMarshaler__CreateNativeNCCEventArgsInstance
-(int action, ABI::Windows::UI::Xaml::Interop::IBindableVector *newItem, ABI::Windows::UI::Xaml::Interop::IBindableVector *oldItem, int newIndex, int oldIndex)
-{
-    QCALL_CONTRACT;
-
-   ABI::Windows::UI::Xaml::Interop::INotifyCollectionChangedEventArgs *pArgsRC = NULL;
-
-    BEGIN_QCALL;
-
-    EventArgsMarshalingInfo *marshalingInfo = GetAppDomain()->GetMarshalingData()->GetEventArgsMarshalingInfo();
-    ABI::Windows::UI::Xaml::Interop::INotifyCollectionChangedEventArgsFactory *pFactory = marshalingInfo->GetNCCEventArgsFactory();
-
-    SafeComHolderPreemp<IInspectable> pInner;
-    HRESULT hr;
-    hr = pFactory->CreateInstanceWithAllParameters(
-        (ABI::Windows::UI::Xaml::Interop::NotifyCollectionChangedAction)action,
-        (ABI::Windows::UI::Xaml::Interop::IBindableVector *)newItem,
-        (ABI::Windows::UI::Xaml::Interop::IBindableVector *)oldItem,
-        newIndex,
-        oldIndex,
-        NULL,
-        &pInner,
-        &pArgsRC);
-    IfFailThrow(hr);
-
-    END_QCALL;
-
-    return pArgsRC;
-}
-
-ABI::Windows::UI::Xaml::Data::IPropertyChangedEventArgs* QCALLTYPE 
-	StubHelpers::EventArgsMarshaler__CreateNativePCEventArgsInstance(HSTRING name)
-{
-    QCALL_CONTRACT;
-
-    ABI::Windows::UI::Xaml::Data::IPropertyChangedEventArgs *pArgsRC = NULL;
-
-    BEGIN_QCALL;
-
-    EventArgsMarshalingInfo *marshalingInfo = GetAppDomain()->GetMarshalingData()->GetEventArgsMarshalingInfo();
-    ABI::Windows::UI::Xaml::Data::IPropertyChangedEventArgsFactory *pFactory = marshalingInfo->GetPCEventArgsFactory();
-
-    SafeComHolderPreemp<IInspectable> pInner;
-    HRESULT hr;
-    hr = pFactory->CreateInstance(
-        name,
-        NULL,
-        &pInner,
-        &pArgsRC);
-    IfFailThrow(hr);
-
-    END_QCALL;
-
-    return pArgsRC;
-}
 
 // A helper to convert an IP to object using special flags.
 FCIMPL1(Object *, StubHelpers::InterfaceMarshaler__ConvertToManagedWithoutUnboxing, IUnknown *pNative)
@@ -1029,7 +970,7 @@ FCIMPL2(IInspectable *, StubHelpers::GetOuterInspectable, Object *pThisUNSAFE, M
 
     OBJECTREF pThis = ObjectToOBJECTREF(pThisUNSAFE);
 
-    if (pThis->GetTrueMethodTable() != pCtorMD->GetMethodTable())
+    if (pThis->GetMethodTable() != pCtorMD->GetMethodTable())
     {
         // this is a composition scenario
         HELPER_METHOD_FRAME_BEGIN_RET_1(pThis);
@@ -1750,30 +1691,6 @@ FCIMPL1(Object*, StubHelpers::AllocateInternal, EnregisteredTypeHandle pRegister
     HELPER_METHOD_FRAME_END();
 
     return OBJECTREFToObject(objRet);
-}
-FCIMPLEND
-
-FCIMPL1(void, StubHelpers::DecimalCanonicalizeInternal, DECIMAL *pDec)
-{
-    FCALL_CONTRACT;
-
-    if (FAILED(DecimalCanonicalize(pDec)))
-    {
-        FCThrowResVoid(kOverflowException, W("Overflow_Currency"));
-    }
-}
-FCIMPLEND
-
-FCIMPL1(int, StubHelpers::AnsiStrlen, __in_z char* pszStr)
-{
-    FCALL_CONTRACT;
-
-    size_t len = strlen(pszStr);
-
-    // the length should have been checked earlier (see StubHelpers.CheckStringLength)
-    _ASSERTE(FitsInI4(len));
-
-    return (int)len;
 }
 FCIMPLEND
 

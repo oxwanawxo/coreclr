@@ -9,6 +9,19 @@
 
 #ifdef FEATURE_STANDALONE_GC
 
+#if defined(__linux__)
+extern "C" BOOL EventXplatEnabledGCStart(); // GCEventProvider_Default, GCEventLevel_Information, GCEventKeyword_GC
+extern "C" BOOL EventXPlatEnabledGCJoin_V2(); //  GCEventProvider_Default, GCEventLevel_Verbose, GCEventKeyword_GC
+
+extern "C" BOOL EventXplatEnabledGCGenerationRange(); // GCEventProvider_Default, GCEventLevel_Information, GCEventKeyword_GCHeapSurvivalAndMovement
+
+extern "C" BOOL EventXplatEnabledSetGCHandle(); // GCEventProvider_Default, GCEventLevel_Information, GCEventKeyword_GCHandle
+extern "C" BOOL EventXplatEnabledPrvSetGCHandle();; // GCEventProvider_Private, GCEventLevel_Information, GCEventKeyword_GCHandlePrivate
+
+extern "C" BOOL EventXplatEnabledBGCBegin(); // GCEventProvider_Private, GCEventLevel_Information, GCEventKeyword_GCPrivate
+extern "C" BOOL EventXplatEnabledPinPlugAtGCTime(); // GCEventProvider_Private, GCEventLevel_Verbose, GCEventKeyword_GC
+#endif // __linux__
+
 namespace standalone
 {
 
@@ -49,8 +62,7 @@ public:
 
     void EnableFinalization(bool foundFinalizers);
     void HandleFatalError(unsigned int exitCode);
-    bool ShouldFinalizeObjectForUnload(AppDomain* pDomain, Object* obj);
-    bool ForceFullGCToBeBlocking();
+    bool ShouldFinalizeObjectForUnload(void* pDomain, Object* obj);
     bool EagerFinalized(Object* obj);
     MethodTable* GetFreeObjectMethodTable();
     bool GetBooleanConfigValue(const char* key, bool* value);
@@ -63,6 +75,20 @@ public:
     void WalkAsyncPinnedForPromotion(Object* object, ScanContext* sc, promote_func* callback);
     void WalkAsyncPinned(Object* object, void* context, void(*callback)(Object*, Object*, void*));
     IGCToCLREventSink* EventSink();
+
+    uint32_t GetDefaultDomainIndex();
+    void *GetAppDomainAtIndex(uint32_t appDomainIndex);
+    bool AppDomainCanAccessHandleTable(uint32_t appDomainID);
+    uint32_t GetIndexOfAppDomainBeingUnloaded();
+    uint32_t GetTotalNumSizedRefHandles();
+    bool AppDomainIsRudeUnload(void *appDomain);
+
+    bool AnalyzeSurvivorsRequested(int condemnedGeneration);
+    void AnalyzeSurvivorsFinished(int condemnedGeneration);
+
+    void VerifySyncTableEntry();
+
+    void UpdateGCEventStatus(int publicLevel, int publicKeywords, int privateLevel, int privateKeywords);
 };
 
 } // namespace standalone

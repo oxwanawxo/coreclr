@@ -42,7 +42,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (!keyFound)
             {
                 Exception e = new KeyNotFoundException(SR.Format(SR.Arg_KeyNotFoundWithKey, key.ToString()));
-                e.SetErrorCode(HResults.E_BOUNDS);
+                e.HResult = HResults.E_BOUNDS;
                 throw e;
             }
 
@@ -71,8 +71,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
             // Note: This dictionary is not really read-only - you could QI for a modifiable
             // dictionary.  We gain some perf by doing this.  We believe this is acceptable.
-            IReadOnlyDictionary<K, V> roDictionary = _this as IReadOnlyDictionary<K, V>;
-            if (roDictionary == null)
+            if (!(_this is IReadOnlyDictionary<K, V> roDictionary))
             {
                 roDictionary = new ReadOnlyDictionary<K, V>(_this);
             }
@@ -97,7 +96,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (!removed)
             {
                 Exception e = new KeyNotFoundException(SR.Format(SR.Arg_KeyNotFoundWithKey, key.ToString()));
-                e.SetErrorCode(HResults.E_BOUNDS);
+                e.HResult = HResults.E_BOUNDS;
                 throw e;
             }
         }

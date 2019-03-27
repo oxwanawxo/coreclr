@@ -26,6 +26,10 @@ XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 #include <errno.h> // For EINVAL
 #endif
 
+#ifndef DLLEXPORT
+#define DLLEXPORT
+#endif // !DLLEXPORT
+
 /*****************************************************************************/
 
 FILE* jitstdout = nullptr;
@@ -54,7 +58,7 @@ JitOptions jitOpts = {
 
 /*****************************************************************************/
 
-extern "C" void __stdcall jitStartup(ICorJitHost* jitHost)
+extern "C" DLLEXPORT void __stdcall jitStartup(ICorJitHost* jitHost)
 {
     if (g_jitInitialized)
     {
@@ -80,9 +84,16 @@ extern "C" void __stdcall jitStartup(ICorJitHost* jitHost)
     assert(!JitConfig.isInitialized());
     JitConfig.initialize(jitHost);
 
-#if defined(_HOST_UNIX_)
-    jitstdout = procstdout();
-#else  // !_HOST_UNIX_
+#ifdef DEBUG
+    const wchar_t* jitStdOutFile = JitConfig.JitStdOutFile();
+    if (jitStdOutFile != nullptr)
+    {
+        jitstdout = _wfopen(jitStdOutFile, W("a"));
+        assert(jitstdout != nullptr);
+    }
+#endif // DEBUG
+
+#if !defined(_HOST_UNIX_)
     if (jitstdout == nullptr)
     {
         int stdoutFd = _fileno(procstdout());
@@ -106,6 +117,7 @@ extern "C" void __stdcall jitStartup(ICorJitHost* jitHost)
             }
         }
     }
+#endif // !_HOST_UNIX_
 
     // If jitstdout is still null, fallback to whatever procstdout() was
     // initially set to.
@@ -113,7 +125,6 @@ extern "C" void __stdcall jitStartup(ICorJitHost* jitHost)
     {
         jitstdout = procstdout();
     }
-#endif // !_HOST_UNIX_
 
 #ifdef FEATURE_TRACELOGGING
     JitTelemetry::NotifyDllProcessAttach();
@@ -123,7 +134,7 @@ extern "C" void __stdcall jitStartup(ICorJitHost* jitHost)
     g_jitInitialized = true;
 }
 
-void jitShutdown()
+void jitShutdown(bool processIsTerminating)
 {
     if (!g_jitInitialized)
     {
@@ -134,7 +145,13 @@ void jitShutdown()
 
     if (jitstdout != procstdout())
     {
-        fclose(jitstdout);
+        // When the process is terminating, the fclose call is unnecessary and is also prone to
+        // crashing since the UCRT itself often frees the backing memory earlier on in the
+        // termination sequence.
+        if (!processIsTerminating)
+        {
+            fclose(jitstdout);
+        }
     }
 
 #ifdef FEATURE_TRACELOGGING
@@ -146,7 +163,12 @@ void jitShutdown()
 
 #ifndef FEATURE_MERGE_JIT_AND_ENGINE
 
-extern "C" BOOL WINAPI DllMain(HANDLE hInstance, DWORD dwReason, LPVOID pvReserved)
+extern "C"
+#ifdef FEATURE_PAL
+    DLLEXPORT // For Win32 PAL LoadLibrary emulation
+#endif
+    BOOL WINAPI
+    DllMain(HANDLE hInstance, DWORD dwReason, LPVOID pvReserved)
 {
     if (dwReason == DLL_PROCESS_ATTACH)
     {
@@ -155,7 +177,10 @@ extern "C" BOOL WINAPI DllMain(HANDLE hInstance, DWORD dwReason, LPVOID pvReserv
     }
     else if (dwReason == DLL_PROCESS_DETACH)
     {
-        jitShutdown();
+        // From MSDN: If fdwReason is DLL_PROCESS_DETACH, lpvReserved is NULL if FreeLibrary has
+        // been called or the DLL load failed and non-NULL if the process is terminating.
+        bool processIsTerminating = (pvReserved != nullptr);
+        jitShutdown(processIsTerminating);
     }
 
     return TRUE;
@@ -166,7 +191,7 @@ HINSTANCE GetModuleInst()
     return (g_hInst);
 }
 
-extern "C" void __stdcall sxsJitStartup(CoreClrCallbacks const& cccallbacks)
+extern "C" DLLEXPORT void __stdcall sxsJitStartup(CoreClrCallbacks const& cccallbacks)
 {
 #ifndef SELF_NO_HOST
     InitUtilcode(cccallbacks);
@@ -191,7 +216,7 @@ void* __cdecl operator new(size_t, const CILJitSingletonAllocator&)
 
 ICorJitCompiler* g_realJitCompiler = nullptr;
 
-ICorJitCompiler* __stdcall getJit()
+DLLEXPORT ICorJitCompiler* __stdcall getJit()
 {
     if (ILJitter == nullptr)
     {
@@ -206,7 +231,11 @@ ICorJitCompiler* __stdcall getJit()
 // If you are using it more broadly in retail code, you would need to understand the
 // performance implications of accessing TLS.
 
+#ifndef __GNUC__
 __declspec(thread) void* gJitTls = nullptr;
+#else  // !__GNUC__
+thread_local void* gJitTls = nullptr;
+#endif // !__GNUC__
 
 static void* GetJitTls()
 {
@@ -246,7 +275,7 @@ void JitTls::SetCompiler(Compiler* compiler)
     reinterpret_cast<JitTls*>(GetJitTls())->m_compiler = compiler;
 }
 
-#else // defined(DEBUG)
+#else // !defined(DEBUG)
 
 JitTls::JitTls(ICorJitInfo* jitInfo)
 {
@@ -347,7 +376,7 @@ void CILJit::ProcessShutdownWork(ICorStaticInfo* statInfo)
         // Continue, by shutting down this JIT as well.
     }
 
-    jitShutdown();
+    jitShutdown(false);
 
     Compiler::ProcessShutdownWork(statInfo);
 }
@@ -382,15 +411,16 @@ unsigned CILJit::getMaxIntrinsicSIMDVectorLength(CORJIT_FLAGS cpuCompileFlags)
     jitFlags.SetFromFlags(cpuCompileFlags);
 
 #ifdef FEATURE_SIMD
-#if defined(_TARGET_XARCH_) && !defined(LEGACY_BACKEND)
+#if defined(_TARGET_XARCH_)
     if (!jitFlags.IsSet(JitFlags::JIT_FLAG_PREJIT) && jitFlags.IsSet(JitFlags::JIT_FLAG_FEATURE_SIMD) &&
         jitFlags.IsSet(JitFlags::JIT_FLAG_USE_AVX2))
     {
-        if (JitConfig.EnableAVX() != 0
-#ifdef DEBUG
-            && JitConfig.EnableAVX2() != 0
-#endif
-            )
+        // Since the ISAs can be disabled individually and since they are hierarchical in nature (that is
+        // disabling SSE also disables SSE2 through AVX2), we need to check each ISA in the hierarchy to
+        // ensure that AVX2 is actually supported. Otherwise, we will end up getting asserts downstream.
+        if ((JitConfig.EnableAVX2() != 0) && (JitConfig.EnableAVX() != 0) && (JitConfig.EnableSSE42() != 0) &&
+            (JitConfig.EnableSSE41() != 0) && (JitConfig.EnableSSSE3() != 0) && (JitConfig.EnableSSE3() != 0) &&
+            (JitConfig.EnableSSE2() != 0) && (JitConfig.EnableSSE() != 0))
         {
             if (GetJitTls() != nullptr && JitTls::GetCompiler() != nullptr)
             {
@@ -399,7 +429,7 @@ unsigned CILJit::getMaxIntrinsicSIMDVectorLength(CORJIT_FLAGS cpuCompileFlags)
             return 32;
         }
     }
-#endif // !(defined(_TARGET_XARCH_) && !defined(LEGACY_BACKEND))
+#endif // defined(_TARGET_XARCH_)
     if (GetJitTls() != nullptr && JitTls::GetCompiler() != nullptr)
     {
         JITDUMP("getMaxIntrinsicSIMDVectorLength: returning 16\n");
@@ -475,6 +505,15 @@ unsigned Compiler::eeGetArgSize(CORINFO_ARG_LIST_HANDLE list, CORINFO_SIG_INFO* 
             {
                 var_types hfaType = GetHfaType(argClass); // set to float or double if it is an HFA, otherwise TYP_UNDEF
                 bool      isHfa   = (hfaType != TYP_UNDEF);
+#ifndef _TARGET_UNIX_
+                if (info.compIsVarArgs)
+                {
+                    // Arm64 Varargs ABI requires passing in general purpose
+                    // registers. Force the decision of whether this is an HFA
+                    // to false to correctly pass as if it was not an HFA.
+                    isHfa = false;
+                }
+#endif // _TARGET_UNIX_
                 if (!isHfa)
                 {
                     // This struct is passed by reference using a single 'slot'
@@ -491,13 +530,13 @@ unsigned Compiler::eeGetArgSize(CORINFO_ARG_LIST_HANDLE list, CORINFO_SIG_INFO* 
 #endif // FEATURE_MULTIREG_ARGS
 
         // we pass this struct by value in multiple registers
-        return (unsigned)roundUp(structSize, TARGET_POINTER_SIZE);
+        return roundUp(structSize, TARGET_POINTER_SIZE);
     }
     else
     {
         unsigned argSize = sizeof(int) * genTypeStSz(argType);
         assert(0 < argSize && argSize <= sizeof(__int64));
-        return (unsigned)roundUp(argSize, TARGET_POINTER_SIZE);
+        return roundUp(argSize, TARGET_POINTER_SIZE);
     }
 #endif
 }
@@ -524,7 +563,7 @@ GenTree* Compiler::eeGetPInvokeCookie(CORINFO_SIG_INFO* szMetaSig)
 
 unsigned Compiler::eeGetArrayDataOffset(var_types type)
 {
-    return varTypeIsGC(type) ? eeGetEEInfo()->offsetOfObjArrayData : offsetof(CORINFO_Array, u1Elems);
+    return varTypeIsGC(type) ? eeGetEEInfo()->offsetOfObjArrayData : OFFSETOF__CORINFO_Array__data;
 }
 
 //------------------------------------------------------------------------
@@ -609,16 +648,16 @@ void Compiler::eeSetLVcount(unsigned count)
     }
 }
 
-void Compiler::eeSetLVinfo(unsigned                  which,
-                           UNATIVE_OFFSET            startOffs,
-                           UNATIVE_OFFSET            length,
-                           unsigned                  varNum,
-                           unsigned                  LVnum,
-                           VarName                   name,
-                           bool                      avail,
-                           const Compiler::siVarLoc& varLoc)
+void Compiler::eeSetLVinfo(unsigned                          which,
+                           UNATIVE_OFFSET                    startOffs,
+                           UNATIVE_OFFSET                    length,
+                           unsigned                          varNum,
+                           unsigned                          LVnum,
+                           VarName                           name,
+                           bool                              avail,
+                           const CodeGenInterface::siVarLoc* varLoc)
 {
-    // ICorDebugInfo::VarLoc and Compiler::siVarLoc have to overlap
+    // ICorDebugInfo::VarLoc and CodeGenInterface::siVarLoc have to overlap
     // This is checked in siInit()
 
     assert(opts.compScopeInfo);
@@ -630,7 +669,7 @@ void Compiler::eeSetLVinfo(unsigned                  which,
         eeVars[which].startOffset = startOffs;
         eeVars[which].endOffset   = startOffs + length;
         eeVars[which].varNumber   = varNum;
-        eeVars[which].loc         = varLoc;
+        eeVars[which].loc         = *varLoc;
     }
 }
 
@@ -641,7 +680,7 @@ void Compiler::eeSetLVdone()
     assert(opts.compScopeInfo);
 
 #ifdef DEBUG
-    if (verbose)
+    if (verbose || opts.dspDebugInfo)
     {
         eeDispVars(info.compMethodHnd, eeVarsCount, (ICorDebugInfo::NativeVarInfo*)eeVars);
     }
@@ -724,7 +763,7 @@ void Compiler::eeGetVars()
     {
         // Allocate a bit-array for all the variables and initialize to false
 
-        bool*    varInfoProvided = (bool*)compGetMem(info.compLocalsCount * sizeof(varInfoProvided[0]));
+        bool*    varInfoProvided = getAllocator(CMK_Unknown).allocate<bool>(info.compLocalsCount);
         unsigned i;
         for (i = 0; i < info.compLocalsCount; i++)
         {
@@ -798,20 +837,20 @@ void Compiler::eeDispVar(ICorDebugInfo::NativeVarInfo* var)
     printf("%3d(%10s) : From %08Xh to %08Xh, in ", var->varNumber,
            (VarNameToStr(name) == nullptr) ? "UNKNOWN" : VarNameToStr(name), var->startOffset, var->endOffset);
 
-    switch ((Compiler::siVarLocType)var->loc.vlType)
+    switch ((CodeGenInterface::siVarLocType)var->loc.vlType)
     {
-        case VLT_REG:
-        case VLT_REG_BYREF:
-        case VLT_REG_FP:
+        case CodeGenInterface::VLT_REG:
+        case CodeGenInterface::VLT_REG_BYREF:
+        case CodeGenInterface::VLT_REG_FP:
             printf("%s", getRegName(var->loc.vlReg.vlrReg));
-            if (var->loc.vlType == (ICorDebugInfo::VarLocType)VLT_REG_BYREF)
+            if (var->loc.vlType == (ICorDebugInfo::VarLocType)CodeGenInterface::VLT_REG_BYREF)
             {
                 printf(" byref");
             }
             break;
 
-        case VLT_STK:
-        case VLT_STK_BYREF:
+        case CodeGenInterface::VLT_STK:
+        case CodeGenInterface::VLT_STK_BYREF:
             if ((int)var->loc.vlStk.vlsBaseReg != (int)ICorDebugInfo::REGNUM_AMBIENT_SP)
             {
                 printf("%s[%d] (1 slot)", getRegName(var->loc.vlStk.vlsBaseReg), var->loc.vlStk.vlsOffset);
@@ -820,18 +859,18 @@ void Compiler::eeDispVar(ICorDebugInfo::NativeVarInfo* var)
             {
                 printf(STR_SPBASE "'[%d] (1 slot)", var->loc.vlStk.vlsOffset);
             }
-            if (var->loc.vlType == (ICorDebugInfo::VarLocType)VLT_REG_BYREF)
+            if (var->loc.vlType == (ICorDebugInfo::VarLocType)CodeGenInterface::VLT_REG_BYREF)
             {
                 printf(" byref");
             }
             break;
 
 #ifndef _TARGET_AMD64_
-        case VLT_REG_REG:
+        case CodeGenInterface::VLT_REG_REG:
             printf("%s-%s", getRegName(var->loc.vlRegReg.vlrrReg1), getRegName(var->loc.vlRegReg.vlrrReg2));
             break;
 
-        case VLT_REG_STK:
+        case CodeGenInterface::VLT_REG_STK:
             if ((int)var->loc.vlRegStk.vlrsStk.vlrssBaseReg != (int)ICorDebugInfo::REGNUM_AMBIENT_SP)
             {
                 printf("%s-%s[%d]", getRegName(var->loc.vlRegStk.vlrsReg),
@@ -844,10 +883,10 @@ void Compiler::eeDispVar(ICorDebugInfo::NativeVarInfo* var)
             }
             break;
 
-        case VLT_STK_REG:
+        case CodeGenInterface::VLT_STK_REG:
             unreached(); // unexpected
 
-        case VLT_STK2:
+        case CodeGenInterface::VLT_STK2:
             if ((int)var->loc.vlStk2.vls2BaseReg != (int)ICorDebugInfo::REGNUM_AMBIENT_SP)
             {
                 printf("%s[%d] (2 slots)", getRegName(var->loc.vlStk2.vls2BaseReg), var->loc.vlStk2.vls2Offset);
@@ -858,11 +897,11 @@ void Compiler::eeDispVar(ICorDebugInfo::NativeVarInfo* var)
             }
             break;
 
-        case VLT_FPSTK:
+        case CodeGenInterface::VLT_FPSTK:
             printf("ST(L-%d)", var->loc.vlFPstk.vlfReg);
             break;
 
-        case VLT_FIXED_VA:
+        case CodeGenInterface::VLT_FIXED_VA:
             printf("fxd_va[%d]", var->loc.vlFixedVarArg.vlfvOffset);
             break;
 #endif // !_TARGET_AMD64_
@@ -927,7 +966,7 @@ void Compiler::eeSetLIdone()
     assert(opts.compDbgInfo);
 
 #if defined(DEBUG)
-    if (verbose)
+    if (verbose || opts.dspDebugInfo)
     {
         eeDispLineInfos();
     }

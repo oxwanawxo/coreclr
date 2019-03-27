@@ -5,9 +5,6 @@
 // File: DllImport.h
 //
 
-//
-
-
 #ifndef __dllimport_h__
 #define __dllimport_h__
 
@@ -77,9 +74,13 @@ public:
     static HRESULT HasNAT_LAttribute(IMDInternalImport *pInternalImport, mdToken token, DWORD dwMemberAttrs);
 
     static LPVOID NDirectGetEntryPoint(NDirectMethodDesc *pMD, HINSTANCE hMod);
-    static HMODULE LoadLibraryFromPath(LPCWSTR libraryPath);
+    static NATIVE_LIBRARY_HANDLE LoadLibraryFromPath(LPCWSTR libraryPath, BOOL throwOnError);
+    static NATIVE_LIBRARY_HANDLE LoadLibraryByName(LPCWSTR name, Assembly *callingAssembly, 
+                                                   BOOL hasDllImportSearchPathFlags, DWORD dllImportSearchPathFlags, 
+                                                   BOOL throwOnError);
     static HINSTANCE LoadLibraryModule(NDirectMethodDesc * pMD, LoadLibErrorTracker *pErrorTracker);
-
+    static void FreeNativeLibrary(NATIVE_LIBRARY_HANDLE handle);
+    static INT_PTR GetNativeLibraryExport(NATIVE_LIBRARY_HANDLE handle, LPCWSTR symbolName, BOOL throwOnError);
 
     static VOID NDirectLink(NDirectMethodDesc *pMD);
 
@@ -118,18 +119,16 @@ public:
 
     inline static ILStubCache*     GetILStubCache(NDirectStubParameters* pParams);
 
-
-    static BOOL IsHostHookEnabled();
-
-    static Stub *GenerateStubForHost(Module *pModule, CorUnmanagedCallingConvention callConv, WORD wArgSize);
-
 private:
     NDirect() {LIMITED_METHOD_CONTRACT;};     // prevent "new"'s on this class
 
-    static HMODULE LoadFromNativeDllSearchDirectories(AppDomain* pDomain, LPCWSTR libName, DWORD flags, LoadLibErrorTracker *pErrorTracker);
-    static HMODULE LoadFromPInvokeAssemblyDirectory(Assembly *pAssembly, LPCWSTR libName, DWORD flags, LoadLibErrorTracker *pErrorTracker);
-
-    static HMODULE LoadLibraryModuleViaHost(NDirectMethodDesc * pMD, AppDomain* pDomain, const wchar_t* wszLibName);
+    static NATIVE_LIBRARY_HANDLE LoadFromNativeDllSearchDirectories(LPCWSTR libName, DWORD flags, LoadLibErrorTracker *pErrorTracker);
+    static NATIVE_LIBRARY_HANDLE LoadFromPInvokeAssemblyDirectory(Assembly *pAssembly, LPCWSTR libName, DWORD flags, LoadLibErrorTracker *pErrorTracker);
+    static NATIVE_LIBRARY_HANDLE LoadLibraryModuleViaHost(NDirectMethodDesc * pMD, LPCWSTR wszLibName);
+    static NATIVE_LIBRARY_HANDLE LoadLibraryModuleViaEvent(NDirectMethodDesc * pMD, LPCWSTR wszLibName);
+    static NATIVE_LIBRARY_HANDLE LoadLibraryModuleViaCallback(NDirectMethodDesc * pMD, LPCWSTR wszLibName);
+    static NATIVE_LIBRARY_HANDLE LoadLibraryModuleBySearch(NDirectMethodDesc * pMD, LoadLibErrorTracker * pErrorTracker, LPCWSTR wszLibName);
+    static NATIVE_LIBRARY_HANDLE LoadLibraryModuleBySearch(Assembly *callingAssembly, BOOL searchAssemblyDirectory, DWORD dllImportSearchPathFlags, LoadLibErrorTracker * pErrorTracker, LPCWSTR wszLibName);
 
 #if !defined(FEATURE_PAL)
     // Indicates if the OS supports the new secure LoadLibraryEx flags introduced in KB2533623
@@ -344,6 +343,7 @@ private:
     void PreInit(Module* pModule, MethodTable *pClass);
     void PreInit(MethodDesc* pMD);
     void SetError(WORD error) { if (!m_error) m_error = error; }
+    void BestGuessNDirectDefaults(MethodDesc* pMD);
 
 public:     
     DWORD GetStubFlags() 
@@ -569,6 +569,11 @@ protected:
     DWORD               m_dwStubFlags;
 };
 
+// This attempts to guess whether a target is an API call that uses SetLastError to communicate errors.
+BOOL HeuristicDoesThisLooksLikeAnApiCall(LPBYTE pTarget);
+BOOL HeuristicDoesThisLookLikeAGetLastErrorCall(LPBYTE pTarget);
+DWORD STDMETHODCALLTYPE FalseGetLastError();
+
 class NDirectStubParameters
 {
 public:
@@ -624,23 +629,6 @@ PCODE GetStubForInteropMethod(MethodDesc* pMD, DWORD dwStubFlags = 0, MethodDesc
 // Resolve and return the predefined IL stub method
 HRESULT FindPredefinedILStubMethod(MethodDesc *pTargetMD, DWORD dwStubFlags, MethodDesc **ppRetStubMD);
 #endif // FEATURE_COMINTEROP
-
-EXTERN_C BOOL CallNeedsHostHook(size_t target);
-
-//
-// Inlinable implementation allows compiler to strip all code related to host hook
-//
-inline BOOL NDirect::IsHostHookEnabled()
-{
-    LIMITED_METHOD_CONTRACT;
-    return FALSE;
-}
-
-inline BOOL CallNeedsHostHook(size_t target)
-{
-    LIMITED_METHOD_CONTRACT;
-    return FALSE;
-}
 
 // 
 // Limit length of string field in IL stub ETW events so that the whole

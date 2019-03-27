@@ -10,13 +10,13 @@
 #ifndef TIERED_COMPILATION_H
 #define TIERED_COMPILATION_H
 
-#ifdef FEATURE_TIERED_COMPILATION
-
 // TieredCompilationManager determines which methods should be recompiled and
 // how they should be recompiled to best optimize the running code. It then
 // handles logistics of getting new code created and installed.
 class TieredCompilationManager
 {
+#ifdef FEATURE_TIERED_COMPILATION
+
 public:
 #if defined(DACCESS_COMPILE) || defined(CROSSGEN_COMPILE)
     TieredCompilationManager() {}
@@ -26,48 +26,56 @@ public:
 
     void Init(ADID appDomainId);
 
-    void InitiateTier1CountingDelay();
-    void OnTier0JitInvoked();
+#endif // FEATURE_TIERED_COMPILATION
 
-    void OnMethodCalled(MethodDesc* pMethodDesc, DWORD currentCallCount, BOOL* shouldStopCountingCallsRef, BOOL* wasPromotedToTier1Ref);
-    void OnMethodCallCountingStoppedWithoutTier1Promotion(MethodDesc* pMethodDesc);
+public:
+    static NativeCodeVersion::OptimizationTier GetInitialOptimizationTier(PTR_MethodDesc pMethodDesc);
+
+#ifdef FEATURE_TIERED_COMPILATION
+
+public:
+    void OnTier0MethodCalled(MethodDesc* pMethodDesc, bool isFirstCall, int currentCallCountLimit, BOOL* shouldStopCountingCallsRef, BOOL* wasPromotedToNextTierRef);
+    void OnMethodCallCountingStoppedWithoutTierPromotion(MethodDesc* pMethodDesc);
     void AsyncPromoteMethodToTier1(MethodDesc* pMethodDesc);
     void Shutdown();
     static CORJIT_FLAGS GetJitFlags(NativeCodeVersion nativeCodeVersion);
 
 private:
-
-    static VOID WINAPI Tier1DelayTimerCallback(PVOID parameter, BOOLEAN timerFired);
-    static void Tier1DelayTimerCallbackInAppDomain(LPVOID parameter);
-    void Tier1DelayTimerCallbackWorker();
+    bool IsTieringDelayActive();
+    bool TryInitiateTieringDelay();
+    static void WINAPI TieringDelayTimerCallback(PVOID parameter, BOOLEAN timerFired);
+    static void TieringDelayTimerCallbackInAppDomain(LPVOID parameter);
+    void TieringDelayTimerCallbackWorker();
     static void ResumeCountingCalls(MethodDesc* pMethodDesc);
 
+    bool TryAsyncOptimizeMethods();
     static DWORD StaticOptimizeMethodsCallback(void* args);
     void OptimizeMethodsCallback();
+    void OptimizeMethods();
     void OptimizeMethod(NativeCodeVersion nativeCodeVersion);
     NativeCodeVersion GetNextMethodToOptimize();
     BOOL CompileCodeVersion(NativeCodeVersion nativeCodeVersion);
     void ActivateCodeVersion(NativeCodeVersion nativeCodeVersion);
 
-    void IncrementWorkerThreadCount();
+    bool IncrementWorkerThreadCountIfNeeded();
     void DecrementWorkerThreadCount();
+#ifdef _DEBUG
+    DWORD DebugGetWorkerThreadCount();
+#endif
 
-    SpinLock m_lock;
+    Crst m_lock;
     SList<SListElem<NativeCodeVersion>> m_methodsToOptimize;
     ADID m_domainId;
     BOOL m_isAppDomainShuttingDown;
     DWORD m_countOptimizationThreadsRunning;
-    DWORD m_callCountOptimizationThreshhold;
     DWORD m_optimizationQuantumMs;
-
-    SpinLock m_tier1CountingDelayLock;
     SArray<MethodDesc*>* m_methodsPendingCountingForTier1;
-    HANDLE m_tier1CountingDelayTimerHandle;
-    bool m_wasTier0JitInvokedSinceCountingDelayReset;
+    HANDLE m_tieringDelayTimerHandle;
+    bool m_tier1CallCountingCandidateMethodRecentlyRecorded;
 
     CLREvent m_asyncWorkDoneEvent;
-};
 
 #endif // FEATURE_TIERED_COMPILATION
+};
 
 #endif // TIERED_COMPILATION_H

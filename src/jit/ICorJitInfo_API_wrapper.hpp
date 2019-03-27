@@ -395,6 +395,14 @@ BOOL WrapICorJitInfo::isValueClass(CORINFO_CLASS_HANDLE cls)
     return temp;
 }
 
+CorInfoInlineTypeCheck canInlineTypeCheck(CORINFO_CLASS_HANDLE cls, CorInfoInlineTypeCheckSource source)
+{
+    API_ENTER(canInlineTypeCheck);
+    CorInfoInlineTypeCheck temp = wrapHnd->canInlineTypeCheck(cls, source);
+    API_LEAVE(canInlineTypeCheck);
+    return temp;
+}
+
 BOOL WrapICorJitInfo::canInlineTypeCheckWithObjectVTable(CORINFO_CLASS_HANDLE cls)
 {
     API_ENTER(canInlineTypeCheckWithObjectVTable);
@@ -481,6 +489,22 @@ unsigned WrapICorJitInfo::getClassSize(CORINFO_CLASS_HANDLE        cls)
     return temp;
 }
 
+unsigned WrapICorJitInfo::getHeapClassSize(CORINFO_CLASS_HANDLE     cls)
+{
+    API_ENTER(getHeapClassSize);
+    unsigned temp = wrapHnd->getHeapClassSize(cls);
+    API_LEAVE(getHeapClassSize);
+    return temp;
+}
+
+BOOL WrapICorJitInfo::canAllocateOnStack(CORINFO_CLASS_HANDLE    cls)
+{
+    API_ENTER(canAllocateOnStack);
+    BOOL temp = wrapHnd->canAllocateOnStack(cls);
+    API_LEAVE(canAllocateOnStack);
+    return temp;
+}
+
 unsigned WrapICorJitInfo::getClassAlignmentRequirement(
             CORINFO_CLASS_HANDLE        cls,
             BOOL                        fDoubleAlignHint)
@@ -533,10 +557,11 @@ BOOL WrapICorJitInfo::checkMethodModifier(
 
 CorInfoHelpFunc WrapICorJitInfo::getNewHelper(
             CORINFO_RESOLVED_TOKEN * pResolvedToken,
-            CORINFO_METHOD_HANDLE    callerHandle)
+            CORINFO_METHOD_HANDLE    callerHandle,
+            bool * pHasSideEffects)
 {
     API_ENTER(getNewHelper);
-    CorInfoHelpFunc temp = wrapHnd->getNewHelper(pResolvedToken, callerHandle);
+    CorInfoHelpFunc temp = wrapHnd->getNewHelper(pResolvedToken, callerHandle, pHasSideEffects);
     API_LEAVE(getNewHelper);
     return temp;
 }
@@ -1055,12 +1080,13 @@ const char* WrapICorJitInfo::getMethodName(
 }
 
 const char* WrapICorJitInfo::getMethodNameFromMetadata(
-        CORINFO_METHOD_HANDLE       ftn,           /* IN */
-        const char                **className,     /* OUT */
-        const char                **namespaceName  /* OUT */)
+        CORINFO_METHOD_HANDLE       ftn,                 /* IN */
+        const char                **className,           /* OUT */
+        const char                **namespaceName,       /* OUT */
+        const char                **enclosingClassName  /* OUT */)
 {
     API_ENTER(getMethodNameFromMetadata);
-    const char* temp = wrapHnd->getMethodNameFromMetaData(ftn, moduleName, namespaceName);
+    const char* temp = wrapHnd->getMethodNameFromMetaData(ftn, className, namespaceName, enclosingClassName);
     API_LEAVE(getMethodNameFromMetadata);
     return temp;
 }

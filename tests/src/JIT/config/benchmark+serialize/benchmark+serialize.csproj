@@ -23,7 +23,7 @@
       <Version>$(MicrosoftDiagnosticsTracingTraceEventPackageVersion)</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.NETCore.Platforms">
-      <Version>$(MicrosoftNETCorePlatformsPackageVersion)</Version>
+      <Version>$(MicrosoftNETCorePlatformsVersion)</Version>
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
       <Version>7.0.1</Version>
@@ -79,8 +79,8 @@
     <PackageReference Include="xunit">
       <Version>$(XunitPackageVersion)</Version>
     </PackageReference>
-    <PackageReference Include="xunit.console.netcore">
-      <Version>$(XunitConsoleNetcorePackageVersion)</Version>
+    <PackageReference Include="xunit.runner.console">
+      <Version>$(XunitPackageVersion)</Version>
     </PackageReference>
     <PackageReference Include="xunit.runner.utility">
       <Version>$(XunitPackageVersion)</Version>

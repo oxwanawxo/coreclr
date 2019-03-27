@@ -80,9 +80,6 @@ class FieldDesc
 #endif
 
 #ifdef _DEBUG
-    struct {
-        unsigned m_isDangerousAppDomainAgileField : 1;
-    };
     LPUTF8 m_debugName;
 #endif
 
@@ -106,8 +103,6 @@ public:
         m_type = sourceField.m_type;
 
 #ifdef _DEBUG
-        m_isDangerousAppDomainAgileField = sourceField.m_isDangerousAppDomainAgileField;
-
         m_debugName = sourceField.m_debugName;
 #endif // _DEBUG
     }
@@ -138,7 +133,6 @@ public:
               BOOL fIsStatic, 
               BOOL fIsRVA, 
               BOOL fIsThreadLocal, 
-              BOOL fIsContextLocal, 
               LPCSTR pszFieldName);
 
     enum {
@@ -313,22 +307,6 @@ public:
             );
     }
 
-#if defined(_DEBUG)
-    BOOL   IsDangerousAppDomainAgileField()
-    {
-        LIMITED_METHOD_CONTRACT;
-
-        return m_isDangerousAppDomainAgileField;
-    }
-
-    void    SetDangerousAppDomainAgileField()
-    {
-        LIMITED_METHOD_CONTRACT;
-
-        m_isDangerousAppDomainAgileField = TRUE;
-    }
-#endif
-
     BOOL   IsRVA() const               // Has an explicit RVA associated with it
     { 
         LIMITED_METHOD_DAC_CONTRACT;
@@ -341,13 +319,6 @@ public:
         LIMITED_METHOD_DAC_CONTRACT;
 
         return m_isThreadLocal;
-    }
-
-    BOOL   IsContextStatic() const     // Static relative to a context
-    {
-        LIMITED_METHOD_DAC_CONTRACT;
-
-        return FALSE;
     }
 
     // Indicate that this field was added by EnC
@@ -685,7 +656,6 @@ public:
           NOTHROW;
           GC_NOTRIGGER;
           MODE_ANY;
-          SO_TOLERANT;
         }
         CONTRACTL_END
 
@@ -735,7 +705,6 @@ public:
           NOTHROW;
           GC_NOTRIGGER;
           MODE_ANY;
-          SO_TOLERANT;
         }
         CONTRACTL_END
         
@@ -753,7 +722,6 @@ public:
           NOTHROW;
           GC_NOTRIGGER;
           MODE_ANY;
-          SO_TOLERANT;
         }
         CONTRACTL_END
 
@@ -786,34 +754,6 @@ public:
         WRAPPER_NO_CONTRACT;
 
         return IsFdPrivate(GetFieldProtection());
-    }
-
-    BOOL IsNotSerialized()
-    {
-        CONTRACTL
-        {
-            NOTHROW;
-            GC_NOTRIGGER;
-            SO_TOLERANT;
-            MODE_ANY;
-        }
-        CONTRACTL_END;
-
-        MethodTable *pMT = GetApproxEnclosingMethodTable();
-        if (pMT->IsSerializable() && !IsStatic())
-            return pMT->IsFieldNotSerialized(pMT->GetIndexForFieldDesc(this));
-        return IsFdNotSerialized(GetAttributes());
-    }
-
-    // Only safe to call this for non-static fields on serializable types.
-    BOOL IsOptionallySerialized()
-    {
-        WRAPPER_NO_CONTRACT;
-
-        _ASSERTE(!IsStatic() && GetApproxEnclosingMethodTable()->IsSerializable());
-
-        MethodTable *pMT = GetApproxEnclosingMethodTable();
-        return pMT->IsFieldOptionallySerialized(pMT->GetIndexForFieldDesc(this));
     }
 
     IMDInternalImport *GetMDImport()

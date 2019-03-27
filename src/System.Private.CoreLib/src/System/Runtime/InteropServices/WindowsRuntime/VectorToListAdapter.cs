@@ -61,7 +61,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (!exists)
                 return -1;
 
-            if (((uint)Int32.MaxValue) < index)
+            if (((uint)int.MaxValue) < index)
             {
                 throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingListTooLarge);
             }
@@ -102,14 +102,14 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     throw new ArgumentOutOfRangeException(nameof(index));
 
                 throw;
             }
         }
 
-        private static void SetAt<T>(IVector<T> _this, UInt32 index, T value)
+        private static void SetAt<T>(IVector<T> _this, uint index, T value)
         {
             try
             {
@@ -120,7 +120,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     throw new ArgumentOutOfRangeException(nameof(index));
 
                 throw;
@@ -138,7 +138,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     throw new ArgumentOutOfRangeException(nameof(index));
 
                 throw;
@@ -156,7 +156,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     throw new ArgumentOutOfRangeException(nameof(index));
 
                 throw;

@@ -73,15 +73,13 @@ class Pending;
 class MethodTable;
 class AppDomain;
 class DynamicMethodTable;
-struct CerPrepInfo;
+class CodeVersionManager;
+class TieredCompilationManager;
 #ifdef FEATURE_PREJIT
 class CerNgenRootTable;
 struct MethodContextElement;
 class TypeHandleList;
 class ProfileEmitter;
-class CodeVersionManager;
-class CallCounter;
-class TieredCompilationManager;
 class TrackingMap;
 struct MethodInModule;
 class PersistentInlineTrackingMapNGen;
@@ -189,7 +187,7 @@ typedef DPTR(struct LookupMapBase) PTR_LookupMapBase;
 // importantly we cannot mutate compressed entries (for obvious reasons). Many of the lookup maps are only
 // partially populated at ngen time or otherwise might be updated at runtime and thus are not candidates.
 //
-// In the threshhold timeframe (predicted to be .Net 4.5.3 at the time of writing), we added profiler support
+// In the threshhold timeframe (predicted to be .NET Framework 4.5.3 at the time of writing), we added profiler support
 // for adding new types to NGEN images. Historically we could always do this for jitted images, but one of the
 // blockers for NGEN were the compressed RID maps. We worked around that by supporting multi-node maps in which
 // the first node is compressed, but all future nodes are uncompressed. The NGENed portion will all land in the
@@ -508,6 +506,7 @@ typedef DPTR(class MemberRef) PTR_MemberRef;
 #define IS_FIELD_MEMBER_REF ((TADDR)0x00000002)
 
 
+#ifdef FEATURE_PREJIT
 //
 // NGen image layout information that we need to quickly access at runtime
 //
@@ -557,6 +556,8 @@ struct NGenLayoutInfo
     PCODE                   m_pExternalMethodFixupJumpStub;
     DWORD                   m_rvaFilterPersonalityRoutine;
 };
+#endif // FEATURE_PREJIT
+
 
 //
 // VASigCookies are allocated to encapsulate a varargs call signature.
@@ -984,7 +985,7 @@ public:
         LIMITED_METHOD_CONTRACT;
         return (count_t) k->Hash();
     }
-    static const element_t Null() 
+    static element_t Null()
     { 
         LIMITED_METHOD_CONTRACT; 
         return NULL; 
@@ -1406,9 +1407,6 @@ private:
         //If module has default dll import search paths attribute
         DEFAULT_DLL_IMPORT_SEARCH_PATHS_STATUS      = 0x00000800,
 
-        //If attribute value has been cached before
-        NEUTRAL_RESOURCES_LANGUAGE_IS_CACHED = 0x00001000,
-
         //If m_MethodDefToPropertyInfoMap has been generated
         COMPUTED_METHODDEF_TO_PROPERTYINFO_MAP = 0x00002000,
 
@@ -1445,12 +1443,6 @@ private:
 
     // Format the above stream is in (if any)
     ESymbolFormat           m_symbolFormat;
-
-    // Active dependencies
-    ArrayList               m_activeDependencies;
-
-    SynchronizedBitMask     m_unconditionalDependencies;
-    ULONG                   m_dwNumberOfActivations;
 
     // For protecting additions to the heap
     CrstExplicitInit        m_LookupTableCrst;
@@ -1522,10 +1514,6 @@ private:
     ILStubCache                *m_pILStubCache;
 
     ULONG m_DefaultDllImportSearchPathsAttributeValue;
-
-     LPCUTF8 m_pszCultureName;
-     ULONG m_CultureNameLength;
-     INT16 m_FallbackLocation;
 
 #ifdef PROFILING_SUPPORTED_DATA 
      // a wrapper for the underlying PEFile metadata emitter which validates that the metadata edits being
@@ -1622,13 +1610,15 @@ public:
         return (m_dwPersistedFlags & COLLECTIBLE_MODULE) != 0;
     }
 
+#ifdef FEATURE_READYTORUN
+private:
+    PTR_ReadyToRunInfo      m_pReadyToRunInfo;
+#endif
+
 #ifdef FEATURE_PREJIT
 
 private:
     PTR_NGenLayoutInfo      m_pNGenLayoutInfo;
-#ifdef FEATURE_READYTORUN
-    PTR_ReadyToRunInfo      m_pReadyToRunInfo;
-#endif
 
     PTR_ProfilingBlobTable  m_pProfilingBlobTable;   // While performing IBC instrumenting this hashtable is populated with the External defs
     CorProfileData *        m_pProfileData;          // While ngen-ing with IBC optimizations this contains a link to the IBC data for the assembly
@@ -1636,6 +1626,11 @@ private:
     // Profile information
     BOOL                            m_nativeImageProfiling;
     CORCOMPILE_METHOD_PROFILE_LIST *m_methodProfileList;
+
+#if PROFILING_SUPPORTED_DATA 
+    DWORD                   m_dwTypeCount;
+    DWORD                   m_dwExportedTypeCount;
+#endif // PROFILING_SUPPORTED_DATA
 
 #if defined(FEATURE_COMINTEROP)
         public:
@@ -1740,6 +1735,7 @@ protected:
 
     void ApplyMetaData();
 
+    void FixupVTables();
 
     void FreeClassTables();
 
@@ -1796,9 +1792,6 @@ protected:
     PTR_BaseDomain GetDomain();
 #ifdef FEATURE_CODE_VERSIONING
     CodeVersionManager * GetCodeVersionManager();
-#endif
-#ifdef FEATURE_TIERED_COMPILATION
-    CallCounter * GetCallCounter();
 #endif
 
     mdFile GetModuleRef()
@@ -1901,17 +1894,13 @@ protected:
         return m_dwPersistedFlags.LoadWithoutBarrier() & LOW_LEVEL_SYSTEM_ASSEMBLY_BY_NAME;
     }
 
-    BOOL IsIntrospectionOnly();
-
-#ifndef DACCESS_COMMPILE
+#ifndef DACCESS_COMPILE
     VOID EnsureActive();
     VOID EnsureAllocated();    
     VOID EnsureLibraryLoaded();
 #endif
 
     CHECK CheckActivated();
-    ULONG GetNumberOfActivations();
-    ULONG IncrementNumberOfActivations();
 
     IMDInternalImport *GetMDImport() const
     {
@@ -2542,6 +2531,8 @@ public:
                                               DEBUGGER_INFO_SHIFT_PRIV);
     }
 
+    void UpdateNewlyAddedTypes();
+
 #ifdef PROFILING_SUPPORTED
     BOOL IsProfilerNotified() {LIMITED_METHOD_CONTRACT;  return (m_dwTransientFlags & IS_PROFILER_NOTIFIED) != 0; }
     void NotifyProfilerLoadFinished(HRESULT hr);
@@ -2552,13 +2543,6 @@ public:
 
 public:
     void NotifyEtwLoadFinished(HRESULT hr);
-
-    // Get any cached ITypeLib* for the module.
-    ITypeLib *GetTypeLib();
-    // Cache the ITypeLib*, if one is not already cached.
-    void SetTypeLib(ITypeLib *pITLB);
-    ITypeLib *GetTypeLibTCE();
-    void SetTypeLibTCE(ITypeLib *pITLB);
 
     // Enregisters a VASig.
     VASigCookie *GetVASigCookie(Signature vaSignature);
@@ -2574,9 +2558,6 @@ public:
         LIMITED_METHOD_CONTRACT;
         m_pDllMain = pMD;
     }
-
-    BOOL CanExecuteCode();
-
 
     // This data is only valid for NGEN'd modules, and for modules we're creating at NGEN time.
     ModuleCtorInfo* GetZapModuleCtorInfo()
@@ -2609,14 +2590,12 @@ public:
     LPCWSTR GetDebugName() { WRAPPER_NO_CONTRACT; return m_file->GetDebugName(); }
 #endif
 
-    BOOL IsILOnly() { WRAPPER_NO_CONTRACT; return m_file->IsILOnly(); }
-
 #ifdef FEATURE_PREJIT
     BOOL HasNativeImage() 
     { 
         WRAPPER_NO_CONTRACT;
         SUPPORTS_DAC;
-        return m_file->HasNativeImage(); 
+        return m_file->HasNativeImage();
     }
     
     PEImageLayout *GetNativeImage()
@@ -2629,10 +2608,10 @@ public:
             GC_NOTRIGGER;
             SUPPORTS_DAC;
             CANNOT_TAKE_LOCK;
-            SO_TOLERANT;
         }
         CONTRACT_END;
 
+        _ASSERTE(!IsCollectible());
         RETURN m_file->GetLoadedNative();
     }
 #else
@@ -2672,10 +2651,6 @@ public:
     UINT32 GetFieldTlsOffset(DWORD field);
     UINT32 GetTlsIndex();
 
-    PCCOR_SIGNATURE GetSignature(RVA signature);
-    RVA GetSignatureRva(PCCOR_SIGNATURE signature);
-    CHECK CheckSignatureRva(RVA signature);
-    CHECK CheckSignature(PCCOR_SIGNATURE signature);
     BOOL IsSigInIL(PCCOR_SIGNATURE signature);
 
     mdToken GetEntryPointToken();
@@ -2708,69 +2683,6 @@ public:
     // execute.
 
     void AddActiveDependency(Module *pModule, BOOL unconditional);
-
-    // Active dependency iterator
-    class DependencyIterator
-    {
-      protected:
-        ArrayList::Iterator m_i;
-        COUNT_T             m_index;
-        SynchronizedBitMask* m_unconditionalFlags;
-
-        friend class Module;
-
-        DependencyIterator(ArrayList *list, SynchronizedBitMask *unconditionalFlags)
-          : m_index((COUNT_T)-1),
-            m_unconditionalFlags(unconditionalFlags)
-        {
-            WRAPPER_NO_CONTRACT;
-            m_i = list->Iterate();
-        }
-
-      public:
-        Module *GetDependency()
-        {
-            return ((FixupPointer<PTR_Module> *)m_i.GetElementPtr())->GetValue();
-        }
-
-        BOOL Next()
-        {
-            LIMITED_METHOD_CONTRACT;
-            while (m_i.Next())
-            {
-                ++m_index;
-
-#ifdef FEATURE_PREJIT
-                // When iterating all dependencies, we do not restore any tokens
-                // as we want to be lazy.
-                PTR_Module pModule = ((FixupPointer<PTR_Module> *)m_i.GetElementPtr())->GetValue();
-                if (!CORCOMPILE_IS_POINTER_TAGGED(dac_cast<TADDR>(pModule)))
-                    return TRUE;
-
-#else
-                return TRUE;
-#endif
-
-            }
-            return FALSE;
-        }
-        BOOL IsUnconditional()
-        {
-            if (m_unconditionalFlags == NULL)
-                return TRUE;
-            else
-                return m_unconditionalFlags->TestBit(m_index);
-        }
-    };
-
-    DependencyIterator IterateActiveDependencies()
-    {
-        WRAPPER_NO_CONTRACT;
-        return DependencyIterator(&m_activeDependencies, &m_unconditionalDependencies);
-    }
-
-    BOOL HasActiveDependency(Module *pModule);
-    BOOL HasUnconditionalActiveDependency(Module *pModule);
 
     // Turn triggers from this module into runtime checks
     void EnableModuleFailureTriggers(Module *pModule, AppDomain *pDomain);
@@ -2826,6 +2738,7 @@ public:
     BYTE *GetNativeFixupBlobData(RVA fixup);
 
     IMDInternalImport *GetNativeAssemblyImport(BOOL loadAllowed = TRUE);
+    IMDInternalImport *GetNativeAssemblyImportIfLoaded();
 
     BOOL FixupNativeEntry(CORCOMPILE_IMPORT_SECTION * pSection, SIZE_T fixupIndex, SIZE_T *fixup);
 
@@ -2951,25 +2864,6 @@ public:
         return m_pNGenLayoutInfo->m_VirtualMethodThunks.IsInRange(code);
     }
 
-    BOOL IsReadyToRun()
-    {
-        LIMITED_METHOD_DAC_CONTRACT;
-
-#ifdef FEATURE_READYTORUN
-        return m_pReadyToRunInfo != NULL;
-#else
-        return FALSE;
-#endif
-    }
-
-#ifdef FEATURE_READYTORUN
-    PTR_ReadyToRunInfo GetReadyToRunInfo()
-    {
-        LIMITED_METHOD_DAC_CONTRACT;
-        return m_pReadyToRunInfo;
-    }
-#endif
-
     ICorJitInfo::ProfileBuffer * AllocateProfileBuffer(mdToken _token, DWORD _size, DWORD _ILSize);
     HANDLE OpenMethodProfileDataLogFile(GUID mvid);
     static void ProfileDataAllocateTokenLists(ProfileEmitter * pEmitter, TokenProfileData* pTokenProfileData);
@@ -3009,6 +2903,25 @@ public:
     }
 
 #endif  // FEATURE_PREJIT
+
+    BOOL IsReadyToRun()
+    {
+        LIMITED_METHOD_DAC_CONTRACT;
+
+#ifdef FEATURE_READYTORUN
+        return m_pReadyToRunInfo != NULL;
+#else
+        return FALSE;
+#endif
+    }
+
+#ifdef FEATURE_READYTORUN
+    PTR_ReadyToRunInfo GetReadyToRunInfo()
+    {
+        LIMITED_METHOD_DAC_CONTRACT;
+        return m_pReadyToRunInfo;
+    }
+#endif
 
 #ifdef _DEBUG
     //Similar to the ExpandAll we use for NGen, this forces jitting of all methods in a module.  This is
@@ -3162,6 +3075,14 @@ public:
     }
 #endif // FEATURE_PREJIT
 
+    // LoaderHeap for storing IJW thunks
+    PTR_LoaderHeap           m_pThunkHeap;
+
+    // Self-initializing accessor for IJW thunk heap
+    LoaderHeap              *GetThunkHeap();
+    // Self-initializing accessor for domain-independent IJW thunk heap
+    LoaderHeap              *GetDllThunkHeap();
+
     void            EnumRegularStaticGCRefs        (AppDomain* pAppDomain, promote_func* fn, ScanContext* sc);
 
 protected:    
@@ -3254,12 +3175,6 @@ public:
     // instead of parsing the version themselves.
     //-----------------------------------------------------------------------------------------
     BOOL                    IsPreV4Assembly();
-
-
-    //-----------------------------------------------------------------------------------------
-    // Parse/Return NeutralResourcesLanguageAttribute if it exists (updates Module member variables at ngen time)
-    //-----------------------------------------------------------------------------------------
-    BOOL                    GetNeutralResourcesLanguage(LPCUTF8 * cultureName, ULONG * cultureNameLength, INT16 * fallbackLocation, BOOL cacheAttribute);
 
 protected:
 
@@ -3550,11 +3465,5 @@ struct VASigCookieEx : public VASigCookie
 {
     const BYTE *m_pArgs;        // pointer to first unfixed unmanaged arg
 };
-
-inline bool IsSingleAppDomain()
-{
-    // CoreCLR always runs as single AppDomain
-    return true;
-}
 
 #endif // !CEELOAD_H_

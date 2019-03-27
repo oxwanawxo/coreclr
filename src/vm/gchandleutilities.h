@@ -42,7 +42,7 @@ inline OBJECTREF ObjectFromHandle(OBJECTHANDLE handle)
 
 #if defined(_DEBUG_IMPL) && !defined(DACCESS_COMPILE)
     // not allowed to dispatch virtually on a IGCHandleManager when compiling for DAC
-    DWORD context = (DWORD)GCHandleUtilities::GetGCHandleManager()->GetHandleContext(handle);
+    DWORD context = (DWORD)(SIZE_T)GCHandleUtilities::GetGCHandleManager()->GetHandleContext(handle);
     OBJECTREF objRef = ObjectToOBJECTREF(*(Object**)handle);
 
     ValidateObjectAndAppDomain(objRef, ADIndex(context));
@@ -136,6 +136,18 @@ inline OBJECTHANDLE CreateSizedRefHandle(IGCHandleStore* store, OBJECTREF object
     }
 
     DiagHandleCreated(hnd, object);
+    return hnd;
+}
+
+inline OBJECTHANDLE CreateDependentHandle(IGCHandleStore* store, OBJECTREF primary, OBJECTREF secondary)
+{
+    OBJECTHANDLE hnd = store->CreateDependentHandle(OBJECTREFToObject(primary), OBJECTREFToObject(secondary));
+    if (!hnd)
+    {
+        COMPlusThrowOM();
+    }
+
+    DiagHandleCreated(hnd, primary);
     return hnd;
 }
 
@@ -255,7 +267,6 @@ inline void DestroyHandleCommon(OBJECTHANDLE handle, HandleType type)
         GC_NOTRIGGER;
         MODE_ANY;
         CAN_TAKE_LOCK;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -363,7 +374,6 @@ inline void DestroyWinRTWeakHandle(OBJECTHANDLE handle)
         GC_NOTRIGGER;
         MODE_ANY;
         CAN_TAKE_LOCK;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 

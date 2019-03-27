@@ -84,7 +84,7 @@
 //     actually exist yet. To support this methods can have code:Precode that is an entry point that exists
 //     and will call the JIT compiler if the code does not yet exist.
 //     
-//  * NGEN - NGen stands for Native code GENeration and it is the runtime way of precomiling IL and IL
+//  * NGEN - NGen stands for Native code GENeration and it is the runtime way of precompiling IL and IL
 //      Meta-data into native code and runtime data structures. At compilation time the most
 //      fundamental data structures is the code:ZapNode which represents something that needs to go into the
 //      NGEN image.
@@ -144,26 +144,17 @@
 #include "cordbpriv.h"
 #include "comdelegate.h"
 #include "appdomain.hpp"
-#include "perfcounters.h"
-#ifdef FEATURE_IPCMAN
-#include "ipcmanagerinterface.h"
-#endif // FEATURE_IPCMAN
 #include "eventtrace.h"
 #include "corhost.h"
 #include "binder.h"
 #include "olevariant.h"
 #include "comcallablewrapper.h"
 #include "apithreadstress.h"
-#include "ipcfunccall.h"
 #include "perflog.h"
 #include "../dlls/mscorrc/resource.h"
-#ifdef FEATURE_USE_LCID
-#include "nlsinfo.h"
-#endif 
 #include "util.hpp"
 #include "shimload.h"
 #include "comthreadpool.h"
-#include "stackprobe.h"
 #include "posterror.h"
 #include "virtualcallstub.h"
 #include "strongnameinternal.h"
@@ -175,6 +166,7 @@
 #include "finalizerthread.h"
 #include "threadsuspend.h"
 #include "disassembler.h"
+#include "jithost.h"
 
 #ifndef FEATURE_PAL
 #include "dwreport.h"
@@ -223,6 +215,7 @@
 #include "perfmap.h"
 #endif
 
+#include "diagnosticserver.h"
 #include "eventpipe.h"
 
 #ifndef FEATURE_PAL
@@ -234,12 +227,6 @@
 #include "gdbjit.h"
 #endif // FEATURE_GDBJIT
 
-#ifdef FEATURE_IPCMAN
-static HRESULT InitializeIPCManager(void);
-static void PublishIPCManager(void);
-static void TerminateIPCManager(void);
-#endif // FEATURE_IPCMAN
-
 #ifndef CROSSGEN_COMPILE
 static int GetThreadUICultureId(__out LocaleIDValue* pLocale);  // TODO: This shouldn't use the LCID.  We should rely on name instead
 
@@ -248,9 +235,6 @@ static HRESULT GetThreadUICultureNames(__inout StringArrayList* pCultureNames);
 
 HRESULT EEStartup(COINITIEE fFlags);
 
-
-BOOL STDMETHODCALLTYPE ExecuteEXE(HMODULE hMod);
-BOOL STDMETHODCALLTYPE ExecuteEXE(__in LPWSTR pImageNameIn);
 
 #ifndef CROSSGEN_COMPILE
 static void InitializeGarbageCollector();
@@ -431,7 +415,6 @@ HRESULT EnsureEEStarted(COINITIEE flags)
 static BOOL WINAPI DbgCtrlCHandler(DWORD dwCtrlType)
 {
     WRAPPER_NO_CONTRACT;
-    STATIC_CONTRACT_SO_TOLERANT;
 
 #if defined(DEBUGGING_SUPPORTED)
     // Note that if a managed-debugger is attached, it's actually attached with the native
@@ -534,7 +517,6 @@ void InitGSCookie()
     {
         THROWS;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -651,10 +633,6 @@ void EEStartupHelper(COINITIEE fFlags)
 
 #ifndef CROSSGEN_COMPILE
 
-#ifdef _DEBUG
-        DisableGlobalAllocStore();
-#endif //_DEBUG
-
 #ifndef FEATURE_PAL
         ::SetConsoleCtrlHandler(DbgCtrlCHandler, TRUE/*add*/);
 #endif
@@ -683,11 +661,14 @@ void EEStartupHelper(COINITIEE fFlags)
         // This needs to be done before the EE has started
         InitializeStartupFlags();
 
+        MethodDescBackpatchInfoTracker::StaticInitialize();
+
         InitThreadManager();
         STRESS_LOG0(LF_STARTUP, LL_ALWAYS, "Returned successfully from InitThreadManager");
 
 #ifdef FEATURE_PERFTRACING
         // Initialize the event pipe.
+        DiagnosticServer::Initialize();
         EventPipe::Initialize();
 #endif // FEATURE_PERFTRACING
 
@@ -703,14 +684,6 @@ void EEStartupHelper(COINITIEE fFlags)
         // Fire the EE startup ETW event
         ETWFireEvent(EEStartupStart_V1);
 #endif // FEATURE_EVENT_TRACE
-
-#ifdef FEATURE_IPCMAN
-        // Give PerfMon a chance to hook up to us
-        // Do this both *before* and *after* ipcman init so corperfmonext.dll
-        // has a chance to release stale private blocks that IPCMan could collide with.
-        // do this early to maximize window between perfmon refresh and ipc block creation.
-        IPCFuncCallSource::DoThreadSafeCall();
-#endif // FEATURE_IPCMAN
 
         InitGSCookie();
 
@@ -819,23 +792,6 @@ void EEStartupHelper(COINITIEE fFlags)
         }
 #endif // FEATURE_PREJIT
 
-#ifdef FEATURE_IPCMAN
-        // Initialize all our InterProcess Communications with COM+
-        IfFailGoLog(InitializeIPCManager());
-#endif // FEATURE_IPCMAN
-
-#ifdef ENABLE_PERF_COUNTERS
-        hr = PerfCounters::Init();
-        _ASSERTE(SUCCEEDED(hr));
-        IfFailGo(hr);
-#endif
-
-#ifdef FEATURE_IPCMAN
-        // Marks the data in the IPC blocks as initialized so that readers know
-        // that it is safe to read data from the blocks
-        PublishIPCManager();
-#endif //FEATURE_IPCMAN
-
 #ifdef FEATURE_INTERPRETER
         Interpreter::Initialize();
 #endif // FEATURE_INTERPRETER
@@ -877,16 +833,8 @@ void EEStartupHelper(COINITIEE fFlags)
             IfFailGo(E_OUTOFMEMORY);
         }
 
-        // Initialize contexts
-        Context::Initialize();
-
         g_pEEShutDownEvent = new CLREvent();
         g_pEEShutDownEvent->CreateManualEvent(FALSE);
-
-#ifdef FEATURE_IPCMAN
-        // Initialize CCLRSecurityAttributeManager
-        CCLRSecurityAttributeManager::ProcessInit();
-#endif // FEATURE_IPCMAN
 
         VirtualCallStubManager::InitStatic();
 
@@ -907,6 +855,8 @@ void EEStartupHelper(COINITIEE fFlags)
         COMDelegate::Init();
 
         ExecutionManager::Init();
+
+        JitHost::Init();
 
 #ifndef CROSSGEN_COMPILE
 
@@ -960,14 +910,6 @@ void EEStartupHelper(COINITIEE fFlags)
         }
 #endif
 
-#ifdef FEATURE_IPCMAN
-        // Give PerfMon a chance to hook up to us
-        // Do this both *before* and *after* ipcman init so corperfmonext.dll
-        // has a chance to release stale private blocks that IPCMan could collide with.
-        IPCFuncCallSource::DoThreadSafeCall();
-        STRESS_LOG0(LF_STARTUP, LL_ALWAYS, "Returned successfully from second call to  IPCFuncCallSource::DoThreadSafeCall");
-#endif // FEATURE_IPCMAN
-
         InitPreStubManager();
 
 #ifdef FEATURE_COMINTEROP
@@ -989,16 +931,6 @@ void EEStartupHelper(COINITIEE fFlags)
 
         StackwalkCache::Init();
 
-        AppDomain::CreateADUnloadStartEvent();
-
-        // In coreclr, clrjit is compiled into it, but SO work in clrjit has not been done.
-#ifdef FEATURE_STACK_PROBE
-        if (CLRHosted() && GetEEPolicy()->GetActionOnFailure(FAIL_StackOverflow) == eRudeUnloadAppDomain)
-        {
-            InitStackProbes();
-        }
-#endif
-
         // This isn't done as part of InitializeGarbageCollector() above because it
         // requires write barriers to have been set up on x86, which happens as part
         // of InitJITHelpers1.
@@ -1012,8 +944,6 @@ void EEStartupHelper(COINITIEE fFlags)
         // Now we really have fully initialized the garbage collector
         SetGarbageCollectorFullyInitialized();
 
-        InitializePinHandleTable();
-
 #ifdef DEBUGGING_SUPPORTED
         // Make a call to publish the DefaultDomain for the debugger
         // This should be done before assemblies/modules are loaded into it (i.e. SystemDomain::Init)
@@ -1023,11 +953,6 @@ void EEStartupHelper(COINITIEE fFlags)
              SystemDomain::System()->DefaultDomain()));
         SystemDomain::System()->PublishAppDomainAndInformDebugger(SystemDomain::System()->DefaultDomain());
 #endif
-
-#ifdef FEATURE_PERFTRACING
-        // Start the event pipe if requested.
-        EventPipe::EnableOnStartup();
-#endif // FEATURE_PERFTRACING
 
 #endif // CROSSGEN_COMPILE
 
@@ -1041,19 +966,6 @@ void EEStartupHelper(COINITIEE fFlags)
 
         SystemDomain::NotifyProfilerStartup();
 #endif // PROFILING_SUPPORTED
-
-#ifndef CROSSGEN_COMPILE
-        if (CLRHosted()
-#ifdef _DEBUG
-            || ((fFlags & COINITEE_DLL) == 0 &&
-                g_pConfig->GetHostTestADUnload())
-#endif
-           ) {
-                // If we are hosted, a host may specify unloading AD when a managed allocation in
-                // critical region fails.  We need to precreate a thread to unload AD.
-                AppDomain::CreateADUnloadWorker();
-        }
-#endif // CROSSGEN_COMPILE
 
         g_fEEInit = false;
 
@@ -1096,13 +1008,6 @@ void EEStartupHelper(COINITIEE fFlags)
         STRESS_LOG0(LF_STARTUP, LL_ALWAYS, "===================EEStartup Completed===================");
 
 #ifndef CROSSGEN_COMPILE
-
-#ifdef FEATURE_TIERED_COMPILATION
-        if (g_pConfig->TieredCompilation())
-        {
-            SystemDomain::System()->DefaultDomain()->GetTieredCompilationManager()->InitiateTier1CountingDelay();
-        }
-#endif
 
 #ifdef _DEBUG
 
@@ -1231,11 +1136,6 @@ HRESULT EEStartup(COINITIEE fFlags)
     }
     PAL_ENDTRY
 
-#ifndef CROSSGEN_COMPILE
-    if(SUCCEEDED(g_EEStartupStatus) && (fFlags & COINITEE_MAIN) == 0)
-        g_EEStartupStatus = SystemDomain::SetupDefaultDomainNoThrow();
-#endif
-
     return g_EEStartupStatus;
 }
 
@@ -1268,14 +1168,6 @@ void InnerCoEEShutDownCOM()
 
     // Release all of the RCWs in all contexts in all caches.
     ReleaseRCWsInCaches(NULL);
-
-    // Release all marshaling data in all AppDomains
-    AppDomainIterator i(TRUE);
-    while (i.Next())
-        i.GetDomain()->DeleteMarshalingData();
-
-    // Release marshaling data  in shared domain as well
-    SharedDomain::GetDomain()->DeleteMarshalingData();
 
 #ifdef FEATURE_APPX    
     // Cleanup cached factory pointer in SynchronizationContextNative
@@ -1364,7 +1256,7 @@ static void ExternalShutdownHelper(int exitCode, ShutdownCompleteAction sca)
         ENTRY_POINT;
     } CONTRACTL_END;
 
-    CONTRACT_VIOLATION(GCViolation | ModeViolation | SOToleranceViolation);
+    CONTRACT_VIOLATION(GCViolation | ModeViolation);
 
     if (g_fEEShutDown || !g_fEEStarted)
         return;
@@ -1572,6 +1464,7 @@ void STDMETHODCALLTYPE EEShutDownHelper(BOOL fIsDllUnloading)
 #ifdef FEATURE_PERFTRACING
     // Shutdown the event pipe.
     EventPipe::Shutdown();
+    DiagnosticServer::Shutdown();
 #endif // FEATURE_PERFTRACING
 
 #if defined(FEATURE_COMINTEROP)
@@ -1625,11 +1518,7 @@ void STDMETHODCALLTYPE EEShutDownHelper(BOOL fIsDllUnloading)
     {
         ClrFlsSetThreadType(ThreadType_Shutdown);
 
-        if (!fIsDllUnloading)
-        {
-            ProcessEventForHost(Event_ClrDisabled, NULL);
-        }
-        else if (g_fEEShutDown)
+        if (fIsDllUnloading && g_fEEShutDown)
         {
             // I'm in the final shutdown and the first part has already been run.
             goto part2;
@@ -1720,10 +1609,11 @@ void STDMETHODCALLTYPE EEShutDownHelper(BOOL fIsDllUnloading)
 
                     // Acquire the Crst lock before creating the IBCLoggingDisabler object.
                     // Only one thread at a time can be processing an IBC logging event.
-                    CrstHolder lock(g_IBCLogger.GetSync());
+                    CrstHolder lock(IBCLogger::GetSync());
                     {
                         IBCLoggingDisabler disableLogging( pInfo );  // runs IBCLoggingDisabler::DisableLogging
                         
+                        CONTRACT_VIOLATION(GCViolation);
                         Module::WriteAllModuleProfileData(true);
                     }
                 }
@@ -1877,29 +1767,12 @@ part2:
                 }
 #endif /* SHOULD_WE_CLEANUP */
 
-#ifdef ENABLE_PERF_COUNTERS
-                // Terminate Perf Counters as late as we can (to get the most data)
-                PerfCounters::Terminate();
-#endif // ENABLE_PERF_COUNTERS
-
                 //@TODO: find the right place for this
                 VirtualCallStubManager::UninitStatic();
-
-#ifdef FEATURE_IPCMAN
-                // Terminate the InterProcess Communications with COM+
-                TerminateIPCManager();
-#endif // FEATURE_IPCMAN
 
 #ifdef ENABLE_PERF_LOG
                 PerfLog::PerfLogDone();
 #endif //ENABLE_PERF_LOG
-
-#ifdef FEATURE_IPCMAN
-                // Give PerfMon a chance to hook up to us
-                // Have perfmon resync list *after* we close IPC so that it will remove
-                // this process
-                IPCFuncCallSource::DoThreadSafeCall();
-#endif // FEATURE_IPCMAN
 
                 Frame::Term();
 
@@ -1907,8 +1780,6 @@ part2:
                 {
                     SystemDomain::DetachEnd();
                 }
-
-                TerminateStackProbes();
 
                 // Unregister our vectored exception and continue handlers from the OS.
                 // This will ensure that if any other DLL unload (after ours) has an exception,
@@ -2053,9 +1924,6 @@ static LONG s_ActiveShutdownThreadCount = 0;
 // 
 DWORD WINAPI EEShutDownProcForSTAThread(LPVOID lpParameter)
 {
-    STATIC_CONTRACT_SO_INTOLERANT;;
-
-
     ClrFlsSetThreadType(ThreadType_ShutdownHelper);
 
     EEShutDownHelper(FALSE);
@@ -2123,7 +1991,6 @@ void STDMETHODCALLTYPE EEShutDown(BOOL fIsDllUnloading)
         NOTHROW;
         GC_TRIGGERS;
         MODE_ANY;
-        SO_TOLERANT; // we don't need to cleanup 'cus we're shutting down
         PRECONDITION(g_fEEStarted);
     } CONTRACTL_END;
 
@@ -2132,14 +1999,6 @@ void STDMETHODCALLTYPE EEShutDown(BOOL fIsDllUnloading)
     {
         return;
     }
-
-    // Stop stack probing and asserts right away.  Once we're shutting down, we can do no more.
-    // And we don't want to SO-protect anything at this point anyway. This really only has impact
-    // on a debug build.
-    TerminateStackProbes();
-
-    // The process is shutting down.  No need to check SO contract.
-    SO_NOT_MAINLINE_FUNCTION;
 
     // We only do the first part of the shutdown once.
     static LONG OnlyOne = -1;
@@ -2272,7 +2131,6 @@ NOINLINE BOOL CanRunManagedCodeRare(LoaderLockCheck::kind checkKind, HINSTANCE h
         NOTHROW;
         if (checkKind == LoaderLockCheck::ForMDA) { GC_TRIGGERS; } else { GC_NOTRIGGER; }; // because of the CustomerDebugProbe
         MODE_ANY;
-        SO_TOLERANT;
     } CONTRACTL_END;
 
     // If we are shutting down the runtime, then we cannot run code.
@@ -2332,7 +2190,6 @@ BOOL CanRunManagedCode(LoaderLockCheck::kind checkKind, HINSTANCE hInst /*= 0*/)
         NOTHROW;
         if (checkKind == LoaderLockCheck::ForMDA) { GC_TRIGGERS; } else { GC_NOTRIGGER; }; // because of the CustomerDebugProbe
         MODE_ANY;
-        SO_TOLERANT;
     } CONTRACTL_END;
 
     // Special-case the common success cases
@@ -2377,7 +2234,6 @@ HRESULT STDAPICALLTYPE CoInitializeEE(DWORD fFlags)
         NOTHROW;
         GC_TRIGGERS;
         MODE_PREEMPTIVE;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -2421,7 +2277,6 @@ BOOL ExecuteDLL_ReturnOrThrow(HRESULT hr, BOOL fFromThunk)
         if (fFromThunk) THROWS; else NOTHROW;
         WRAPPER(GC_TRIGGERS);
         MODE_ANY;
-        SO_TOLERANT;
     } CONTRACTL_END;
 
     // If we have a failure result, and we're called from a thunk,
@@ -2456,7 +2311,7 @@ void InitializeGarbageCollector()
     // in the object, there is no gc descriptor, and thus no need to adjust
     // the pointer to skip the gc descriptor.
 
-    g_pFreeObjectMethodTable->SetBaseSize(ObjSizeOf (ArrayBase));
+    g_pFreeObjectMethodTable->SetBaseSize(ARRAYBASE_BASESIZE);
     g_pFreeObjectMethodTable->SetComponentSize(1);
 
     hr = GCHeapUtilities::LoadAndInitialize();
@@ -2494,10 +2349,6 @@ BOOL STDMETHODCALLTYPE EEDllMain( // TRUE on success, FALSE on error.
 {
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_TRIGGERS;
-
-    // this runs at the top of a thread, SO is not a concern here...
-    STATIC_CONTRACT_SO_NOT_MAINLINE;
-
 
     // HRESULT hr;
     // BEGIN_EXTERNAL_ENTRYPOINT(&hr);
@@ -2551,12 +2402,6 @@ BOOL STDMETHODCALLTYPE EEDllMain( // TRUE on success, FALSE on error.
                 // should always be non NULL.
                 _ASSERTE(pParam->lpReserved || !g_fEEStarted);
                 g_fProcessDetach = TRUE;
-
-#if defined(ENABLE_CONTRACTS_IMPL) && defined(FEATURE_STACK_PROBE)
-                // We are shutting down process.  No need to check SO contract.
-                // And it is impossible to enforce SO contract in global dtor, like ModIntPairList.
-                g_EnableDefaultRWValidation = FALSE;
-#endif
 
                 if (g_fEEStarted)
                 {
@@ -2633,12 +2478,6 @@ BOOL STDMETHODCALLTYPE EEDllMain( // TRUE on success, FALSE on error.
     }
     return TRUE;
 }
-
-
-#ifdef FEATURE_IPCMAN
-extern CCLRSecurityAttributeManager s_CLRSecurityAttributeManager;
-#endif // FEATURE_IPCMAN
-
 
 #ifdef DEBUGGING_SUPPORTED
 //
@@ -2757,163 +2596,7 @@ static void TerminateDebugger(void)
 
 }
 
-
-#ifdef FEATURE_IPCMAN
-// ---------------------------------------------------------------------------
-// Initialize InterProcess Communications for COM+
-// 1. Allocate an IPCManager Implementation and hook it up to our interface *
-// 2. Call proper init functions to activate relevant portions of IPC block
-// ---------------------------------------------------------------------------
-static HRESULT InitializeIPCManager(void)
-{
-    CONTRACTL{
-        NOTHROW;
-        GC_TRIGGERS;
-        MODE_ANY;
-    } CONTRACTL_END;
-
-    HRESULT hr = S_OK;
-    HINSTANCE hInstIPCBlockOwner = 0;
-
-    DWORD pid = 0;
-    // Allocate the Implementation. Everyone else will work through the interface
-    g_pIPCManagerInterface = new (nothrow) IPCWriterInterface();
-
-    if (g_pIPCManagerInterface == NULL)
-    {
-        hr = E_OUTOFMEMORY;
-        goto errExit;
-    }
-
-    pid = GetCurrentProcessId();
-
-
-    // Do general init
-    hr = g_pIPCManagerInterface->Init();
-
-    if (!SUCCEEDED(hr))
-    {
-        goto errExit;
-    }
-
-    // Generate private IPCBlock for our PID. Note that for the other side of the debugger,
-    // they'll hook up to the debuggee's pid (and not their own). So we still
-    // have to pass the PID in.
-    EX_TRY
-    {
-        // <TODO>This should go away in the future.</TODO>
-        hr = g_pIPCManagerInterface->CreateLegacyPrivateBlockTempV4OnPid(pid, FALSE, &hInstIPCBlockOwner);
-    }
-    EX_CATCH_HRESULT(hr);
-
-    if (hr == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS))
-    {
-        // We failed to create the IPC block because it has already been created. This means that
-        // two mscoree's have been loaded into the process.
-        PathString strFirstModule;
-        PathString strSecondModule;
-        EX_TRY
-        {
-            // Get the name and path of the first loaded MSCOREE.DLL.
-            if (!hInstIPCBlockOwner || !WszGetModuleFileName(hInstIPCBlockOwner, strFirstModule))
-                strFirstModule.Set(W("<Unknown>"));
-
-            // Get the name and path of the second loaded MSCOREE.DLL.
-            if (!WszGetModuleFileName(g_pMSCorEE, strSecondModule))
-               strSecondModule.Set(W("<Unknown>"));
-        }
-        EX_CATCH_HRESULT(hr);
-        // Load the format strings for the title and the message body.
-        EEMessageBoxCatastrophic(IDS_EE_TWO_LOADED_MSCOREE_MSG, IDS_EE_TWO_LOADED_MSCOREE_TITLE, strFirstModule, strSecondModule);
-        goto errExit;
-    }
-    else
-    {
-        PathString temp;
-        if (!WszGetModuleFileName(GetModuleInst(),
-                                  temp
-                                  ))
-        {
-            hr = HRESULT_FROM_GetLastErrorNA();
-        }
-        else
-        {
-            EX_TRY
-            {
-                if (temp.GetCount() + 1 > MAX_LONGPATH)
-                {
-                    hr = E_FAIL;
-                }
-                else
-                {
-                    wcscpy_s((PWSTR)g_pIPCManagerInterface->GetInstancePath(),temp.GetCount() + 1,temp);
-                }
-            }
-            EX_CATCH_HRESULT(hr);
-        }
-    }
-
-    // Generate public IPCBlock for our PID.
-    EX_TRY
-    {
-        hr = g_pIPCManagerInterface->CreateSxSPublicBlockOnPid(pid);
-    }
-    EX_CATCH_HRESULT(hr);
-
-
-errExit:
-    // If any failure, shut everything down.
-    if (!SUCCEEDED(hr))
-        TerminateIPCManager();
-
-    return hr;
-}
-#endif // FEATURE_IPCMAN
-
 #endif // DEBUGGING_SUPPORTED
-
-
-// ---------------------------------------------------------------------------
-// Marks the IPC block as initialized so that other processes know that the
-// block is safe to read
-// ---------------------------------------------------------------------------
-#ifdef FEATURE_IPCMAN
-static void PublishIPCManager(void)
-{
-    CONTRACTL{
-        NOTHROW;
-        GC_NOTRIGGER;
-        MODE_ANY;
-    } CONTRACTL_END;
-
-    if (g_pIPCManagerInterface != NULL)
-        g_pIPCManagerInterface->Publish();
-}
-#endif // FEATURE_IPCMAN
-
-
-
-#ifdef FEATURE_IPCMAN
-// ---------------------------------------------------------------------------
-// Terminate all InterProcess operations
-// ---------------------------------------------------------------------------
-static void TerminateIPCManager(void)
-{
-    CONTRACTL{
-        NOTHROW;
-        GC_NOTRIGGER;
-        MODE_ANY;
-    } CONTRACTL_END;
-
-    if (g_pIPCManagerInterface != NULL)
-    {
-        g_pIPCManagerInterface->Terminate();
-        delete g_pIPCManagerInterface;
-        g_pIPCManagerInterface = NULL;
-    }
-
-}
-#endif // FEATURE_IPCMAN
 
 #ifndef LOCALE_SPARENT
 #define LOCALE_SPARENT 0x0000006d
@@ -2932,7 +2615,6 @@ static HRESULT GetThreadUICultureNames(__inout StringArrayList* pCultureNames)
         GC_NOTRIGGER;
         MODE_ANY;
         PRECONDITION(CheckPointer(pCultureNames));
-        SO_INTOLERANT;
     } 
     CONTRACTL_END;
 
@@ -2943,7 +2625,7 @@ static HRESULT GetThreadUICultureNames(__inout StringArrayList* pCultureNames)
         InlineSString<LOCALE_NAME_MAX_LENGTH> sCulture;
         InlineSString<LOCALE_NAME_MAX_LENGTH> sParentCulture;
 
-
+#if 0 // Enable and test if/once the unmanaged runtime is localized
         Thread * pThread = GetThread();
 
         // When fatal errors have occured our invariants around GC modes may be broken and attempting to transition to co-op may hang
@@ -2968,36 +2650,33 @@ static HRESULT GetThreadUICultureNames(__inout StringArrayList* pCultureNames)
             // and we don't want them moving on us.
             GCX_COOP();
 
-            THREADBASEREF pThreadBase = (THREADBASEREF)pThread->GetExposedObjectRaw();
+            CULTUREINFOBASEREF pCurrentCulture = (CULTUREINFOBASEREF)Thread::GetCulture(TRUE);
 
-            if (pThreadBase != NULL)
+            if (pCurrentCulture != NULL)
             {
-                CULTUREINFOBASEREF pCurrentCulture = pThreadBase->GetCurrentUICulture();
+                STRINGREF cultureName = pCurrentCulture->GetName();
 
-                if (pCurrentCulture != NULL)
+                if (cultureName != NULL)
                 {
-                    STRINGREF cultureName = pCurrentCulture->GetName();
+                    sCulture.Set(cultureName->GetBuffer(),cultureName->GetStringLength());
+                }
 
-                    if (cultureName != NULL)
+                CULTUREINFOBASEREF pParentCulture = pCurrentCulture->GetParent();
+
+                if (pParentCulture != NULL)
+                {
+                    STRINGREF parentCultureName = pParentCulture->GetName();
+
+                    if (parentCultureName != NULL)
                     {
-                        sCulture.Set(cultureName->GetBuffer(),cultureName->GetStringLength());
+                        sParentCulture.Set(parentCultureName->GetBuffer(),parentCultureName->GetStringLength());
                     }
 
-                    CULTUREINFOBASEREF pParentCulture = pCurrentCulture->GetParent();
-
-                    if (pParentCulture != NULL)
-                    {
-                        STRINGREF parentCultureName = pParentCulture->GetName();
-
-                        if (parentCultureName != NULL)
-                        {
-                            sParentCulture.Set(parentCultureName->GetBuffer(),parentCultureName->GetStringLength());
-                        }
-
-                    }
                 }
             }
         }
+#endif
+
         // If the lazily-initialized cultureinfo structures aren't initialized yet, we'll
         // need to do the lookup the hard way.
         if (sCulture.IsEmpty() || sParentCulture.IsEmpty())
@@ -3055,7 +2734,6 @@ void SetLatchedExitCode (INT32 code)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -3083,7 +2761,6 @@ static int GetThreadUICultureId(__out LocaleIDValue* pLocale)
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_INTOLERANT;;
     } CONTRACTL_END;
 
 
@@ -3092,6 +2769,7 @@ static int GetThreadUICultureId(__out LocaleIDValue* pLocale)
 
     Thread * pThread = GetThread();
 
+#if 0 // Enable and test if/once the unmanaged runtime is localized
     // When fatal errors have occured our invariants around GC modes may be broken and attempting to transition to co-op may hang
     // indefinately. We want to ensure a clean exit so rather than take the risk of hang we take a risk of the error resource not
     // getting localized with a non-default thread-specific culture.
@@ -3114,21 +2792,18 @@ static int GetThreadUICultureId(__out LocaleIDValue* pLocale)
         // and we don't want them moving on us.
         GCX_COOP();
 
-        THREADBASEREF pThreadBase = (THREADBASEREF)pThread->GetExposedObjectRaw();
-        if (pThreadBase != NULL)
+        CULTUREINFOBASEREF pCurrentCulture = (CULTUREINFOBASEREF)Thread::GetCulture(TRUE);
+
+        if (pCurrentCulture != NULL)
         {
-            CULTUREINFOBASEREF pCurrentCulture = pThreadBase->GetCurrentUICulture();
+            STRINGREF cultureName = pCurrentCulture->GetName();
+            _ASSERT(cultureName != NULL);
 
-            if (pCurrentCulture != NULL)
-            {
-                STRINGREF cultureName = pCurrentCulture->GetName();
-                _ASSERT(cultureName != NULL);
-
-                if ((Result = ::LocaleNameToLCID(cultureName->GetBuffer(), 0)) == 0)
-                    Result = (int)UICULTUREID_DONTCARE;
-            }
+            if ((Result = ::LocaleNameToLCID(cultureName->GetBuffer(), 0)) == 0)
+                Result = (int)UICULTUREID_DONTCARE;
         }
     }
+#endif
 
     if (Result == (int)UICULTUREID_DONTCARE)
     {
@@ -3158,7 +2833,6 @@ static int GetThreadUICultureId(__out LocaleIDValue* pLocale)
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_INTOLERANT;;
     } CONTRACTL_END;
 
     _ASSERTE(sizeof(LocaleIDValue)/sizeof(WCHAR) >= LOCALE_NAME_MAX_LENGTH);
@@ -3167,6 +2841,7 @@ static int GetThreadUICultureId(__out LocaleIDValue* pLocale)
 
     Thread * pThread = GetThread();
 
+#if 0 // Enable and test if/once the unmanaged runtime is localized
     // When fatal errors have occured our invariants around GC modes may be broken and attempting to transition to co-op may hang
     // indefinately. We want to ensure a clean exit so rather than take the risk of hang we take a risk of the error resource not
     // getting localized with a non-default thread-specific culture.
@@ -3190,29 +2865,25 @@ static int GetThreadUICultureId(__out LocaleIDValue* pLocale)
         // and we don't want them moving on us.
         GCX_COOP();
 
-        THREADBASEREF pThreadBase = (THREADBASEREF)pThread->GetExposedObjectRaw();
-        if (pThreadBase != NULL)
+        CULTUREINFOBASEREF pCurrentCulture = (CULTUREINFOBASEREF)Thread::GetCulture(TRUE);
+
+        if (pCurrentCulture != NULL)
         {
-            CULTUREINFOBASEREF pCurrentCulture = pThreadBase->GetCurrentUICulture();
+            STRINGREF currentCultureName = pCurrentCulture->GetName();
 
-            if (pCurrentCulture != NULL)
+            if (currentCultureName != NULL)
             {
-                STRINGREF currentCultureName = pCurrentCulture->GetName();
-
-                if (currentCultureName != NULL)
+                int cchCurrentCultureNameResult = currentCultureName->GetStringLength();
+                if (cchCurrentCultureNameResult < LOCALE_NAME_MAX_LENGTH)
                 {
-                    int cchCurrentCultureNameResult = currentCultureName->GetStringLength();
-                    if (cchCurrentCultureNameResult < LOCALE_NAME_MAX_LENGTH)
-                    {
-                        memcpy(*pLocale, currentCultureName->GetBuffer(), cchCurrentCultureNameResult*sizeof(WCHAR));
-                        (*pLocale)[cchCurrentCultureNameResult]='\0';
-                        Result=cchCurrentCultureNameResult;
-                    }
+                    memcpy(*pLocale, currentCultureName->GetBuffer(), cchCurrentCultureNameResult*sizeof(WCHAR));
+                    (*pLocale)[cchCurrentCultureNameResult]='\0';
+                    Result=cchCurrentCultureNameResult;
                 }
-
             }
         }
     }
+#endif
     if (Result == 0)
     {
 #ifndef FEATURE_PAL
@@ -3243,7 +2914,6 @@ BOOL AreAnyViolationBitsOn()
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;

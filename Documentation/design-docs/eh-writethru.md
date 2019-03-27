@@ -61,7 +61,7 @@ There are a number of wrinkles informing this design based on how the JIT models
 - The jit does not model which handlers are reachable from a given protected region,
   so considers a variable live into a handler if it is live into any handler in the method.
 
-It is posible to do better than the "store every definition" approch outlined
+It is posible to do better than the "store every definition" approach outlined
 in the design, but the expectation is that this would require posibly
 modifying the model in the JIT and staging more throughput intensive analyses.
 With these considerations this design was selected and further improvements
@@ -88,7 +88,7 @@ the more expensive analysis out of the startup path.
 On the IR directly before SSA build:
 - Run global liveness to identify local vars that cross EH boundaries (as a
   byproduct of this these local vars are marked "do not enregister")
-- Foreach EH local var create a new local var "proxy" that can be enregisterd.
+- Foreach EH local var create a new local var "proxy" that can be enregistered.
 - Iterate each block in the flow graph doing the following:
   * Foreach tree in block do a post order traversal and
     - Replace all appearances of EH local vars with the defined proxy

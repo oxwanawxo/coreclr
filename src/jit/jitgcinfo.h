@@ -91,7 +91,6 @@ public:
     void gcMarkRegSetByref(regMaskTP regMask DEBUGARG(bool forceOutput = false));
     void gcMarkRegSetNpt(regMaskTP regMask DEBUGARG(bool forceOutput = false));
     void gcMarkRegPtrVal(regNumber reg, var_types type);
-    void gcMarkRegPtrVal(GenTree* tree);
 
 #ifdef DEBUG
     void gcDspGCrefSetChanges(regMaskTP gcRegGCrefSetNew DEBUGARG(bool forceOutput = false));
@@ -321,7 +320,7 @@ public:
     };
 
     WriteBarrierForm gcIsWriteBarrierCandidate(GenTree* tgt, GenTree* assignVal);
-    bool gcIsWriteBarrierAsgNode(GenTree* op);
+    bool gcIsWriteBarrierStoreIndNode(GenTree* op);
 
     // Returns a WriteBarrierForm decision based on the form of "tgtAddr", which is assumed to be the
     // argument of a GT_IND LHS.
@@ -386,11 +385,9 @@ private:
 #endif // JIT32_GCENCODER
 #endif // DUMP_GC_TABLES
 
-#ifndef LEGACY_BACKEND
-    // This method updates the appropriate reg masks when a variable is moved.
 public:
+    // This method updates the appropriate reg masks when a variable is moved.
     void gcUpdateForRegVarMove(regMaskTP srcMask, regMaskTP dstMask, LclVarDsc* varDsc);
-#endif // !LEGACY_BACKEND
 
 private:
     ReturnKind getReturnKind();

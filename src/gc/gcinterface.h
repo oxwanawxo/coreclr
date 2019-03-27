@@ -7,7 +7,7 @@
 
 // The major version of the GC/EE interface. Breaking changes to this interface
 // require bumps in the major version number.
-#define GC_INTERFACE_MAJOR_VERSION 1
+#define GC_INTERFACE_MAJOR_VERSION 3
 
 // The minor version of the GC/EE interface. Non-breaking changes are required
 // to bump the minor version number. GCs and EEs with minor version number
@@ -174,10 +174,7 @@ struct segment_info
 };
 
 #ifdef PROFILING_SUPPORTED
-#ifndef BUILD_AS_STANDALONE
-// [LOCALGC TODO] Enable profiling (GitHub #11515)
 #define GC_PROFILING       //Turn on profiling
-#endif // BUILD_AS_STANDALONE
 #endif // PROFILING_SUPPORTED
 
 #define LARGE_OBJECT_SIZE ((size_t)(85000))
@@ -201,6 +198,16 @@ extern uint8_t* g_GCShadowEnd;
 // saves the g_lowest_address in between GCs to verify the consistency of the shadow segment
 extern uint8_t* g_shadow_lowest_address;
 #endif
+
+/*
+ * GCEventProvider represents one of the two providers that the GC can
+ * fire events from: the default and private providers.
+ */
+enum GCEventProvider
+{
+    GCEventProvider_Default = 0,
+    GCEventProvider_Private = 1
+};
 
 // Event levels corresponding to events that can be fired by the GC.
 enum GCEventLevel
@@ -581,7 +588,7 @@ public:
     */
 
     // Finalizes an app domain by finalizing objects within that app domain.
-    virtual bool FinalizeAppDomain(AppDomain* pDomain, bool fRunFinalizers) = 0;
+    virtual bool FinalizeAppDomain(void* pDomain, bool fRunFinalizers) = 0;
 
     // Finalizes all registered objects for shutdown, even if they are still reachable.
     virtual void SetFinalizeQueueForShutdown(bool fHasLock) = 0;
@@ -721,7 +728,7 @@ public:
 
     // "Fixes" an allocation context by binding its allocation pointer to a
     // location on the heap.
-    virtual void FixAllocContext(gc_alloc_context* acontext, bool lockp, void* arg, void* heap) = 0;
+    virtual void FixAllocContext(gc_alloc_context* acontext, void* arg, void* heap) = 0;
 
     // Gets the total survived size plus the total allocated bytes on the heap.
     virtual size_t GetCurrentObjSize() = 0;
@@ -736,7 +743,7 @@ public:
     virtual void SetSuspensionPending(bool fSuspensionPending) = 0;
 
     // Tells the GC how many YieldProcessor calls are equal to one scaled yield processor call.
-    virtual void SetYieldProcessorScalingFactor(uint32_t yieldProcessorScalingFactor) = 0;
+    virtual void SetYieldProcessorScalingFactor(float yieldProcessorScalingFactor) = 0;
 
     /*
     ============================================================================
@@ -871,6 +878,9 @@ public:
     // Unregisters a frozen segment.
     virtual void UnregisterFrozenSegment(segment_handle seg) = 0;
 
+    // Indicates whether an object is in a frozen segment.
+    virtual bool IsInFrozenSegment(Object *object) = 0;
+
     /*
     ===========================================================================
     Routines for informing the GC about which events are enabled.
@@ -923,12 +933,7 @@ struct ScanContext
 #else
     void* _unused1;
 #endif //FEATURE_APPDOMAIN_RESOURCE_MONITORING || DACCESS_COMPILE
-
-#if defined(GC_PROFILING) || defined (DACCESS_COMPILE)
-    MethodDesc *pMD;
-#else
-    void* _unused2;
-#endif //GC_PROFILING || DACCESS_COMPILE
+    void* pMD;
 #if defined(GC_PROFILING) || defined(FEATURE_EVENT_TRACE)
     EtwGCRootKind dwEtwRootKind;
 #else
@@ -944,9 +949,7 @@ struct ScanContext
         stack_limit = 0;
         promotion = false;
         concurrent = false;
-#ifdef GC_PROFILING
         pMD = NULL;
-#endif //GC_PROFILING
 #if defined(GC_PROFILING) || defined(FEATURE_EVENT_TRACE)
         dwEtwRootKind = kEtwGCRootKindOther;
 #endif

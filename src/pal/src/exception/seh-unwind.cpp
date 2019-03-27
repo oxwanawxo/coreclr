@@ -31,10 +31,14 @@ Abstract:
 // Sub-headers included from the libunwind.h contain an empty struct
 // and clang issues a warning. Until the libunwind is fixed, disable
 // the warning.
+#ifdef __llvm__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wextern-c-compat"
+#endif
 #include <libunwind.h>
+#ifdef __llvm__
 #pragma clang diagnostic pop
+#endif
 
 //----------------------------------------------------------------------
 // Virtual Unwinding
@@ -329,14 +333,13 @@ BOOL PAL_VirtualUnwind(CONTEXT *context, KNONVOLATILE_CONTEXT_POINTERS *contextP
     //
     UnwindContextToWinContext(&cursor, context);
 
-    // FreeBSD, NetBSD, OSX and Alpine appear to do two different things when unwinding
-    // 1: If it reaches where it cannot unwind anymore, say a 
-    // managed frame.  It will return 0, but also update the $pc
-    // 2: If it unwinds all the way to _start it will return
-    // 0 from the step, but $pc will stay the same.
+    // On some OSes / architectures if it unwound all the way to _start
+    // (__libc_start_main on arm64 Linux with glibc older than 2.27).
+    // >= 0 is returned from the step, but $pc will stay the same.
     // So we detect that here and set the $pc to NULL in that case.
-    // This is the default behavior of the libunwind on Linux.
-    if (st == 0 && CONTEXTGetPC(context) == curPc)
+    // This is the default behavior of the libunwind on x64 Linux.
+    // 
+    if (st >= 0 && CONTEXTGetPC(context) == curPc)
     {
         CONTEXTSetPC(context, 0);
     }
@@ -445,7 +448,7 @@ Note:
 --*/
 PAL_NORETURN
 __attribute__((noinline))
-__attribute__((optnone))
+__attribute__((NOOPT_ATTRIBUTE))
 static void 
 RtlpRaiseException(EXCEPTION_RECORD *ExceptionRecord, CONTEXT *ContextRecord)
 {

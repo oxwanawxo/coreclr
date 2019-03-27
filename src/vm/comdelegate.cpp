@@ -405,6 +405,10 @@ VOID GenerateShuffleArray(MethodDesc* pInvoke, MethodDesc *pTargetMeth, SArray<S
     {
         // The return buffer argument is implicit in both signatures.
 
+#if !defined(_TARGET_ARM64_) || !defined(CALLDESCR_RETBUFFARGREG)
+        // The ifdef above disables this code if the ret buff arg is always in the same register, which
+        // means that we don't need to do any shuffling for it.
+
         sArgPlacerSrc.GetRetBuffArgLoc(&sArgSrc);
         sArgPlacerDst.GetRetBuffArgLoc(&sArgDst);
 
@@ -419,6 +423,7 @@ VOID GenerateShuffleArray(MethodDesc* pInvoke, MethodDesc *pTargetMeth, SArray<S
         // along) in the case where it's not a no-op (i.e. the source and destination ops are different).
         if (entry.srcofs != entry.dstofs)
             pShuffleEntryArray->Append(entry);
+#endif // !defined(_TARGET_ARM64_) || !defined(CALLDESCR_RETBUFFARGREG)
     }
 
     // Iterate all the regular arguments. mapping source registers and stack locations to the corresponding
@@ -474,7 +479,7 @@ VOID GenerateShuffleArray(MethodDesc* pInvoke, MethodDesc *pTargetMeth, SArray<S
         {
             filledSlots[i] = false;
         }
-        for (int i = 0; i < pShuffleEntryArray->GetCount(); i++)
+        for (unsigned int i = 0; i < pShuffleEntryArray->GetCount(); i++)
         {
             entry = (*pShuffleEntryArray)[i];
 
@@ -482,7 +487,7 @@ VOID GenerateShuffleArray(MethodDesc* pInvoke, MethodDesc *pTargetMeth, SArray<S
             // of the entry that filled it in.
             if (filledSlots[GetNormalizedArgumentSlotIndex(entry.srcofs)])
             {
-                int j;
+                unsigned int j;
                 for (j = i; (*pShuffleEntryArray)[j].dstofs != entry.srcofs; j--)
                     (*pShuffleEntryArray)[j] = (*pShuffleEntryArray)[j - 1];
 
@@ -502,51 +507,6 @@ VOID GenerateShuffleArray(MethodDesc* pInvoke, MethodDesc *pTargetMeth, SArray<S
 #endif
 }
 
-
-class ShuffleThunkCache : public StubCacheBase
-{
-private:
-    //---------------------------------------------------------
-    // Compile a static delegate shufflethunk. Always returns
-    // STANDALONE since we don't interpret these things.
-    //---------------------------------------------------------
-    virtual void CompileStub(const BYTE *pRawStub,
-                             StubLinker *pstublinker)
-    {
-        STANDARD_VM_CONTRACT;
-
-        ((CPUSTUBLINKER*)pstublinker)->EmitShuffleThunk((ShuffleEntry*)pRawStub);
-    }
-
-    //---------------------------------------------------------
-    // Tells the StubCacheBase the length of a ShuffleEntryArray.
-    //---------------------------------------------------------
-    virtual UINT Length(const BYTE *pRawStub)
-    {
-        LIMITED_METHOD_CONTRACT;
-        ShuffleEntry *pse = (ShuffleEntry*)pRawStub;
-        while (pse->srcofs != ShuffleEntry::SENTINEL)
-        {
-            pse++;
-        }
-        return sizeof(ShuffleEntry) * (UINT)(1 + (pse - (ShuffleEntry*)pRawStub));
-    }
-
-    virtual void AddStub(const BYTE* pRawStub, Stub* pNewStub)
-    {
-        CONTRACTL
-        {
-            THROWS;
-            GC_NOTRIGGER;
-            MODE_ANY;
-        }
-        CONTRACTL_END;
-
-#ifndef CROSSGEN_COMPILE
-        DelegateInvokeStubManager::g_pManager->AddStub(pNewStub);
-#endif
-    }
-};
 
 ShuffleThunkCache *COMDelegate::m_pShuffleThunkCache = NULL;
 MulticastStubCache *COMDelegate::m_pSecureDelegateStubCache = NULL;
@@ -574,7 +534,7 @@ void COMDelegate::Init()
     LockOwner lock = {&COMDelegate::s_DelegateToFPtrHashCrst, IsOwnerOfCrst};
     s_pDelegateToFPtrHash->Init(TRUE, &lock);
 
-    m_pShuffleThunkCache = new ShuffleThunkCache();
+    m_pShuffleThunkCache = new ShuffleThunkCache(SystemDomain::GetGlobalLoaderAllocator()->GetStubHeap());
     m_pMulticastStubCache = new MulticastStubCache();
     m_pSecureDelegateStubCache = new MulticastStubCache();
 }
@@ -637,7 +597,15 @@ Stub* COMDelegate::SetupShuffleThunk(MethodTable * pDelMT, MethodDesc *pTargetMe
     StackSArray<ShuffleEntry> rShuffleEntryArray;
     GenerateShuffleArray(pMD, pTargetMeth, &rShuffleEntryArray);
 
-    Stub* pShuffleThunk = m_pShuffleThunkCache->Canonicalize((const BYTE *)&rShuffleEntryArray[0]);
+    ShuffleThunkCache* pShuffleThunkCache = m_pShuffleThunkCache;
+
+    LoaderAllocator* pLoaderAllocator = pDelMT->GetLoaderAllocator();
+    if (pLoaderAllocator->IsCollectible())
+    {
+        pShuffleThunkCache = ((AssemblyLoaderAllocator*)pLoaderAllocator)->GetShuffleThunkCache();
+    }
+
+    Stub* pShuffleThunk = pShuffleThunkCache->Canonicalize((const BYTE *)&rShuffleEntryArray[0]);
     if (!pShuffleThunk)
     {
         COMPlusThrowOM();
@@ -719,13 +687,6 @@ FCIMPL5(FC_BOOL_RET, COMDelegate::BindToMethodName,
 
     TypeHandle methodType = gc.refMethodType->GetType();
 
-    //We should thrown an exception if the assembly doesn't have run access.
-    //That would be a breaking change from V2.
-    //
-    //Assembly *pAssem = methodType.GetAssembly();
-    //if (pAssem->IsDynamic() && !pAssem->HasRunAccess())
-    //    FCThrowRes(kNotSupportedException, W("NotSupported_DynamicAssemblyNoRunAccess"));
-
     MethodDesc *pMatchingMethod = NULL;
 
     HELPER_METHOD_FRAME_BEGIN_RET_PROTECT(gc);
@@ -734,7 +695,7 @@ FCIMPL5(FC_BOOL_RET, COMDelegate::BindToMethodName,
     // performance gain in some reflection emit scenarios.
     MethodTable::AllowMethodDataCaching();
 
-    TypeHandle targetType((gc.target != NULL) ? gc.target->GetTrueMethodTable() : NULL);
+    TypeHandle targetType((gc.target != NULL) ? gc.target->GetMethodTable() : NULL);
     // get the invoke of the delegate
     MethodTable * pDelegateType = gc.refThis->GetMethodTable();
     MethodDesc* pInvokeMeth = COMDelegate::FindDelegateInvokeMethod(pDelegateType);
@@ -850,13 +811,6 @@ FCIMPL5(FC_BOOL_RET, COMDelegate::BindToMethodInfo, Object* refThisUNSAFE, Objec
 
     MethodTable *pMethMT = gc.refMethodType->GetType().GetMethodTable();
     MethodDesc *method = gc.refMethod->GetMethod();
-
-    //We should thrown an exception if the assembly doesn't have run access.
-    //That would be a breaking change from V2.
-    //
-    //Assembly *pAssem = pMethMT->GetAssembly();
-    //if (pAssem->IsDynamic() && !pAssem->HasRunAccess())
-    //    FCThrowRes(kNotSupportedException, W("NotSupported_DynamicAssemblyNoRunAccess"));
 
     HELPER_METHOD_FRAME_BEGIN_RET_PROTECT(gc);
 
@@ -1064,7 +1018,7 @@ void COMDelegate::BindToMethod(DELEGATEREF   *pRefThis,
         else
 #ifdef HAS_THISPTR_RETBUF_PRECODE
         if (pTargetMethod->IsStatic() && pTargetMethod->HasRetBuffArg() && IsRetBuffPassedAsFirstArg())
-            pTargetCode = pTargetMethod->GetLoaderAllocatorForCode()->GetFuncPtrStubs()->GetFuncPtrStub(pTargetMethod, PRECODE_THISPTR_RETBUF);
+            pTargetCode = pTargetMethod->GetLoaderAllocator()->GetFuncPtrStubs()->GetFuncPtrStub(pTargetMethod, PRECODE_THISPTR_RETBUF);
         else
 #endif // HAS_THISPTR_RETBUF_PRECODE
             pTargetCode = pTargetMethod->GetMultiCallableAddrOfCode();
@@ -1108,8 +1062,8 @@ PCODE COMDelegate::ConvertToCallback(MethodDesc* pMD)
     if (NDirect::MarshalingRequired(pMD, pMD->GetSig(), pMD->GetModule()))
         COMPlusThrow(kNotSupportedException, W("NotSupported_NonBlittableTypes"));
 
-    // Get UMEntryThunk from appdomain thunkcache cache.
-    UMEntryThunk *pUMEntryThunk = GetAppDomain()->GetUMEntryThunkCache()->GetUMEntryThunk(pMD);
+    // Get UMEntryThunk from the thunk cache.
+    UMEntryThunk *pUMEntryThunk = pMD->GetLoaderAllocator()->GetUMEntryThunkCache()->GetUMEntryThunk(pMD);
 
 #if defined(_TARGET_X86_) && !defined(FEATURE_STUBS_AS_IL)
 
@@ -1176,9 +1130,6 @@ LPVOID COMDelegate::ConvertToCallback(OBJECTREF pDelegateObj)
 
     if (pMT->HasInstantiation())
         COMPlusThrowArgumentException(W("delegate"), W("Argument_NeedNonGenericType"));
-
-    if (pMT->Collectible())
-        COMPlusThrow(kNotSupportedException, W("NotSupported_CollectibleDelegateMarshal"));
 
     // If we are a delegate originally created from an unmanaged function pointer, we will simply return 
     // that function pointer.
@@ -1370,9 +1321,6 @@ OBJECTREF COMDelegate::ConvertToDelegate(LPVOID pCallback, MethodTable* pMT)
     DelegateEEClass*    pClass      = (DelegateEEClass*)pMT->GetClass();
     MethodDesc*         pMD         = FindDelegateInvokeMethod(pMT);
 
-    if (pMT->Collectible())
-        COMPlusThrow(kNotSupportedException, W("NotSupported_CollectibleDelegateMarshal"));
-
     PREFIX_ASSUME(pClass != NULL);
 
     //////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1433,15 +1381,12 @@ OBJECTREF COMDelegate::ConvertToDelegate(LPVOID pCallback, MethodTable* pMT)
         MethodDesc *pStubMD = pClass->m_pForwardStubMD;
         _ASSERTE(pStubMD != NULL && pStubMD->IsILStub());
 
-
-#ifdef MDA_SUPPORTED
+#if defined(MDA_SUPPORTED)
         if (MDA_GET_ASSISTANT(PInvokeStackImbalance))
         {
             pInterceptStub = GenerateStubForMDA(pMD, pStubMD, pCallback, pInterceptStub);
         }
 #endif // MDA_SUPPORTED
-
-
     }
 
     if (pInterceptStub != NULL)
@@ -1454,7 +1399,7 @@ OBJECTREF COMDelegate::ConvertToDelegate(LPVOID pCallback, MethodTable* pMT)
     }
 
     GCPROTECT_END();
-#endif // defined(_TARGET_X86_)
+#endif // _TARGET_X86_
 
     return delObj;
 }
@@ -1475,9 +1420,6 @@ OBJECTREF COMDelegate::ConvertWinRTInterfaceToDelegate(IUnknown *pIdentity, Meth
     CONTRACTL_END;
 
     MethodDesc*         pMD         = FindDelegateInvokeMethod(pMT);
-
-    if (pMT->Collectible())
-        COMPlusThrow(kNotSupportedException, W("NotSupported_CollectibleDelegateMarshal"));
 
     if (pMD->IsSharedByGenericInstantiations())
     {
@@ -1674,13 +1616,10 @@ FCIMPL3(PCODE, COMDelegate::AdjustTarget, Object* refThisUNSAFE, Object* targetU
 
     _ASSERTE(refThis);
     _ASSERTE(method);
-    
-    MethodTable *pRealMT = target->GetTrueMethodTable();
 
     MethodTable *pMT = target->GetMethodTable();
-    _ASSERTE((NULL == pMT) || pMT->IsTransparentProxy() || !pRealMT->IsContextful());
 
-    MethodDesc *pMeth = Entry2MethodDesc(method, pRealMT);
+    MethodDesc *pMeth = Entry2MethodDesc(method, pMT);
     _ASSERTE(pMeth);
     _ASSERTE(!pMeth->IsStatic());
 
@@ -1694,45 +1633,42 @@ FCIMPL3(PCODE, COMDelegate::AdjustTarget, Object* refThisUNSAFE, Object* targetU
     isComObject = pMTTarg->IsComObjectType();
 #endif // FEATURE_COMINTEROP
     
-    if (!pMT->IsTransparentProxy())
-    {
-        MethodDesc *pCorrectedMethod = pMeth;
+    MethodDesc *pCorrectedMethod = pMeth;
 
-        if (pMTMeth != pMTTarg)
+    if (pMTMeth != pMTTarg)
+    {
+        //They cast to an interface before creating the delegate, so we now need 
+        //to figure out where this actually lives before we continue.
+        //<TODO>@perf:  Grovelling with a signature is really slow.  Speed this up.</TODO>
+        if (pCorrectedMethod->IsInterface())
         {
-            //They cast to an interface before creating the delegate, so we now need 
-            //to figure out where this actually lives before we continue.
-            //<TODO>@perf:  Grovelling with a signature is really slow.  Speed this up.</TODO>
-            if (pCorrectedMethod->IsInterface())
+            // No need to resolve the interface based method desc to a class based
+            // one for COM objects because we invoke directly thru the interface MT.
+            if (!isComObject)
             {
-                // No need to resolve the interface based method desc to a class based
-                // one for COM objects because we invoke directly thru the interface MT.
-                if (!isComObject)
-                {
-                    // <TODO>it looks like we need to pass an ownerType in here.
-                    //  Why can we take a delegate to an interface method anyway?  </TODO>
-                    // 
-                    pCorrectedMethod = pMTTarg->FindDispatchSlotForInterfaceMD(pCorrectedMethod).GetMethodDesc();
-                    _ASSERTE(pCorrectedMethod != NULL);
-                }
+                // <TODO>it looks like we need to pass an ownerType in here.
+                //  Why can we take a delegate to an interface method anyway?  </TODO>
+                // 
+                pCorrectedMethod = pMTTarg->FindDispatchSlotForInterfaceMD(pCorrectedMethod, TRUE /* throwOnConflict */).GetMethodDesc();
+                _ASSERTE(pCorrectedMethod != NULL);
             }
         }
+    }
 
-        // Use the Unboxing stub for value class methods, since the value
-        // class is constructed using the boxed instance.
-        if (pMTTarg->IsValueType() && !pCorrectedMethod->IsUnboxingStub())
-        {
-            // those should have been ruled out at jit time (code:COMDelegate::GetDelegateCtor)
-            _ASSERTE((pMTMeth != g_pValueTypeClass) && (pMTMeth != g_pObjectClass));
-            pCorrectedMethod->CheckRestore();
-            pCorrectedMethod = pMTTarg->GetBoxedEntryPointMD(pCorrectedMethod);
-            _ASSERTE(pCorrectedMethod != NULL);
-        }
+    // Use the Unboxing stub for value class methods, since the value
+    // class is constructed using the boxed instance.
+    if (pCorrectedMethod->GetMethodTable()->IsValueType() && !pCorrectedMethod->IsUnboxingStub())
+    {
+        // those should have been ruled out at jit time (code:COMDelegate::GetDelegateCtor)
+        _ASSERTE((pMTMeth != g_pValueTypeClass) && (pMTMeth != g_pObjectClass));
+        pCorrectedMethod->CheckRestore();
+        pCorrectedMethod = pMTTarg->GetBoxedEntryPointMD(pCorrectedMethod);
+        _ASSERTE(pCorrectedMethod != NULL);
+    }
         
-        if (pMeth != pCorrectedMethod)
-        {
-            method = pCorrectedMethod->GetMultiCallableAddrOfCode();
-        }
+    if (pMeth != pCorrectedMethod)
+    {
+        method = pCorrectedMethod->GetMultiCallableAddrOfCode();
     }
     HELPER_METHOD_FRAME_END();
 
@@ -1777,21 +1713,14 @@ FCIMPL3(void, COMDelegate::DelegateConstruct, Object* refThisUNSAFE, Object* tar
     _ASSERTE(isMemoryReadable(method, 1));
     
     MethodTable *pMTTarg = NULL;
-    MethodTable *pRealMT = NULL;
 
     if (gc.target != NULL)
     {
         pMTTarg = gc.target->GetMethodTable();
-        pRealMT = gc.target->GetTrueMethodTable();
     }
 
-    MethodDesc *pMethOrig = Entry2MethodDesc(method, pRealMT);
+    MethodDesc *pMethOrig = Entry2MethodDesc(method, pMTTarg);
     MethodDesc *pMeth = pMethOrig;
-
-    //
-    // If target is a contextful class, then it must be a proxy
-    //    
-    _ASSERTE((NULL == pMTTarg) || pMTTarg->IsTransparentProxy() || !pRealMT->IsContextful());
 
     MethodTable* pDelMT = gc.refThis->GetMethodTable();
 
@@ -1860,7 +1789,6 @@ FCIMPL3(void, COMDelegate::DelegateConstruct, Object* refThisUNSAFE, Object* tar
         {
             gc.refThis->SetMethodPtrAux(method);
         }
-
     }
     else 
     {
@@ -1878,75 +1806,72 @@ FCIMPL3(void, COMDelegate::DelegateConstruct, Object* refThisUNSAFE, Object* tar
 #ifdef FEATURE_COMINTEROP
                 isComObject = pMTTarg->IsComObjectType();
 #endif // FEATURE_COMINTEROP
-            
-                if (!pMTTarg->IsTransparentProxy())
-                {
-                    if (pMTMeth != pMTTarg)
-                    {
-                        // They cast to an interface before creating the delegate, so we now need 
-                        // to figure out where this actually lives before we continue.
-                        // <TODO>@perf:  We whould never be using this path to invoke on an interface - 
-                        // that should always be resolved when we are creating the delegate </TODO>
-                        if (pMeth->IsInterface())
-                        {
-                            // No need to resolve the interface based method desc to a class based
-                            // one for COM objects because we invoke directly thru the interface MT.
-                            if (!isComObject)
-                            {
-                                // <TODO>it looks like we need to pass an ownerType in here.
-                                //  Why can we take a delegate to an interface method anyway?  </TODO>
-                                // 
-                                MethodDesc * pDispatchSlotMD = pMTTarg->FindDispatchSlotForInterfaceMD(pMeth).GetMethodDesc();
-                                if (pDispatchSlotMD == NULL)
-                                {
-                                    COMPlusThrow(kArgumentException, W("Arg_DlgtTargMeth"));
-                                }
 
-                                if (pMeth->HasMethodInstantiation())
-                                {
-                                    pMeth = MethodDesc::FindOrCreateAssociatedMethodDesc(
-                                        pDispatchSlotMD,
-                                        pMTTarg,
-                                        (!pDispatchSlotMD->IsStatic() && pMTTarg->IsValueType()),
-                                        pMeth->GetMethodInstantiation(),
-                                        FALSE /* allowInstParam */);
-                                }
-                                else
-                                {
-                                    pMeth = pDispatchSlotMD;
-                                }
+                if (pMTMeth != pMTTarg)
+                {
+                    // They cast to an interface before creating the delegate, so we now need 
+                    // to figure out where this actually lives before we continue.
+                    // <TODO>@perf:  We whould never be using this path to invoke on an interface - 
+                    // that should always be resolved when we are creating the delegate </TODO>
+                    if (pMeth->IsInterface())
+                    {
+                        // No need to resolve the interface based method desc to a class based
+                        // one for COM objects because we invoke directly thru the interface MT.
+                        if (!isComObject)
+                        {
+                            // <TODO>it looks like we need to pass an ownerType in here.
+                            //  Why can we take a delegate to an interface method anyway?  </TODO>
+                            // 
+                            MethodDesc * pDispatchSlotMD = pMTTarg->FindDispatchSlotForInterfaceMD(pMeth, TRUE /* throwOnConflict */).GetMethodDesc();
+                            if (pDispatchSlotMD == NULL)
+                            {
+                                COMPlusThrow(kArgumentException, W("Arg_DlgtTargMeth"));
+                            }
+
+                            if (pMeth->HasMethodInstantiation())
+                            {
+                                pMeth = MethodDesc::FindOrCreateAssociatedMethodDesc(
+                                    pDispatchSlotMD,
+                                    pMTTarg,
+                                    (!pDispatchSlotMD->IsStatic() && pMTTarg->IsValueType()),
+                                    pMeth->GetMethodInstantiation(),
+                                    FALSE /* allowInstParam */);
+                            }
+                            else
+                            {
+                                pMeth = pDispatchSlotMD;
                             }
                         }
                     }
+                }
 
-                    g_IBCLogger.LogMethodTableAccess(pMTTarg);
+                g_IBCLogger.LogMethodTableAccess(pMTTarg);
 
-                    // Use the Unboxing stub for value class methods, since the value
-                    // class is constructed using the boxed instance.
-                    //
-                    // <NICE> We could get the JIT to recognise all delegate creation sequences and
-                    // ensure the thing is always an BoxedEntryPointStub anyway </NICE>
+                // Use the Unboxing stub for value class methods, since the value
+                // class is constructed using the boxed instance.
+                //
+                // <NICE> We could get the JIT to recognise all delegate creation sequences and
+                // ensure the thing is always an BoxedEntryPointStub anyway </NICE>
 
-                    if (pMTMeth->IsValueType() && !pMeth->IsUnboxingStub())
+                if (pMTMeth->IsValueType() && !pMeth->IsUnboxingStub())
+                {
+                    // If these are Object/ValueType.ToString().. etc,
+                    // don't need an unboxing Stub.
+
+                    if ((pMTMeth != g_pValueTypeClass) 
+                        && (pMTMeth != g_pObjectClass))
                     {
-                        // If these are Object/ValueType.ToString().. etc,
-                        // don't need an unboxing Stub.
-
-                        if ((pMTMeth != g_pValueTypeClass) 
-                            && (pMTMeth != g_pObjectClass))
-                        {
-                            pMeth->CheckRestore();
-                            pMeth = pMTTarg->GetBoxedEntryPointMD(pMeth);
-                            _ASSERTE(pMeth != NULL);
-                        }
+                        pMeth->CheckRestore();
+                        pMeth = pMTTarg->GetBoxedEntryPointMD(pMeth);
+                        _ASSERTE(pMeth != NULL);
                     }
-                    // Only update the code address if we've decided to go to a different target...
-                    // <NICE> We should make sure the code address that the JIT provided to us is always the right one anyway,
-                    // so we don't have to do all this mucking about. </NICE>
-                    if (pMeth != pMethOrig)
-                    {
-                        method = pMeth->GetMultiCallableAddrOfCode();
-                    }
+                }
+                // Only update the code address if we've decided to go to a different target...
+                // <NICE> We should make sure the code address that the JIT provided to us is always the right one anyway,
+                // so we don't have to do all this mucking about. </NICE>
+                if (pMeth != pMethOrig)
+                {
+                    method = pMeth->GetMultiCallableAddrOfCode();
                 }
             }
 
@@ -1957,7 +1882,7 @@ FCIMPL3(void, COMDelegate::DelegateConstruct, Object* refThisUNSAFE, Object* tar
         }
 #ifdef HAS_THISPTR_RETBUF_PRECODE
         else if (pMeth->HasRetBuffArg() && IsRetBuffPassedAsFirstArg())
-            method = pMeth->GetLoaderAllocatorForCode()->GetFuncPtrStubs()->GetFuncPtrStub(pMeth, PRECODE_THISPTR_RETBUF);
+            method = pMeth->GetLoaderAllocator()->GetFuncPtrStubs()->GetFuncPtrStub(pMeth, PRECODE_THISPTR_RETBUF);
 #endif // HAS_THISPTR_RETBUF_PRECODE
 
         gc.refThis->SetTarget(gc.target);
@@ -2041,7 +1966,7 @@ MethodDesc *COMDelegate::GetMethodDesc(OBJECTREF orDelegate)
             OBJECTREF orThis = thisDel->GetTarget();
             if (orThis!=NULL)
             {
-                pMT = orThis->GetTrueMethodTable();
+                pMT = orThis->GetMethodTable();
             }
 
             pMethodHandle = Entry2MethodDesc(code, pMT);
@@ -3507,7 +3432,6 @@ BOOL COMDelegate::IsSecureDelegate(DELEGATEREF dRef)
         MODE_ANY;
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
     DELEGATEREF innerDel = NULL;
@@ -3654,103 +3578,6 @@ static void InvokeUnhandledSwallowing(OBJECTREF *pDelegate,
         // some point, a MDA may be warranted.
     }
     EX_END_CATCH(SwallowAllExceptions)
-}
-
-
-// Helper to dispatch a single event notification.
-static void InvokeNotify(OBJECTREF *pDelegate, OBJECTREF *pDomain)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_COOPERATIVE;
-    }
-    CONTRACTL_END;
-
-    _ASSERTE(pDelegate  != NULL && IsProtectedByGCFrame(pDelegate));
-    _ASSERTE(pDomain    != NULL && IsProtectedByGCFrame(pDomain));
-
-    STRESS_LOG2(LF_GC, LL_INFO1000, "Distributing reliable event: MethodPtr=%p MethodPtrAux=%p\n",
-        DELEGATEREF(*pDelegate)->GetMethodPtr(),
-        DELEGATEREF(*pDelegate)->GetMethodPtrAux());
-
-    // All reliable events should be delivered on finalizer thread
-    _ASSERTE(IsFinalizerThread());
-
-    INDEBUG(Thread* pThread = GetThread());
-
-    // This is an early check for condition that we assert in Thread::InternalReset called from DoOneFinalization later.
-    _ASSERTE(!pThread->HasCriticalRegion());
-    _ASSERTE(!pThread->HasThreadAffinity());
-
-    PREPARE_NONVIRTUAL_CALLSITE_USING_CODE(DELEGATEREF(*pDelegate)->GetMethodPtr());
-
-    DECLARE_ARGHOLDER_ARRAY(args, 3);
-
-    args[ARGNUM_0] = OBJECTREF_TO_ARGHOLDER(DELEGATEREF(*pDelegate)->GetTarget());
-    args[ARGNUM_1] = OBJECTREF_TO_ARGHOLDER(*pDomain);
-    args[ARGNUM_2] = NULL;
-
-    CALL_MANAGED_METHOD_NORET(args);
-
-    // This is an early check for condition that we assert in Thread::InternalReset called from DoOneFinalization later.
-    _ASSERTE(!pThread->HasCriticalRegion());
-    _ASSERTE(!pThread->HasThreadAffinity());
-}
-
-
-void DistributeEvent(OBJECTREF *pDelegate, OBJECTREF *pDomain)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_COOPERATIVE;
-    }
-    CONTRACTL_END;
-
-    _ASSERTE(pDelegate  != NULL && IsProtectedByGCFrame(pDelegate));
-    _ASSERTE(pDomain    != NULL && IsProtectedByGCFrame(pDomain));
-
-    Thread *pThread = GetThread();
-
-    struct _gc
-    {
-        PTRARRAYREF Array;
-        OBJECTREF   InnerDelegate;
-    } gc;
-    ZeroMemory(&gc, sizeof(gc));
-
-    GCPROTECT_BEGIN(gc);
-
-    gc.Array = (PTRARRAYREF) ((DELEGATEREF)(*pDelegate))->GetInvocationList();
-    if (gc.Array == NULL || !gc.Array->GetMethodTable()->IsArray())
-    {
-        InvokeNotify(pDelegate, pDomain);
-    }
-    else
-    {
-        // The _invocationCount could be less than the array size, if we are sharing
-        // immutable arrays cleverly.
-        INT_PTR invocationCount = ((DELEGATEREF)(*pDelegate))->GetInvocationCount();
-            
-        _ASSERTE(FitsInU4(invocationCount));
-        DWORD cnt = static_cast<DWORD>(invocationCount);
-
-        _ASSERTE(cnt <= gc.Array->GetNumComponents());
-
-        for (DWORD i=0; i<cnt; i++)
-        {
-            gc.InnerDelegate = gc.Array->m_Array[i];
-            InvokeNotify(&gc.InnerDelegate, pDomain);
-            if (pThread->IsAbortRequested())
-            {
-                pThread->UnmarkThreadForAbort(Thread::TAR_Thread);
-            }
-        }
-    }
-    GCPROTECT_END();
 }
 
 // The unhandled exception event is a little easier to distribute, because

@@ -68,7 +68,6 @@ extern "C" void STDCALL JIT_WriteBarrierReg_PostGrow();// JIThelp.asm/JIThelp.s
 #ifdef _DEBUG 
 extern "C" void STDCALL WriteBarrierAssert(BYTE* ptr, Object* obj)
 {
-    STATIC_CONTRACT_SO_TOLERANT;
     WRAPPER_NO_CONTRACT;
 
     static BOOL fVerifyHeap = -1;
@@ -103,7 +102,6 @@ extern "C" void STDCALL WriteBarrierAssert(BYTE* ptr, Object* obj)
 
 __declspec(naked) void F_CALL_CONV JIT_Stelem_Ref(PtrArray* array, unsigned idx, Object* val)
 {
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
 
@@ -197,7 +195,6 @@ Epilog:
 
 extern "C" __declspec(naked) Object* F_CALL_CONV JIT_IsInstanceOfClass(MethodTable *pMT, Object *pObject)
 {
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
 
@@ -256,7 +253,6 @@ extern "C" __declspec(naked) Object* F_CALL_CONV JIT_IsInstanceOfClass(MethodTab
 
 extern "C" __declspec(naked) Object* F_CALL_CONV JIT_ChkCastClass(MethodTable *pMT, Object *pObject)
 {
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
 
@@ -296,7 +292,6 @@ extern "C" __declspec(naked) Object* F_CALL_CONV JIT_ChkCastClass(MethodTable *p
 
 extern "C" __declspec(naked) Object* F_CALL_CONV JIT_ChkCastClassSpecial(MethodTable *pMT, Object *pObject)
 {
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
 
@@ -368,14 +363,6 @@ HCIMPL1(Object*, AllocObjectWrapper, MethodTable *pMT)
 HCIMPLEND
 
 /*********************************************************************/
-// This is a frameless helper for allocating an object whose type derives
-// from marshalbyref. We check quickly to see if it is configured to
-// have remote activation. If not, we use the superfast allocator to
-// allocate the object. Otherwise, we take the slow path of allocating
-// the object via remoting services.
-
-
-/*********************************************************************/
 extern "C" void* g_TailCallFrameVptr;
 void* g_TailCallFrameVptr;
 
@@ -386,7 +373,6 @@ void STDCALL JIT_TailCallHelper(Thread * pThread)
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
     } CONTRACTL_END;
 
     pThread->UnhijackThread();
@@ -791,7 +777,6 @@ HCIMPL2_RAW(Object*, UnframedAllocateObjectArray, MethodTable *pArrayMT, DWORD c
         THROWS;
         GC_TRIGGERS;
         MODE_COOPERATIVE;
-        SO_INTOLERANT;
     } CONTRACTL_END;
 
     return OBJECTREFToObject(AllocateArrayEx(pArrayMT,
@@ -812,7 +797,6 @@ HCIMPL2_RAW(Object*, UnframedAllocatePrimitiveArray, CorElementType type, DWORD 
         THROWS;
         GC_TRIGGERS;
         MODE_COOPERATIVE;
-        SO_INTOLERANT;
     } CONTRACTL_END;
 
     return OBJECTREFToObject( AllocatePrimitiveArray(type, cElements, FALSE) );
@@ -1471,7 +1455,7 @@ const int PostGrow_CardTableSecondLocation = 36;
 
 
 #ifndef CODECOVERAGE        // Deactivate alignment validation for code coverage builds 
-                            // because the instrumented binaries will not preserve alignmant constraits and we will fail.
+                            // because the instrumented binaries will not preserve alignment constraints and we will fail.
 
 void ValidateWriteBarrierHelpers()
 {

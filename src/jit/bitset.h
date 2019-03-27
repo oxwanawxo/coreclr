@@ -30,7 +30,7 @@ public:
     {
         unsigned res = 0;
         // We process "u" in 4-bit nibbles, hence the "*2" below.
-        for (int i = 0; i < sizeof(T) * 2; i++)
+        for (unsigned int i = 0; i < sizeof(T) * 2; i++)
         {
             res += BitCountTable[u & 0xf];
             u >>= 4;
@@ -40,7 +40,7 @@ public:
 
 #ifdef DEBUG
     // This runs the "TestSuite" method for a few important instantiations of BitSet.
-    static void TestSuite(CompAllocator* env);
+    static void TestSuite(CompAllocator env);
 #endif
 
     enum Operation

@@ -11,13 +11,7 @@
 
 #ifdef FEATURE_PERFTRACING
 
-EventPipeFile::EventPipeFile(
-    SString &outputFilePath
-#ifdef _DEBUG
-    ,
-    bool lockOnWrite
-#endif // _DEBUG
-)
+EventPipeFile::EventPipeFile(SString &outputFilePath)
 {
     CONTRACTL
     {
@@ -31,10 +25,6 @@ EventPipeFile::EventPipeFile(
     SetMinReaderVersion(0);
 
     m_pBlock = new EventPipeBlock(100 * 1024);
-
-#ifdef _DEBUG
-    m_lockOnWrite = lockOnWrite;
-#endif // _DEBUG
 
     // File start time information.
     GetSystemTime(&m_fileOpenSystemTime);
@@ -52,7 +42,7 @@ EventPipeFile::EventPipeFile(
     m_samplingRateInNs = SampleProfiler::GetSamplingRate();
 
     // Create the file stream and write the header.
-    m_pSerializer = new FastSerializer(outputFilePath);
+    m_pSerializer = new FastSerializer(new FileStreamWriter(outputFilePath));
 
     m_serializationLock.Init(LOCK_TYPE_DEFAULT);
     m_pMetadataIds = new MapSHashWithRemove<EventPipeEvent*, unsigned int>();
@@ -110,7 +100,7 @@ void EventPipeFile::WriteEvent(EventPipeEventInstance &instance)
         metadataId = GenerateMetadataId();
 
         EventPipeEventInstance* pMetadataInstance = EventPipe::GetConfiguration()->BuildEventMetadataEvent(instance, metadataId);
-        
+
         WriteToBlock(*pMetadataInstance, 0); // 0 breaks recursion and represents the metadata event.
 
         SaveMetadataId(*instance.GetEvent(), metadataId);
@@ -138,7 +128,7 @@ void EventPipeFile::WriteEnd()
 
     // "After the last EventBlock is emitted, the stream is ended by emitting a NullReference Tag which indicates that there are no more objects in the stream to read."
     // see https://github.com/Microsoft/perfview/blob/master/src/TraceEvent/EventPipe/EventPipeFormat.md for more
-    m_pSerializer->WriteTag(FastSerializerTags::NullReference); 
+    m_pSerializer->WriteTag(FastSerializerTags::NullReference);
 }
 
 void EventPipeFile::WriteToBlock(EventPipeEventInstance &instance, unsigned int metadataId)
@@ -157,16 +147,6 @@ void EventPipeFile::WriteToBlock(EventPipeEventInstance &instance, unsigned int 
     {
         return; // the block is not full, we added the event and continue
     }
-
-#ifdef _DEBUG
-    if (m_lockOnWrite)
-    {
-        // Take the serialization lock.
-        // This is used for synchronous file writes.
-        // The circular buffer path only writes from one thread.
-        SpinLockHolder _slh(&m_serializationLock);
-    }
-#endif // _DEBUG
 
     // we can't write this event to the current block (it's full)
     // so we write what we have in the block to the serializer

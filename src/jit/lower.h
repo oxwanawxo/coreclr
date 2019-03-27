@@ -30,23 +30,6 @@ public:
     }
     virtual void DoPhase() override;
 
-    // If requiresOverflowCheck is false, all other values will be unset
-    struct CastInfo
-    {
-        bool requiresOverflowCheck; // Will the cast require an overflow check
-        bool unsignedSource;        // Is the source unsigned
-        bool unsignedDest;          // is the dest unsigned
-
-        // All other fields are only meaningful if requiresOverflowCheck is set.
-
-        ssize_t typeMin;       // Lowest storable value of the dest type
-        ssize_t typeMax;       // Highest storable value of the dest type
-        ssize_t typeMask;      // For converting from/to unsigned
-        bool    signCheckOnly; // For converting between unsigned/signed int
-    };
-
-    static void getCastDescription(GenTree* treeNode, CastInfo* castInfo);
-
     // This variant of LowerRange is called from outside of the main Lowering pass,
     // so it creates its own instance of Lowering to do so.
     void LowerRange(BasicBlock* block, LIR::ReadOnlyRange& range)
@@ -121,6 +104,7 @@ private:
     void ContainCheckSIMD(GenTreeSIMD* simdNode);
 #endif // FEATURE_SIMD
 #ifdef FEATURE_HW_INTRINSICS
+    void ContainCheckHWIntrinsicAddr(GenTreeHWIntrinsic* node, GenTree** pAddr);
     void ContainCheckHWIntrinsic(GenTreeHWIntrinsic* node);
 #endif // FEATURE_HW_INTRINSICS
 
@@ -208,19 +192,25 @@ private:
         return new (comp, GT_LEA) GenTreeAddrMode(resultType, base, index, 0, 0);
     }
 
+    GenTree* OffsetByIndexWithScale(GenTree* base, GenTree* index, unsigned scale)
+    {
+        var_types resultType = (base->TypeGet() == TYP_REF) ? TYP_BYREF : base->TypeGet();
+        return new (comp, GT_LEA) GenTreeAddrMode(resultType, base, index, scale, 0);
+    }
+
     // Replace the definition of the given use with a lclVar, allocating a new temp
-    // if 'tempNum' is BAD_VAR_NUM.
-    unsigned ReplaceWithLclVar(LIR::Use& use, unsigned tempNum = BAD_VAR_NUM)
+    // if 'tempNum' is BAD_VAR_NUM. Returns the LclVar node.
+    GenTreeLclVar* ReplaceWithLclVar(LIR::Use& use, unsigned tempNum = BAD_VAR_NUM)
     {
         GenTree* oldUseNode = use.Def();
         if ((oldUseNode->gtOper != GT_LCL_VAR) || (tempNum != BAD_VAR_NUM))
         {
-            unsigned newLclNum  = use.ReplaceWithLclVar(comp, m_block->getBBWeight(comp), tempNum);
+            use.ReplaceWithLclVar(comp, m_block->getBBWeight(comp), tempNum);
             GenTree* newUseNode = use.Def();
             ContainCheckRange(oldUseNode->gtNext, newUseNode);
-            return newLclNum;
+            return newUseNode->AsLclVar();
         }
-        return oldUseNode->AsLclVarCommon()->gtLclNum;
+        return oldUseNode->AsLclVar();
     }
 
     // return true if this call target is within range of a pc-rel call on the machine
@@ -240,15 +230,18 @@ private:
     // operands.
     //
     // Arguments:
-    //     tree  -  Gentree of a binary operation.
+    //     tree  -             Gentree of a binary operation.
+    //     isSafeToMarkOp1     True if it's safe to mark op1 as register optional
+    //     isSafeToMarkOp2     True if it's safe to mark op2 as register optional
     //
     // Returns
-    //     None.
+    //     The caller is expected to get isSafeToMarkOp1 and isSafeToMarkOp2
+    //     by calling IsSafeToContainMem.
     //
     // Note: On xarch at most only one of the operands will be marked as
     // reg optional, even when both operands could be considered register
     // optional.
-    void SetRegOptionalForBinOp(GenTree* tree)
+    void SetRegOptionalForBinOp(GenTree* tree, bool isSafeToMarkOp1, bool isSafeToMarkOp2)
     {
         assert(GenTree::OperIsBinary(tree->OperGet()));
 
@@ -257,8 +250,9 @@ private:
 
         const unsigned operatorSize = genTypeSize(tree->TypeGet());
 
-        const bool op1Legal = tree->OperIsCommutative() && (operatorSize == genTypeSize(op1->TypeGet()));
-        const bool op2Legal = operatorSize == genTypeSize(op2->TypeGet());
+        const bool op1Legal =
+            isSafeToMarkOp1 && tree->OperIsCommutative() && (operatorSize == genTypeSize(op1->TypeGet()));
+        const bool op2Legal = isSafeToMarkOp2 && (operatorSize == genTypeSize(op2->TypeGet()));
 
         GenTree* regOptionalOperand = nullptr;
         if (op1Legal)
@@ -314,8 +308,6 @@ private:
 #endif // FEATURE_HW_INTRINSICS
 
     // Utility functions
-    void MorphBlkIntoHelperCall(GenTree* pTree, GenTree* treeStmt);
-
 public:
     static bool IndirsAreEquivalent(GenTree* pTreeA, GenTree* pTreeB);
 
@@ -332,7 +324,7 @@ public:
 
 #ifdef FEATURE_HW_INTRINSICS
     // Return true if 'node' is a containable HWIntrinsic op.
-    bool IsContainableHWIntrinsicOp(GenTreeHWIntrinsic* containingNode, GenTree* node);
+    bool IsContainableHWIntrinsicOp(GenTreeHWIntrinsic* containingNode, GenTree* node, bool* supportsRegOptional);
 #endif // FEATURE_HW_INTRINSICS
 
 private:
@@ -353,6 +345,23 @@ private:
     inline LIR::Range& BlockRange() const
     {
         return LIR::AsRange(m_block);
+    }
+
+    // Any tracked lclVar accessed by a LCL_FLD or STORE_LCL_FLD should be marked doNotEnregister.
+    // This method checks, and asserts in the DEBUG case if it is not so marked,
+    // but in the non-DEBUG case (asserts disabled) set the flag so that we don't generate bad code.
+    // This ensures that the local's value is valid on-stack as expected for a *LCL_FLD.
+    void verifyLclFldDoNotEnregister(unsigned lclNum)
+    {
+        LclVarDsc* varDsc = &(comp->lvaTable[lclNum]);
+        // Do a couple of simple checks before setting lvDoNotEnregister.
+        // This may not cover all cases in 'isRegCandidate()' but we don't want to
+        // do an expensive check here. For non-candidates it is not harmful to set lvDoNotEnregister.
+        if (varDsc->lvTracked && !varDsc->lvDoNotEnregister)
+        {
+            assert(!m_lsra->isRegCandidate(varDsc));
+            comp->lvaSetVarDoNotEnregister(lclNum DEBUG_ARG(Compiler::DNER_LocalField));
+        }
     }
 
     LinearScan*   m_lsra;

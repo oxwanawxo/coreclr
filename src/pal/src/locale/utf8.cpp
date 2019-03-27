@@ -20,8 +20,15 @@ Revision History:
 --*/
 
 #include "pal/utf8.h"
+#include "pal/malloc.hpp"
+
+using namespace CorUnix;
 
 #define FASTLOOP
+
+#ifndef COUNTOF
+#define COUNTOF(x) (sizeof(x) / sizeof((x)[0]))
+#endif
 
 struct CharUnicodeInfo
 {
@@ -226,7 +233,7 @@ public:
         if (bFoundHigh)
             throw ArgumentException("String 'replacement' contains invalid Unicode code points.", "replacement");
 
-        wcscpy_s(strDefault, sizeof(strDefault), replacement);
+        wcscpy_s(strDefault, COUNTOF(strDefault), replacement);
         strDefaultLength = replacementLength;
     }
 
@@ -253,6 +260,8 @@ class DecoderFallbackBuffer
     // These wrap the internal methods so that we can check for people doing stuff that's incorrect
 
 public:
+    virtual ~DecoderFallbackBuffer() = default;
+
     virtual bool Fallback(BYTE bytesUnknown[], int index, int size) = 0;
 
     // Get next character
@@ -421,7 +430,7 @@ public:
     // Construction
     DecoderReplacementFallbackBuffer(DecoderReplacementFallback* fallback)
     {
-        wcscpy_s(strDefault, sizeof(strDefault), fallback->GetDefaultString());
+        wcscpy_s(strDefault, COUNTOF(strDefault), fallback->GetDefaultString());
         strDefaultLength = PAL_wcslen((const WCHAR *)fallback->GetDefaultString());
     }
 
@@ -552,7 +561,7 @@ public:
 
     virtual DecoderFallbackBuffer* CreateFallbackBuffer()
     {
-        return new DecoderExceptionFallbackBuffer();
+        return InternalNew<DecoderExceptionFallbackBuffer>();
     }
 
     // Maximum number of characters that this instance of this fallback could return
@@ -564,7 +573,7 @@ public:
 
 DecoderFallbackBuffer* DecoderReplacementFallback::CreateFallbackBuffer()
 {
-    return new DecoderReplacementFallbackBuffer(this);
+    return InternalNew<DecoderReplacementFallbackBuffer>(this);
 }
 
 class EncoderFallbackException : public ArgumentException
@@ -701,7 +710,7 @@ public:
         if (bFoundHigh)
             throw ArgumentException("String 'replacement' contains invalid Unicode code points.", "replacement");
 
-        wcscpy_s(strDefault, sizeof(strDefault), replacement);
+        wcscpy_s(strDefault, COUNTOF(strDefault), replacement);
         strDefaultLength = replacementLength;
     }
 
@@ -728,6 +737,8 @@ class EncoderFallbackBuffer
     // These wrap the internal methods so that we can check for people doing stuff that is incorrect
 
 public:
+    virtual ~EncoderFallbackBuffer() = default;
+
     virtual bool Fallback(WCHAR charUnknown, int index) = 0;
 
     virtual bool Fallback(WCHAR charUnknownHigh, WCHAR charUnknownLow, int index) = 0;
@@ -871,8 +882,8 @@ public:
     EncoderReplacementFallbackBuffer(EncoderReplacementFallback* fallback)
     {
         // 2X in case we're a surrogate pair
-        wcscpy_s(strDefault, sizeof(strDefault), fallback->GetDefaultString());
-        wcscat_s(strDefault, sizeof(strDefault), fallback->GetDefaultString());
+        wcscpy_s(strDefault, COUNTOF(strDefault), fallback->GetDefaultString());
+        wcscat_s(strDefault, COUNTOF(strDefault), fallback->GetDefaultString());
         strDefaultLength = 2 * PAL_wcslen((const WCHAR *)fallback->GetDefaultString());
 
     }
@@ -1044,7 +1055,7 @@ public:
 
     virtual EncoderFallbackBuffer* CreateFallbackBuffer()
     {
-        return new EncoderExceptionFallbackBuffer();
+        return InternalNew<EncoderExceptionFallbackBuffer>();
     }
 
     // Maximum number of characters that this instance of this fallback could return
@@ -1056,7 +1067,7 @@ public:
 
 EncoderFallbackBuffer* EncoderReplacementFallback::CreateFallbackBuffer()
 {
-    return new EncoderReplacementFallbackBuffer(this);
+    return InternalNew<EncoderReplacementFallbackBuffer>(this);
 }
 
 class UTF8Encoding
@@ -1456,7 +1467,7 @@ public:
                 }
 
                 // get pSrc 2-byte aligned
-                if (((int)pSrc & 0x1) != 0) {
+                if (((size_t)pSrc & 0x1) != 0) {
                     ch = *pSrc;
                     pSrc++;
                     if (ch > 0x7F) {
@@ -1465,7 +1476,7 @@ public:
                 }
 
                 // get pSrc 4-byte aligned
-                if (((int)pSrc & 0x2) != 0) {
+                if (((size_t)pSrc & 0x2) != 0) {
                     ch = *(USHORT*)pSrc;
                     if ((ch & 0x8080) != 0) {
                         goto LongCodeWithMask16;
@@ -1619,6 +1630,8 @@ public:
         // (don't have to check m_throwOnOverflow for count)
         Contract::Assert(fallback == nullptr || fallback->GetRemaining() == 0,
             "[UTF8Encoding.GetCharCount]Expected empty fallback buffer at end");
+
+        InternalDelete(fallback);
 
         return charCount;
 
@@ -1863,7 +1876,7 @@ public:
                     if (ch > 0x7F)
                         goto ProcessChar;
 
-                    *pTarget = (char)ch;
+                    *pTarget = (WCHAR)ch;
                     pTarget++;
                 }
                 // we are done
@@ -1893,18 +1906,18 @@ public:
                 pTarget++;
 
                 // get pSrc to be 2-byte aligned
-                if ((((int)pSrc) & 0x1) != 0) {
+                if ((((size_t)pSrc) & 0x1) != 0) {
                     ch = *pSrc;
                     pSrc++;
                     if (ch > 0x7F) {
                         goto LongCode;
                     }
-                    *pTarget = (char)ch;
+                    *pTarget = (WCHAR)ch;
                     pTarget++;
                 }
 
                 // get pSrc to be 4-byte aligned
-                if ((((int)pSrc) & 0x2) != 0) {
+                if ((((size_t)pSrc) & 0x2) != 0) {
                     ch = *(USHORT*)pSrc;
                     if ((ch & 0x8080) != 0) {
                         goto LongCodeWithMask16;
@@ -2022,7 +2035,7 @@ public:
 
                         ch = (chc << 6) | (ch & 0x3F);
 
-                        *pTarget = (char)(((ch >> 10) & 0x7FF) +
+                        *pTarget = (WCHAR)(((ch >> 10) & 0x7FF) +
                             (SHORT)(CharUnicodeInfo::HIGH_SURROGATE_START - (0x10000 >> 10)));
                         pTarget++;
 
@@ -2122,6 +2135,8 @@ public:
         // (don't have to check m_throwOnOverflow for chars)
         Contract::Assert(fallback == nullptr || fallback->GetRemaining() == 0,
             "[UTF8Encoding.GetChars]Expected empty fallback buffer at end");
+
+        InternalDelete(fallback);
 
         return PtrDiff(pTarget, chars);
     }
@@ -2511,6 +2526,8 @@ public:
             ch = 0;
         }
 
+        InternalDelete(fallbackBuffer); 
+
         return (int)(pTarget - bytes);
     }
 
@@ -2723,7 +2740,7 @@ public:
                 }
 
                 // get pSrc aligned
-                if (((int)pSrc & 0x2) != 0) {
+                if (((size_t)pSrc & 0x2) != 0) {
                     ch = *pSrc;
                     pSrc++;
                     if (ch > 0x7F)                                              // Not ASCII
@@ -2837,6 +2854,8 @@ public:
 
         Contract::Assert(fallbackBuffer == nullptr || fallbackBuffer->GetRemaining() == 0,
             "[UTF8Encoding.GetByteCount]Expected Empty fallback buffer");
+
+        InternalDelete(fallbackBuffer);
 
         return byteCount;
     }

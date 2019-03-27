@@ -1,19 +1,8 @@
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-if(PerfCountersSupportedBuild)
-    add_definitions(-DENABLE_PERF_COUNTERS)
-endif(PerfCountersSupportedBuild)
-
 set(BCLTYPE_SOURCES
     arraynative.cpp
     arrayhelpers.cpp
-    bignum.cpp
-    currency.cpp
-    decimal.cpp
-    diyfp.cpp
-    grisu3.cpp
-    windowsruntimebufferhelper.cpp
-    number.cpp
     oavariant.cpp
     objectnative.cpp
     stringnative.cpp

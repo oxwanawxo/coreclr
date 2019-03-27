@@ -211,7 +211,6 @@ FCIMPLEND
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -403,6 +402,11 @@ FCIMPL4(void, DebugStackTrace::GetStackFramesInternal,
         SetObjectReference( (OBJECTREF *)&(pStackFrameHelper->rgAssemblyPath), (OBJECTREF)assemblyPathArray,
                             pStackFrameHelper->GetAppDomain());
 
+        // Allocate memory for the array of assemblies
+        PTRARRAYREF assemblyArray = (PTRARRAYREF) AllocateObjectArray(data.cElements, g_pObjectClass);
+        SetObjectReference( (OBJECTREF *)&(pStackFrameHelper->rgAssembly), (OBJECTREF)assemblyArray,
+                            pStackFrameHelper->GetAppDomain());
+
         // Allocate memory for the LoadedPeAddress
         BASEARRAYREF loadedPeAddressArray = (BASEARRAYREF) AllocatePrimitiveArray(ELEMENT_TYPE_I, data.cElements);
         SetObjectReference( (OBJECTREF *)&(pStackFrameHelper->rgLoadedPeAddress), (OBJECTREF)loadedPeAddressArray,
@@ -512,6 +516,10 @@ FCIMPL4(void, DebugStackTrace::GetStackFramesInternal,
             // IL offset
             I4 *pILI4 = (I4 *)((I4ARRAYREF)pStackFrameHelper->rgiILOffset)->GetDirectPointerToNonObjectElements();
             pILI4[iNumValidFrames] = data.pElements[i].dwILOffset;
+
+            // Assembly
+            OBJECTREF pAssembly = pFunc->GetAssembly()->GetExposedObject(); 
+            pStackFrameHelper->rgAssembly->SetAt(iNumValidFrames, pAssembly);
 
             if (data.fDoWeHaveAnyFramesFromForeignStackTrace)
             {
@@ -660,7 +668,7 @@ FCIMPL4(void, DebugStackTrace::GetStackFramesInternal,
                                             // look for the entry matching the one we're looking for
                                             if (offsets[j] >= dwCurILOffset)
                                             {
-                                                // if this offset is > what we're looking for, ajdust the index
+                                                // if this offset is > what we're looking for, adjust the index
                                                 if (offsets[j] > dwCurILOffset && j > 0)
                                                 {
                                                     j--;

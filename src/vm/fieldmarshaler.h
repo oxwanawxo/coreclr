@@ -31,7 +31,6 @@
 #endif // FEATURE_PREJIT
 
 // Forward refernces
-class EEClassLayoutInfo;
 class FieldDesc;
 class MethodTable;
 
@@ -54,9 +53,9 @@ class FieldMarshaler_WinBool;
 class FieldMarshaler_CBool;
 class FieldMarshaler_Decimal;
 class FieldMarshaler_Date;
+class FieldMarshaler_BSTR;
 #ifdef FEATURE_COMINTEROP
 class FieldMarshaler_SafeArray;
-class FieldMarshaler_BSTR;
 class FieldMarshaler_HSTRING;
 class FieldMarshaler_Interface;
 class FieldMarshaler_Variant;
@@ -66,8 +65,6 @@ class FieldMarshaler_SystemType;
 class FieldMarshaler_Exception;
 class FieldMarshaler_Nullable;
 #endif // FEATURE_COMINTEROP
-
-VOID NStructFieldTypeToString(FieldMarshaler* pFM, SString& strNStructFieldType);
 
 //=======================================================================
 // Each possible COM+/Native pairing of data type has a
@@ -91,24 +88,35 @@ enum NStructFieldType
 #define DEFAULT_PACKING_SIZE 32
 
 
-//=======================================================================
-// This is invoked from the class loader while building the data structures for a type.
-// This function checks if explicit layout metadata exists.
-//
-// Returns:
-//  TRUE    - yes, there's layout metadata
-//  FALSE   - no, there's no layout.
-//  fail    - throws a typeload exception
-//
-// If S_OK,
-//   *pNLType            gets set to nltAnsi or nltUnicode
-//   *pPackingSize       declared packing size
-//   *pfExplicitoffsets  offsets explicit in metadata or computed?
-//=======================================================================
-BOOL HasLayoutMetadata(Assembly* pAssembly, IMDInternalImport *pInternalImport, mdTypeDef cl, 
-                            MethodTable *pParentMT, BYTE *pPackingSize, BYTE *pNLTType,
-                            BOOL *pfExplicitOffsets);
+enum class ParseNativeTypeFlags
+{
+    None    = 0x00,
+    IsAnsi  = 0x01,
+#ifdef FEATURE_COMINTEROP
+    IsWinRT = 0x02,
+#endif // FEATURE_COMINTEROP
+};
 
+VOID ParseNativeType(Module*    pModule,
+    PCCOR_SIGNATURE             pCOMSignature,
+    DWORD                       cbCOMSignature,
+    ParseNativeTypeFlags        flags,
+    LayoutRawFieldInfo*         pfwalk,
+    PCCOR_SIGNATURE             pNativeType,
+    ULONG                       cbNativeType,
+    IMDInternalImport*          pInternalImport,
+    mdTypeDef                   cl,
+    const SigTypeContext *      pTypeContext,
+    BOOL                       *pfDisqualifyFromManagedSequential
+#ifdef _DEBUG
+    ,
+    LPCUTF8                     szNamespace,
+    LPCUTF8                     szClassName,
+    LPCUTF8                     szFieldName
+#endif
+);
+
+BOOL IsFieldBlittable(FieldMarshaler* pFM);
 
 //=======================================================================
 // This function returns TRUE if the type passed in is either a value class or a class and if it has layout information 
@@ -396,7 +404,6 @@ public:
             NOTHROW;
             GC_NOTRIGGER;
             MODE_ANY;
-            SO_TOLERANT;
             POSTCONDITION(CheckPointer(RETVAL, NULL_OK));
         }
         CONTRACT_END;
@@ -459,15 +466,11 @@ protected:
     }
 #endif // _DEBUG
 
-
     RelativeFixupPointer<PTR_FieldDesc> m_pFD;      // FieldDesc
     UINT32           m_dwExternalOffset;    // offset of field in the fixed portion
     NStructFieldType m_nft;
 };
 
-
-
-#ifdef FEATURE_COMINTEROP
 
 //=======================================================================
 // BSTR <--> System.String
@@ -484,6 +487,7 @@ public:
     COPY_TO_IMPL_BASE_STRUCT_ONLY()
 };
 
+#ifdef FEATURE_COMINTEROP
 //=======================================================================
 // HSTRING <--> System.String
 //=======================================================================
@@ -712,10 +716,17 @@ private:
 class FieldMarshaler_NestedValueClass : public FieldMarshaler
 {
 public:
+#ifndef _DEBUG
     FieldMarshaler_NestedValueClass(MethodTable *pMT)
+#else
+    FieldMarshaler_NestedValueClass(MethodTable *pMT, BOOL isFixedBuffer)
+#endif
     {
         WRAPPER_NO_CONTRACT;
         m_pNestedMethodTable.SetValueMaybeNull(pMT);
+#ifdef _DEBUG
+        m_isFixedBuffer = isFixedBuffer;
+#endif
     }
 
     BOOL IsNestedValueClassMarshalerImpl() const
@@ -763,6 +774,9 @@ public:
     START_COPY_TO_IMPL(FieldMarshaler_NestedValueClass)
     {
         pDestFieldMarshaller->m_pNestedMethodTable.SetValueMaybeNull(GetMethodTable());
+#ifdef _DEBUG
+        pDestFieldMarshaller->m_isFixedBuffer = m_isFixedBuffer;
+#endif
     }
     END_COPY_TO_IMPL(FieldMarshaler_NestedValueClass)
 
@@ -795,10 +809,20 @@ public:
         return m_pNestedMethodTable.GetValueMaybeNull();
     }
 
+#ifdef _DEBUG
+    BOOL IsFixedBuffer() const
+    {
+        return m_isFixedBuffer;
+    }
+#endif
+
 
 private:
     // MethodTable of nested NStruct.
     RelativeFixupPointer<PTR_MethodTable> m_pNestedMethodTable;
+#ifdef _DEBUG
+    BOOL m_isFixedBuffer;
+#endif
 };
 
 
@@ -1011,8 +1035,12 @@ public:
     {
         LIMITED_METHOD_CONTRACT;
 
-        MethodTable *pElementMT = m_arrayType.GetValue().AsArray()->GetArrayElementTypeHandle().GetMethodTable();
-        return OleVariant::GetElementSizeForVarType(m_vt, pElementMT) * m_numElems;
+        return OleVariant::GetElementSizeForVarType(m_vt, GetElementMethodTable()) * m_numElems;
+    }
+
+    MethodTable* GetElementMethodTable() const
+    {
+        return GetElementTypeHandle().GetMethodTable();
     }
 
     TypeHandle GetElementTypeHandle() const

@@ -4,7 +4,6 @@
 
 #include "stdafx.h"                     // Precompiled header key.
 #include "loaderheap.h"
-#include "perfcounters.h"
 #include "ex.h"
 #include "pedecoder.h"
 #define DONOT_DEFINE_ETW_CALLBACK
@@ -236,7 +235,6 @@ BOOL RangeList::IsInRangeWorker(TADDR address, TADDR *pID /* = NULL */)
         NOTHROW;
         FORBID_FAULT;
         GC_NOTRIGGER;
-        SO_TOLERANT;
     }
     CONTRACTL_END
         
@@ -1804,14 +1802,17 @@ void UnlockedLoaderHeap::EnumMemoryRegions(CLRDataEnumMemoryFlags flags)
 #endif // #ifdef DACCESS_COMPILE
 
 
-void UnlockedLoaderHeap::EnumPageRegions (EnumPageRegionsCallback *pCallback)
+void UnlockedLoaderHeap::EnumPageRegions (EnumPageRegionsCallback *pCallback, PTR_VOID pvArgs)
 {
     WRAPPER_NO_CONTRACT;
 
     PTR_LoaderHeapBlock block = m_pFirstBlock;
     while (block)
     {
-        (*pCallback)(block->pVirtualAddress, block->dwVirtualSize);
+        if ((*pCallback)(pvArgs, block->pVirtualAddress, block->dwVirtualSize))
+        {
+            break;
+        }
         
         block = block->pNext;
     }

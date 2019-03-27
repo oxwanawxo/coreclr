@@ -106,6 +106,9 @@ public:
     void FirePinObjectAtGCTime(void* object, uint8_t** ppObject) = 0;
 
     virtual
+    void FirePinPlugAtGCTime(uint8_t* plug_start, uint8_t* plug_end, uint8_t* gapBeforeSize) = 0;
+
+    virtual
     void FireGCPerHeapHistory_V3(void *freeListAllocated,
                                  void *freeListRejected,
                                  void *endOfSegAllocated,
@@ -128,6 +131,8 @@ public:
     void FireBGC1stNonConEnd() = 0;
     virtual
     void FireBGC1stConEnd() = 0;
+    virtual
+    void FireBGC1stSweepEnd(uint32_t genNumber) = 0;
     virtual
     void FireBGC2ndNonConBegin() = 0;
     virtual
@@ -319,7 +324,7 @@ public:
     // Asks the EE if it wants a particular object to be finalized when unloading
     // an app domain.
     virtual
-    bool ShouldFinalizeObjectForUnload(AppDomain* pDomain, Object* obj) = 0;
+    bool ShouldFinalizeObjectForUnload(void* pDomain, Object* obj) = 0;
 
     // Offers the EE the option to finalize the given object eagerly, i.e.
     // not on the finalizer thread but on the current thread. The
@@ -328,12 +333,6 @@ public:
     // and it's up to the GC to finalize it later.
     virtual
     bool EagerFinalized(Object* obj) = 0;
-
-    // Asks the EE if it wishes for the current GC to be a blocking GC. The GC will
-    // only invoke this callback when it intends to do a full GC, so at this point
-    // the EE can opt to elevate that collection to be a blocking GC and not a background one.
-    virtual
-    bool ForceFullGCToBeBlocking() = 0;
 
     // Retrieves the method table for the free object, a special kind of object used by the GC
     // to keep the heap traversable. Conceptually, the free object is similar to a managed array
@@ -409,6 +408,36 @@ public:
     // Returns an IGCToCLREventSink instance that can be used to fire events.
     virtual
     IGCToCLREventSink* EventSink() = 0;
+
+    virtual
+    uint32_t GetDefaultDomainIndex() = 0;
+
+    virtual
+    void *GetAppDomainAtIndex(uint32_t appDomainIndex) = 0;
+
+    virtual
+    uint32_t GetIndexOfAppDomainBeingUnloaded() = 0;
+
+    virtual
+    bool AppDomainCanAccessHandleTable(uint32_t appDomainID) = 0;
+
+    virtual
+    uint32_t GetTotalNumSizedRefHandles() = 0;
+
+    virtual
+    bool AppDomainIsRudeUnload(void *appDomain) = 0;
+
+    virtual
+    bool AnalyzeSurvivorsRequested(int condemnedGeneration) = 0;
+
+    virtual
+    void AnalyzeSurvivorsFinished(int condemnedGeneration) = 0;
+
+    virtual 
+    void VerifySyncTableEntry() = 0;
+
+    virtual
+    void UpdateGCEventStatus(int publicLevel, int publicKeywords, int privateLEvel, int privateKeywords) = 0;
 };
 
 #endif // _GCINTERFACE_EE_H_

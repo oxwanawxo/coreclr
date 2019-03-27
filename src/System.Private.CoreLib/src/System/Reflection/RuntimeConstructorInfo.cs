@@ -5,6 +5,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using RuntimeTypeCache = System.RuntimeType.RuntimeTypeCache;
 
 namespace System.Reflection
@@ -120,7 +121,7 @@ namespace System.Reflection
             }
         }
 
-        private void CheckConsistency(Object target)
+        private void CheckConsistency(object target)
         {
             if (target == null && IsStatic)
                 return;
@@ -138,23 +139,35 @@ namespace System.Reflection
         #endregion
 
         #region Object Overrides
-        public override String ToString()
+        public override string ToString()
         {
-            // "Void" really doesn't make sense here. But we'll keep it for compat reasons.
             if (m_toString == null)
-                m_toString = "Void " + FormatNameAndSig();
+            {
+                var sbName = new ValueStringBuilder(MethodNameBufferSize);
+
+                // "Void" really doesn't make sense here. But we'll keep it for compat reasons.
+                sbName.Append("Void ");
+
+                sbName.Append(Name);
+
+                sbName.Append('(');
+                AppendParameters(ref sbName, GetParameterTypes(), CallingConvention);
+                sbName.Append(')');
+
+                m_toString = sbName.ToString();
+            }
 
             return m_toString;
         }
         #endregion
 
         #region ICustomAttributeProvider
-        public override Object[] GetCustomAttributes(bool inherit)
+        public override object[] GetCustomAttributes(bool inherit)
         {
             return CustomAttribute.GetCustomAttributes(this, typeof(object) as RuntimeType);
         }
 
-        public override Object[] GetCustomAttributes(Type attributeType, bool inherit)
+        public override object[] GetCustomAttributes(Type attributeType, bool inherit)
         {
             if (attributeType == null)
                 throw new ArgumentNullException(nameof(attributeType));
@@ -188,7 +201,7 @@ namespace System.Reflection
 
 
         #region MemberInfo Overrides
-        public override String Name
+        public override string Name
         {
             get { return RuntimeMethodHandle.GetName(this); }
         }
@@ -247,7 +260,7 @@ namespace System.Reflection
                 return parameters;
 
             ParameterInfo[] ret = new ParameterInfo[parameters.Length];
-            Array.Copy(parameters, ret, parameters.Length);
+            Array.Copy(parameters, 0, ret, 0, parameters.Length);
             return ret;
         }
 
@@ -260,9 +273,6 @@ namespace System.Reflection
         {
             get
             {
-                Type declaringType = DeclaringType;
-                if ((declaringType == null && Module.Assembly.ReflectionOnly) || declaringType is ReflectionOnlyType)
-                    throw new InvalidOperationException(SR.InvalidOperation_NotAllowedInReflectionOnly);
                 return new RuntimeMethodHandle(this);
             }
         }
@@ -288,19 +298,15 @@ namespace System.Reflection
             if (declaringType == null)
                 throw new ArgumentNullException(nameof(declaringType));
 
-            // ctor is ReflectOnly
-            if (declaringType is ReflectionOnlyType)
-                throw new InvalidOperationException(SR.Arg_ReflectionOnlyInvoke);
-
             // ctor is declared on interface class
-            else if (declaringType.IsInterface)
+            if (declaringType.IsInterface)
                 throw new MemberAccessException(
-                    String.Format(CultureInfo.CurrentUICulture, SR.Acc_CreateInterfaceEx, declaringType));
+                    SR.Format(SR.Acc_CreateInterfaceEx, declaringType));
 
             // ctor is on an abstract class
             else if (declaringType.IsAbstract)
                 throw new MemberAccessException(
-                    String.Format(CultureInfo.CurrentUICulture, SR.Acc_CreateAbstEx, declaringType));
+                    SR.Format(SR.Acc_CreateAbstEx, declaringType));
 
             // ctor is on a class that contains stack pointers
             else if (declaringType.GetRootElementType() == typeof(ArgIterator))
@@ -314,7 +320,7 @@ namespace System.Reflection
             else if (declaringType.ContainsGenericParameters)
             {
                 throw new MemberAccessException(
-                    String.Format(CultureInfo.CurrentUICulture, SR.Acc_CreateGenericEx, declaringType));
+                    SR.Format(SR.Acc_CreateGenericEx, declaringType));
             }
 
             // ctor is declared on System.Void
@@ -335,8 +341,8 @@ namespace System.Reflection
 
         [DebuggerStepThroughAttribute]
         [Diagnostics.DebuggerHidden]
-        public override Object Invoke(
-            Object obj, BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+        public override object Invoke(
+            object obj, BindingFlags invokeAttr, Binder binder, object[] parameters, CultureInfo culture)
         {
             INVOCATION_FLAGS invocationFlags = InvocationFlags;
 
@@ -358,8 +364,8 @@ namespace System.Reflection
             bool wrapExceptions = (invokeAttr & BindingFlags.DoNotWrapExceptions) == 0;
             if (actualCount > 0)
             {
-                Object[] arguments = CheckArguments(parameters, binder, invokeAttr, culture, sig);
-                Object retValue = RuntimeMethodHandle.InvokeMethod(obj, arguments, sig, false, wrapExceptions);
+                object[] arguments = CheckArguments(parameters, binder, invokeAttr, culture, sig);
+                object retValue = RuntimeMethodHandle.InvokeMethod(obj, arguments, sig, false, wrapExceptions);
                 // copy out. This should be made only if ByRef are present.
                 for (int index = 0; index < arguments.Length; index++)
                     parameters[index] = arguments[index];
@@ -370,9 +376,9 @@ namespace System.Reflection
 
         public override MethodBody GetMethodBody()
         {
-            MethodBody mb = RuntimeMethodHandle.GetMethodBody(this, ReflectedTypeInternal);
+            RuntimeMethodBody mb = RuntimeMethodHandle.GetMethodBody(this, ReflectedTypeInternal);
             if (mb != null)
-                mb.m_methodBase = this;
+                mb._methodBase = this;
             return mb;
         }
 
@@ -403,7 +409,7 @@ namespace System.Reflection
         #region ConstructorInfo Overrides
         [DebuggerStepThroughAttribute]
         [Diagnostics.DebuggerHidden]
-        public override Object Invoke(BindingFlags invokeAttr, Binder binder, Object[] parameters, CultureInfo culture)
+        public override object Invoke(BindingFlags invokeAttr, Binder binder, object[] parameters, CultureInfo culture)
         {
             INVOCATION_FLAGS invocationFlags = InvocationFlags;
 
@@ -428,8 +434,8 @@ namespace System.Reflection
             bool wrapExceptions = (invokeAttr & BindingFlags.DoNotWrapExceptions) == 0;
             if (actualCount > 0)
             {
-                Object[] arguments = CheckArguments(parameters, binder, invokeAttr, culture, sig);
-                Object retValue = RuntimeMethodHandle.InvokeMethod(null, arguments, sig, true, wrapExceptions);
+                object[] arguments = CheckArguments(parameters, binder, invokeAttr, culture, sig);
+                object retValue = RuntimeMethodHandle.InvokeMethod(null, arguments, sig, true, wrapExceptions);
                 // copy out. This should be made only if ByRef are present.
                 for (int index = 0; index < arguments.Length; index++)
                     parameters[index] = arguments[index];

@@ -54,8 +54,8 @@ set(UTILCODE_COMMON_SOURCES
   debug.cpp
   pedecoder.cpp
   winfix.cpp
-  longfilepathwrappers.cpp 
-  jithost.cpp
+  longfilepathwrappers.cpp
+  yieldprocessornormalized.cpp
 )
 
 # These source file do not yet compile on Linux.

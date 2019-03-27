@@ -133,21 +133,29 @@ FCIMPL1(INT64, ArrayNative::GetLongLengthNoRank, ArrayBase* array)
 FCIMPLEND
 
 
-FCIMPL1(INT32, ArrayNative::GetDataPtrOffsetInternal, ArrayBase* array)
+FCIMPL1(void*, ArrayNative::GetRawArrayData, ArrayBase* array)
 {
     FCALL_CONTRACT;
 
     VALIDATEOBJECT(array);
 
-    if (array == NULL)
-        FCThrow(kNullReferenceException);
+    _ASSERTE(array != NULL);
 
-    return ArrayBase::GetDataPtrOffset(array->GetMethodTable());
+    return array->GetDataPtr();
 }
 FCIMPLEND
 
+FCIMPL1(INT32, ArrayNative::GetElementSize, ArrayBase* array)
+{
+    FCALL_CONTRACT;
 
+    VALIDATEOBJECT(array);
 
+    _ASSERTE(array != NULL);
+
+    return (INT32)array->GetComponentSize();
+}
+FCIMPLEND
 
 
 
@@ -157,7 +165,6 @@ void ArrayInitializeWorker(ARRAYBASEREF * arrayRef,
                            MethodTable* pElemMT)
 {
     STATIC_CONTRACT_MODE_COOPERATIVE;
-    STATIC_CONTRACT_SO_INTOLERANT;
 
     // Ensure that the array element type is fully loaded before executing its code
     pElemMT->EnsureInstanceActive();
@@ -275,7 +282,6 @@ ArrayNative::AssignArrayEnum ArrayNative::CanAssignArrayTypeNoGC(const BASEARRAY
         NOTHROW;
         GC_NOTRIGGER;
         MODE_COOPERATIVE;
-        SO_TOLERANT;
         PRECONDITION(pSrc != NULL);
         PRECONDITION(pDest != NULL);
     }
@@ -880,7 +886,6 @@ void memmoveGCRefs(void *dest, const void *src, size_t len)
         NOTHROW;
         GC_NOTRIGGER;
         MODE_COOPERATIVE;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -908,7 +913,6 @@ void ArrayNative::ArrayCopyNoTypeCheck(BASEARRAYREF pSrc, unsigned int srcIndex,
         NOTHROW;
         GC_NOTRIGGER;
         MODE_COOPERATIVE;
-        SO_TOLERANT;
         PRECONDITION(pSrc != NULL);
         PRECONDITION(srcIndex >= 0);
         PRECONDITION(pDest != NULL);
@@ -936,10 +940,6 @@ void ArrayNative::ArrayCopyNoTypeCheck(BASEARRAYREF pSrc, unsigned int srcIndex,
 FCIMPL6(void, ArrayNative::ArrayCopy, ArrayBase* m_pSrc, INT32 m_iSrcIndex, ArrayBase* m_pDst, INT32 m_iDstIndex, INT32 m_iLength, CLR_BOOL reliable)
 {
     FCALL_CONTRACT;
-
-    BYTE *src;
-    BYTE *dst;
-    SIZE_T size;
     
     struct _gc
     {
@@ -1070,45 +1070,22 @@ FCIMPL6(void, ArrayNative::ArrayCopy, ArrayBase* m_pSrc, INT32 m_iSrcIndex, Arra
 FCIMPLEND
 
 
-FCIMPL3(void, ArrayNative::ArrayClear, ArrayBase* pArrayUNSAFE, INT32 iIndex, INT32 iLength)
+FCIMPL5(void*, ArrayNative::GetRawArrayGeometry, ArrayBase* pArray, UINT32* pNumComponents, UINT32* pElementSize, INT32* pLowerBound, CLR_BOOL* pContainsGCPointers)
 {
-    FCALL_CONTRACT;
+   VALIDATEOBJECT(pArray);
 
-    BASEARRAYREF pArray = (BASEARRAYREF)pArrayUNSAFE;
+   _ASSERTE(pArray != NULL);
 
-    HELPER_METHOD_FRAME_BEGIN_1(pArray);
+    MethodTable *pMT = pArray->GetMethodTable();
 
-    // cannot pass null for array
-    if (pArray == NULL)
-        COMPlusThrowArgumentNull(W("array"), W("ArgumentNull_Array"));
+    *pNumComponents = pArray->GetNumComponents();
+    *pElementSize = pMT->RawGetComponentSize();
+    *pLowerBound = pArray->GetLowerBoundsPtr()[0];
+    *pContainsGCPointers = !!pMT->ContainsPointers();
 
-    // array must be an array
-    _ASSERTE(pArray->GetMethodTable()->IsArray());
-
-    // array bounds checking
-    int lb = pArray->GetLowerBoundsPtr()[0];
-    if (iIndex < lb || (iIndex - lb) < 0 || iLength < 0)
-        COMPlusThrow(kIndexOutOfRangeException);
-
-    if ((iIndex - lb) > (int)pArray->GetNumComponents() - iLength)
-        COMPlusThrow(kIndexOutOfRangeException);
-
-    if (iLength > 0)
-    {
-        char* array = (char*)pArray->GetDataPtr();
-
-        SIZE_T size = pArray->GetComponentSize();
-        _ASSERTE(size >= 1);
-
-        ZeroMemoryInGCHeap(array + (iIndex - lb) * size, iLength * size);
-    }
-
-    HELPER_METHOD_FRAME_END();
+    return (BYTE*)pArray + ArrayBase::GetDataPtrOffset(pMT);
 }
 FCIMPLEND
-
-
-
 
 
 

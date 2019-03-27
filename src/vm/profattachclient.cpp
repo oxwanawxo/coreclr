@@ -62,10 +62,6 @@ extern "C" HRESULT STDMETHODCALLTYPE AttachProfiler(
         GC_TRIGGERS;
         MODE_PREEMPTIVE;
         CAN_TAKE_LOCK;
-
-        // This is the entrypoint into the EE by a trigger process.  As such, this
-        // is profiling-specific and not considered mainline EE code.
-        SO_NOT_MAINLINE;
     }
     CONTRACTL_END;
 
@@ -673,8 +669,8 @@ HRESULT ProfilingAPIAttachClient::SignalAttachEvent(LPCWSTR wszEventName)
     }
 
     // Dealing directly with Windows event objects, not CLR event cookies, so
-    // using Win32 API directly.  Note that none of this code executes on rotor
-    // or if we're memory / sync-hosted, so the CLR wrapper is of no use to us anyway.
+    // using Win32 API directly.  Note that none of this code executes on Unix,
+    // so the CLR wrapper is of no use to us anyway.
 #pragma push_macro("SetEvent")
 #undef SetEvent
     if (!SetEvent(hAttachEvent))

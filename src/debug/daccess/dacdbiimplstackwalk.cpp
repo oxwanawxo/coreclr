@@ -54,7 +54,7 @@ public:
 };
 
 // Helper to allocate stackwalk datastructures for given parameters.
-// This is allocated on the local heap (and not via the forDbi allocatoror on the dac-cache), and then 
+// This is allocated on the local heap (and not via the forDbi allocator on the dac-cache), and then 
 // freed via code:DacDbiInterfaceImpl::DeleteStackWalk
 // 
 // Throws on error (mainly OOM).
@@ -505,12 +505,9 @@ void DacDbiInterfaceImpl::EnumerateInternalFrames(VMPTR_Thread                  
                         PTR_IUnknown pUnk          = dac_cast<PTR_IUnknown>(*dac_cast<PTR_TADDR>(pUnkStackSlot));
                         ComCallWrapper * pCCW      = ComCallWrapper::GetWrapperFromIP(pUnk);
 
-                        if (!pCCW->NeedToSwitchDomains(pAppDomain->GetId()))
-                        {
-                            ComCallMethodDesc * pCMD = NULL;
-                            pCMD = dac_cast<PTR_ComCallMethodDesc>(pCOMFrame->ComMethodFrame::GetDatum());
-                            pMD  = pCMD->GetInterfaceMethodDesc();
-                        }
+                        ComCallMethodDesc * pCMD = NULL;
+                        pCMD = dac_cast<PTR_ComCallMethodDesc>(pCOMFrame->ComMethodFrame::GetDatum());
+                        pMD  = pCMD->GetInterfaceMethodDesc();
                     }
                 }
                 EX_END_CATCH_ALLOW_DATATARGET_MISSING_MEMORY

@@ -1,3 +1,7 @@
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
+
 using System;
 using System.IO;
 using System.Diagnostics.Tracing;
@@ -67,7 +71,7 @@ namespace Tracing.Tests
                 }
                 Console.WriteLine("\tEnd: Messaging.\n");
                 
-                Console.WriteLine($"\tEventListener recieved {listener.EventCount} event(s)\n");
+                Console.WriteLine($"\tEventListener received {listener.EventCount} event(s)\n");
                 pass = listener.EventCount == messageIterations;
             }
 

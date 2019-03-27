@@ -17,7 +17,6 @@
 #include "slist.h"
 #include "crst.h"
 #include "vars.hpp"
-#include "yieldprocessornormalized.h"
 
 // #SyncBlockOverview
 // 
@@ -84,7 +83,6 @@ typedef DPTR(EnCSyncBlockInfo) PTR_EnCSyncBlockInfo;
 #include "eventstore.hpp"
 
 #include "synch.h"
-
 
 // At a negative offset from each Object is an ObjHeader.  The 'size' of the
 // object includes these bytes.  However, we rely on the previous object allocation
@@ -766,8 +764,6 @@ public:
 
     void FreeUMEntryThunkOrInterceptStub();
 
-    void OnADUnload();
-
 #endif // DACCESS_COMPILE
 
     void* GetUMEntryThunk()
@@ -787,9 +783,9 @@ private:
     // to the thunk generated for unmanaged code to call back on.
     // If this is a delegate representing an unmanaged function pointer,
     // this may point to a stub that intercepts calls to the unmng target.
-    // It is currently used for pInvokeStackImbalance MDA and host hook.
-    // We differentiate between the two by setting the lowest bit if it's
-    // an intercept stub.
+    // An example of an intercept call is pInvokeStackImbalance MDA.
+    // We differentiate between a thunk or intercept stub by setting the lowest
+    // bit if it is an intercept stub.
     void*               m_pUMEntryThunkOrInterceptStub;
 
 #ifdef FEATURE_COMINTEROP
@@ -914,8 +910,6 @@ class SyncBlock
        return (m_Monitor.m_dwSyncIndex & SyncBlockPrecious) != 0;
    }
 
-   void OnADUnload();
-
     // True is the syncblock and its index are disposable. 
     // If new members are added to the syncblock, this 
     // method needs to be modified accordingly
@@ -970,7 +964,6 @@ class SyncBlock
             NOTHROW;
             GC_NOTRIGGER;
             MODE_ANY;
-            SO_TOLERANT;
             SUPPORTS_DAC;
             POSTCONDITION(CheckPointer(RETVAL, NULL_OK));
         }
@@ -1609,13 +1602,6 @@ struct ThreadQueue
                                           void* pUserData);
 #endif
 };
-
-
-// The true size of an object is whatever C++ thinks, plus the ObjHeader we
-// allocate before it.
-
-#define ObjSizeOf(c)    (sizeof(c) + sizeof(ObjHeader))
-
 
 inline void AwareLock::SetPrecious()
 {

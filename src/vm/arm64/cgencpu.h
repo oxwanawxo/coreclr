@@ -57,6 +57,7 @@ extern PCODE GetPreStubEntryPoint();
 
 #define CALLDESCR_ARGREGS                       1   // CallDescrWorker has ArgumentRegister parameter
 #define CALLDESCR_FPARGREGS                     1   // CallDescrWorker has FloatArgumentRegisters parameter
+#define CALLDESCR_RETBUFFARGREG                 1   // CallDescrWorker has RetBuffArg parameter that's separate from arg regs
 
 // Given a return address retrieved during stackwalk,
 // this is the offset by which it should be decremented to arrive at the callsite.
@@ -77,7 +78,9 @@ extern PCODE GetPreStubEntryPoint();
 typedef INT64 StackElemType;
 #define STACK_ELEM_SIZE sizeof(StackElemType)
 
-// !! This expression assumes STACK_ELEM_SIZE is a power of 2.
+// The expression below assumes STACK_ELEM_SIZE is a power of 2, so check that.
+static_assert(((STACK_ELEM_SIZE & (STACK_ELEM_SIZE-1)) == 0), "STACK_ELEM_SIZE must be a power of 2");
+
 #define StackElemSize(parmSize) (((parmSize) + STACK_ELEM_SIZE - 1) & ~((ULONG)(STACK_ELEM_SIZE - 1)))
 
 //
@@ -97,7 +100,7 @@ typedef INT64 StackElemType;
 //**********************************************************************
 
 //--------------------------------------------------------------------
-// This represents the callee saved (non-volatile) registers saved as
+// This represents the callee saved (non-volatile) integer registers saved as
 // of a FramedMethodFrame.
 //--------------------------------------------------------------------
 typedef DPTR(struct CalleeSavedRegisters) PTR_CalleeSavedRegisters;
@@ -108,18 +111,18 @@ struct CalleeSavedRegisters {
 };
 
 //--------------------------------------------------------------------
-// This represents the arguments that are stored in volatile registers.
+// This represents the arguments that are stored in volatile integer registers.
 // This should not overlap the CalleeSavedRegisters since those are already
 // saved separately and it would be wasteful to save the same register twice.
 // If we do use a non-volatile register as an argument, then the ArgIterator
 // will probably have to communicate this back to the PromoteCallerStack
 // routine to avoid a double promotion.
 //--------------------------------------------------------------------
+#define NUM_ARGUMENT_REGISTERS 8
 typedef DPTR(struct ArgumentRegisters) PTR_ArgumentRegisters;
 struct ArgumentRegisters {
-    INT64 x[9]; // x0 ....x7 & x8 can contain return buffer address
+    INT64 x[NUM_ARGUMENT_REGISTERS]; // x0 ....x7. Note that x8 (return buffer address) is not included.
 };
-#define NUM_ARGUMENT_REGISTERS 9
 
 #define ARGUMENTREGISTERS_SIZE sizeof(ArgumentRegisters)
 
@@ -135,10 +138,10 @@ typedef DPTR(struct FloatArgumentRegisters) PTR_FloatArgumentRegisters;
 struct FloatArgumentRegisters {
     // armV8 supports 32 floating point registers. Each register is 128bits long.
     // It can be accessed as 128-bit value or 64-bit value(d0-d31) or as 32-bit value (s0-s31)
-    // or as 16-bit value or as 8-bit values. C# only has two builtin floating datatypes float(32-bit) and 
-    // double(64-bit). It does not have a quad-precision floating point.So therefore it does not make sense to
-    // store full 128-bit values in Frame when the upper 64 bit will not contain any values.
-    double  d[8];  // d0-d7
+    // or as 16-bit value or as 8-bit values.
+    // Although C# only has two builtin floating datatypes float(32-bit) and double(64-bit),
+    // HW Intrinsics support using the full 128-bit value for passing Vectors.
+    NEON128   q[8];  // q0-q7
 };
 
 
@@ -578,7 +581,7 @@ struct StubPrecode {
         CONTRACTL
         {
             THROWS;
-            GC_TRIGGERS;
+            GC_NOTRIGGER;
         }
         CONTRACTL_END;
 
@@ -591,7 +594,7 @@ struct StubPrecode {
         CONTRACTL
         {
             THROWS;
-            GC_TRIGGERS;
+            GC_NOTRIGGER;
         }
         CONTRACTL_END;
 
@@ -704,7 +707,7 @@ struct FixupPrecode {
         CONTRACTL
         {
             THROWS;
-            GC_TRIGGERS;
+            GC_NOTRIGGER;
         }
         CONTRACTL_END;
 
@@ -717,7 +720,7 @@ struct FixupPrecode {
         CONTRACTL
         {
             THROWS;
-            GC_TRIGGERS;
+            GC_NOTRIGGER;
         }
         CONTRACTL_END;
 
@@ -778,7 +781,7 @@ struct ThisPtrRetBufPrecode {
         CONTRACTL
         {
             THROWS;
-            GC_TRIGGERS;
+            GC_NOTRIGGER;
         }
         CONTRACTL_END;
 

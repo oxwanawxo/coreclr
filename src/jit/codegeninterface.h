@@ -25,6 +25,12 @@
 #include "jitgcinfo.h"
 #include "treelifeupdater.h"
 
+// Disable this flag to avoid using psiScope/siScope info to report reporting
+// variables' home location during the method/prolog code.
+#if 1
+#define USING_SCOPE_INFO
+#endif // USING_SCOPE_INFO
+
 // Forward reference types
 
 class CodeGenInterface;
@@ -37,11 +43,8 @@ class emitter;
 struct RegState
 {
     regMaskTP rsCalleeRegArgMaskLiveIn; // mask of register arguments (live on entry to method)
-#ifdef LEGACY_BACKEND
-    unsigned rsCurRegArgNum; // current argument number (for caller)
-#endif
-    unsigned rsCalleeRegArgCount; // total number of incoming register arguments of this kind (int or float)
-    bool     rsIsFloat;           // true for float argument registers, false for integer argument registers
+    unsigned  rsCalleeRegArgCount;      // total number of incoming register arguments of this kind (int or float)
+    bool      rsIsFloat;                // true for float argument registers, false for integer argument registers
 };
 
 //-------------------- CodeGenInterface ---------------------------------
@@ -57,13 +60,11 @@ public:
     CodeGenInterface(Compiler* theCompiler);
     virtual void genGenerateCode(void** codePtr, ULONG* nativeSizeOfCode) = 0;
 
-#ifndef LEGACY_BACKEND
-    // genSpillVar is called by compUpdateLifeVar in the RyuJIT backend case.
+    // genSpillVar is called by compUpdateLifeVar.
     // TODO-Cleanup: We should handle the spill directly in CodeGen, rather than
     // calling it from compUpdateLifeVar.  Then this can be non-virtual.
 
     virtual void genSpillVar(GenTree* tree) = 0;
-#endif // !LEGACY_BACKEND
 
     //-------------------------------------------------------------------------
     //  The following property indicates whether to align loops.
@@ -81,19 +82,14 @@ public:
     // TODO-Cleanup: Abstract out the part of this that finds the addressing mode, and
     // move it to Lower
     virtual bool genCreateAddrMode(GenTree*  addr,
-                                   int       mode,
                                    bool      fold,
-                                   regMaskTP regMask,
                                    bool*     revPtr,
                                    GenTree** rv1Ptr,
                                    GenTree** rv2Ptr,
 #if SCALED_ADDR_MODES
                                    unsigned* mulPtr,
-#endif
-                                   unsigned* cnsPtr,
-                                   bool      nogen = false) = 0;
-
-    void genCalcFrameSize();
+#endif // SCALED_ADDR_MODES
+                                   ssize_t* cnsPtr) = 0;
 
     GCInfo gcInfo;
 
@@ -101,24 +97,18 @@ public:
     RegState intRegState;
     RegState floatRegState;
 
-    // TODO-Cleanup: The only reason that regTracker needs to live in CodeGenInterface is that
-    // in RegSet::rsUnspillOneReg, it needs to mark the new register as "trash"
-    RegTracker regTracker;
-
-public:
-#ifdef LEGACY_BACKEND
-    void trashReg(regNumber reg)
-    {
-        regTracker.rsTrackRegTrash(reg);
-    }
-#endif
-
 protected:
     Compiler* compiler;
     bool      m_genAlignLoops;
 
 private:
+#if defined(_TARGET_XARCH_)
+    static const insFlags instInfo[INS_count];
+#elif defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
     static const BYTE instInfo[INS_count];
+#else
+#error Unsupported target architecture
+#endif
 
 #define INST_FP 0x01 // is it a FP instruction?
 public:
@@ -128,9 +118,7 @@ public:
     // Liveness-related fields & methods
 public:
     void genUpdateRegLife(const LclVarDsc* varDsc, bool isBorn, bool isDying DEBUGARG(GenTree* tree));
-#ifndef LEGACY_BACKEND
     void genUpdateVarReg(LclVarDsc* varDsc, GenTree* tree);
-#endif // !LEGACY_BACKEND
 
 protected:
 #ifdef DEBUG
@@ -146,11 +134,6 @@ protected:
 
     void genUpdateLife(GenTree* tree);
     void genUpdateLife(VARSET_VALARG_TP newLife);
-
-#ifdef LEGACY_BACKEND
-    regMaskTP genLiveMask(GenTree* tree);
-    regMaskTP genLiveMask(VARSET_VALARG_TP liveSet);
-#endif
 
     TreeLifeUpdater<true>* treeLifeUpdater;
 
@@ -194,10 +177,15 @@ public:
     }
 
 public:
-    int genCallerSPtoFPdelta();
-    int genCallerSPtoInitialSPdelta();
-    int genSPtoFPdelta();
-    int genTotalFrameSize();
+    int genCallerSPtoFPdelta() const;
+    int genCallerSPtoInitialSPdelta() const;
+    int genSPtoFPdelta() const;
+    int genTotalFrameSize() const;
+
+#ifdef _TARGET_ARM64_
+    virtual void SetSaveFpLrWithAllCalleeSavedRegisters(bool value) = 0;
+    virtual bool IsSaveFpLrWithAllCalleeSavedRegisters() const      = 0;
+#endif // _TARGET_ARM64_
 
     regNumber genGetThisArgReg(GenTreeCall* call) const;
 
@@ -296,66 +284,18 @@ protected:
 #endif
 
 public:
-#if FEATURE_STACK_FP_X87
-    FlatFPStateX87 compCurFPState;
-    unsigned       genFPregCnt; // count of current FP reg. vars (including dead but unpopped ones)
-
-    void SetRegVarFloat(regNumber reg, var_types type, LclVarDsc* varDsc);
-
-    void inst_FN(instruction ins, unsigned stk);
-
-    //  Keeps track of the current level of the FP coprocessor stack
-    //  (excluding FP reg. vars).
-    //  Do not use directly, instead use the processor agnostic accessor
-    //  methods below
-    //
-    unsigned genFPstkLevel;
-
-    void genResetFPstkLevel(unsigned newValue = 0);
-    unsigned        genGetFPstkLevel();
-    FlatFPStateX87* FlatFPAllocFPState(FlatFPStateX87* pInitFrom = 0);
-
-    void genIncrementFPstkLevel(unsigned inc = 1);
-    void genDecrementFPstkLevel(unsigned dec = 1);
-
-    static const char* regVarNameStackFP(regNumber reg);
-
-    // FlatFPStateX87_ functions are the actual verbs to do stuff
-    // like doing a transition, loading   register, etc. It's also
-    // responsible for emitting the x87 code to do so. We keep
-    // them in Compiler because we don't want to store a pointer to the
-    // emitter.
-    void FlatFPX87_MoveToTOS(FlatFPStateX87* pState, unsigned iVirtual, bool bEmitCode = true);
-    void FlatFPX87_SwapStack(FlatFPStateX87* pState, unsigned i, unsigned j, bool bEmitCode = true);
-
-#endif // FEATURE_STACK_FP_X87
-
-#ifndef LEGACY_BACKEND
-    regNumber genGetAssignedReg(GenTree* tree);
-#endif // !LEGACY_BACKEND
-
-#ifdef LEGACY_BACKEND
-    // Changes GT_LCL_VAR nodes to GT_REG_VAR nodes if possible.
-    bool genMarkLclVar(GenTree* tree);
-
-    void genBashLclVar(GenTree* tree, unsigned varNum, LclVarDsc* varDsc);
-#endif // LEGACY_BACKEND
-
-public:
     unsigned InferStructOpSizeAlign(GenTree* op, unsigned* alignmentWB);
     unsigned InferOpSizeAlign(GenTree* op, unsigned* alignmentWB);
 
     void genMarkTreeInReg(GenTree* tree, regNumber reg);
-#if CPU_LONG_USES_REGPAIR
-    void genMarkTreeInRegPair(GenTree* tree, regPairNo regPair);
-#endif
+
     // Methods to abstract target information
 
-    bool validImmForInstr(instruction ins, ssize_t val, insFlags flags = INS_FLAGS_DONT_CARE);
-    bool validDispForLdSt(ssize_t disp, var_types type);
-    bool validImmForAdd(ssize_t imm, insFlags flags);
-    bool validImmForAlu(ssize_t imm);
-    bool validImmForMov(ssize_t imm);
+    bool validImmForInstr(instruction ins, target_ssize_t val, insFlags flags = INS_FLAGS_DONT_CARE);
+    bool validDispForLdSt(target_ssize_t disp, var_types type);
+    bool validImmForAdd(target_ssize_t imm, insFlags flags);
+    bool validImmForAlu(target_ssize_t imm);
+    bool validImmForMov(target_ssize_t imm);
     bool validImmForBL(ssize_t addr);
 
     instruction ins_Load(var_types srcType, bool aligned = false);
@@ -365,17 +305,12 @@ public:
     // Methods for spilling - used by RegSet
     void spillReg(var_types type, TempDsc* tmp, regNumber reg);
     void reloadReg(var_types type, TempDsc* tmp, regNumber reg);
-    void reloadFloatReg(var_types type, TempDsc* tmp, regNumber reg);
-
-#ifdef LEGACY_BACKEND
-    void SpillFloat(regNumber reg, bool bIsCall = false);
-#endif // LEGACY_BACKEND
 
     // The following method is used by xarch emitter for handling contained tree temps.
     TempDsc* getSpillTempDsc(GenTree* tree);
 
 public:
-    emitter* getEmitter()
+    emitter* getEmitter() const
     {
         return m_cgEmitter;
     }
@@ -401,11 +336,6 @@ public:
         verbose = value;
     }
     bool verbose;
-#ifdef LEGACY_BACKEND
-    // Stress mode
-    int       genStressFloat();
-    regMaskTP genStressLockedMaskFloat();
-#endif // LEGACY_BACKEND
 #endif // DEBUG
 
     // The following is set to true if we've determined that the current method
@@ -461,7 +391,163 @@ private:
     bool m_cgFullPtrRegMap;
 
 public:
+#ifdef USING_SCOPE_INFO
     virtual void siUpdate() = 0;
+#endif // USING_SCOPE_INFO
+
+    /* These are the different addressing modes used to access a local var.
+     * The JIT has to report the location of the locals back to the EE
+     * for debugging purposes.
+     */
+
+    enum siVarLocType
+    {
+        VLT_REG,
+        VLT_REG_BYREF, // this type is currently only used for value types on X64
+        VLT_REG_FP,
+        VLT_STK,
+        VLT_STK_BYREF, // this type is currently only used for value types on X64
+        VLT_REG_REG,
+        VLT_REG_STK,
+        VLT_STK_REG,
+        VLT_STK2,
+        VLT_FPSTK,
+        VLT_FIXED_VA,
+
+        VLT_COUNT,
+        VLT_INVALID
+    };
+
+    struct siVarLoc
+    {
+        siVarLocType vlType;
+
+        union {
+            // VLT_REG/VLT_REG_FP -- Any pointer-sized enregistered value (TYP_INT, TYP_REF, etc)
+            // eg. EAX
+            // VLT_REG_BYREF -- the specified register contains the address of the variable
+            // eg. [EAX]
+
+            struct
+            {
+                regNumber vlrReg;
+            } vlReg;
+
+            // VLT_STK       -- Any 32 bit value which is on the stack
+            // eg. [ESP+0x20], or [EBP-0x28]
+            // VLT_STK_BYREF -- the specified stack location contains the address of the variable
+            // eg. mov EAX, [ESP+0x20]; [EAX]
+
+            struct
+            {
+                regNumber     vlsBaseReg;
+                NATIVE_OFFSET vlsOffset;
+            } vlStk;
+
+            // VLT_REG_REG -- TYP_LONG/TYP_DOUBLE with both DWords enregistered
+            // eg. RBM_EAXEDX
+
+            struct
+            {
+                regNumber vlrrReg1;
+                regNumber vlrrReg2;
+            } vlRegReg;
+
+            // VLT_REG_STK -- Partly enregistered TYP_LONG/TYP_DOUBLE
+            // eg { LowerDWord=EAX UpperDWord=[ESP+0x8] }
+
+            struct
+            {
+                regNumber vlrsReg;
+
+                struct
+                {
+                    regNumber     vlrssBaseReg;
+                    NATIVE_OFFSET vlrssOffset;
+                } vlrsStk;
+            } vlRegStk;
+
+            // VLT_STK_REG -- Partly enregistered TYP_LONG/TYP_DOUBLE
+            // eg { LowerDWord=[ESP+0x8] UpperDWord=EAX }
+
+            struct
+            {
+                struct
+                {
+                    regNumber     vlsrsBaseReg;
+                    NATIVE_OFFSET vlsrsOffset;
+                } vlsrStk;
+
+                regNumber vlsrReg;
+            } vlStkReg;
+
+            // VLT_STK2 -- Any 64 bit value which is on the stack, in 2 successsive DWords
+            // eg 2 DWords at [ESP+0x10]
+
+            struct
+            {
+                regNumber     vls2BaseReg;
+                NATIVE_OFFSET vls2Offset;
+            } vlStk2;
+
+            // VLT_FPSTK -- enregisterd TYP_DOUBLE (on the FP stack)
+            // eg. ST(3). Actually it is ST("FPstkHeight - vpFpStk")
+
+            struct
+            {
+                unsigned vlfReg;
+            } vlFPstk;
+
+            // VLT_FIXED_VA -- fixed argument of a varargs function.
+            // The argument location depends on the size of the variable
+            // arguments (...). Inspecting the VARARGS_HANDLE indicates the
+            // location of the first arg. This argument can then be accessed
+            // relative to the position of the first arg
+
+            struct
+            {
+                unsigned vlfvOffset;
+            } vlFixedVarArg;
+
+            // VLT_MEMORY
+
+            struct
+            {
+                void* rpValue; // pointer to the in-process
+                               // location of the value.
+            } vlMemory;
+        };
+
+        // Helper functions
+
+        bool vlIsInReg(regNumber reg) const;
+        bool vlIsOnStk(regNumber reg, signed offset) const;
+
+        siVarLoc(const LclVarDsc* varDsc, regNumber baseReg, int offset, bool isFramePointerUsed);
+        siVarLoc(){};
+
+        // An overload for the equality comparator
+        static bool Equals(const siVarLoc* lhs, const siVarLoc* rhs);
+
+    private:
+        // Fill "siVarLoc" properties indicating the register position of the variable
+        // using "LclVarDsc" and "baseReg"/"offset" if it has a part in the stack (x64 bit float or long).
+        void siFillRegisterVarLoc(
+            const LclVarDsc* varDsc, var_types type, regNumber baseReg, int offset, bool isFramePointerUsed);
+
+        // Fill "siVarLoc" properties indicating the register position of the variable
+        // using "LclVarDsc" and "baseReg"/"offset" if it is a variable with part in a register and
+        // part in thestack
+        void siFillStackVarLoc(
+            const LclVarDsc* varDsc, var_types type, regNumber baseReg, int offset, bool isFramePointerUsed);
+    };
+
+public:
+    unsigned getCurrentStackLevel() const;
+
+protected:
+    //  Keeps track of how many bytes we've pushed on the processor's stack.
+    unsigned genStackLevel;
 
 #ifdef LATE_DISASM
 public:

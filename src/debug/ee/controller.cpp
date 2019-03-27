@@ -644,7 +644,7 @@ DebuggerControllerPatch *DebuggerPatchTable::AddPatchForAddress(DebuggerControll
         LOG((LF_CORDB,LL_INFO10000,"AddPatchForAddress w/ version 0x%04x, "
             "pid:0x%x\n", dji->m_methodInfo->GetCurrentEnCVersion(), patch->pid));
 
-        _ASSERTE( fd==NULL || fd == dji->m_fd );
+        _ASSERTE( fd==NULL || fd == dji->m_nativeCodeVersion.GetMethodDesc() );
     }
 
     SortPatchIntoPatchList(&patch);
@@ -958,7 +958,6 @@ DebuggerController::DebuggerController(Thread * pThread, AppDomain * pAppDomain)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
         CONSTRUCTOR_CHECK;
@@ -993,7 +992,6 @@ void DebuggerController::DeleteAllControllers()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -1016,7 +1014,6 @@ DebuggerController::~DebuggerController()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
         DESTRUCTOR_CHECK;
@@ -1051,7 +1048,6 @@ void DebuggerController::Delete()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -1108,7 +1104,6 @@ void DebuggerController::DisableAll()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
@@ -1185,7 +1180,6 @@ void DebuggerController::Dequeue()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -1234,7 +1228,6 @@ bool DebuggerController::BindPatch(DebuggerControllerPatch *patch,
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         THROWS; // from GetJitInfo
         GC_NOTRIGGER;
         MODE_ANY; // don't really care what mode we're in.
@@ -1662,7 +1655,6 @@ BOOL DebuggerController::CheckGetPatchedOpcode(CORDB_ADDRESS_TYPE *address,
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE; // take Controller lock.
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -1865,7 +1857,7 @@ BOOL DebuggerController::AddBindAndActivateILSlavePatch(DebuggerControllerPatch 
         // code bodies. 
         _ASSERTE(master->offset == 0);
         INDEBUG(BOOL fOk = )
-            AddBindAndActivatePatchForMethodDesc(dji->m_fd, dji,
+            AddBindAndActivatePatchForMethodDesc(dji->m_nativeCodeVersion.GetMethodDesc(), dji,
                 0, PATCH_KIND_IL_SLAVE,
                 LEAF_MOST_FRAME, m_pAppDomain);
         _ASSERTE(fOk);
@@ -1892,7 +1884,7 @@ BOOL DebuggerController::AddBindAndActivateILSlavePatch(DebuggerControllerPatch 
             if (!fExact && (masterILOffset != 0))
             {
                 LOG((LF_CORDB, LL_INFO10000, "DC::BP:Failed to bind patch at IL offset 0x%p in %s::%s\n",
-                    masterILOffset, dji->m_fd->m_pszDebugClassName, dji->m_fd->m_pszDebugMethodName));
+                    masterILOffset, dji->m_nativeCodeVersion.GetMethodDesc()->m_pszDebugClassName, dji->m_nativeCodeVersion.GetMethodDesc()->m_pszDebugMethodName));
 
                 continue;
             }
@@ -1902,7 +1894,7 @@ BOOL DebuggerController::AddBindAndActivateILSlavePatch(DebuggerControllerPatch 
             }
 
             INDEBUG(BOOL fOk = )
-                AddBindAndActivatePatchForMethodDesc(dji->m_fd, dji,
+                AddBindAndActivatePatchForMethodDesc(dji->m_nativeCodeVersion.GetMethodDesc(), dji,
                     offsetNative, PATCH_KIND_IL_SLAVE,
                     LEAF_MOST_FRAME, m_pAppDomain);
             _ASSERTE(fOk);
@@ -1982,7 +1974,7 @@ BOOL DebuggerController::AddILPatch(AppDomain * pAppDomain, Module *module,
                 DebuggerJitInfo *dji = it.Current();
                 _ASSERTE(dji->m_jitComplete);
                 if (dji->m_encVersion == encVersion &&
-                   (pMethodDescFilter == NULL || pMethodDescFilter == dji->m_fd))
+                   (pMethodDescFilter == NULL || pMethodDescFilter == dji->m_nativeCodeVersion.GetMethodDesc()))
                 {
                     fVersionMatch = TRUE;
 
@@ -2022,7 +2014,6 @@ void DebuggerController::AddPatchToStartOfLatestMethod(MethodDesc * fd)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         THROWS; // from GetJitInfo
         GC_NOTRIGGER;
         MODE_ANY; // don't really care what mode we're in.
@@ -2050,7 +2041,6 @@ BOOL DebuggerController::AddBindAndActivateNativeManagedPatch(MethodDesc * fd,
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         THROWS; // from GetJitInfo
         GC_NOTRIGGER;
         MODE_ANY; // don't really care what mode we're in.
@@ -2062,7 +2052,7 @@ BOOL DebuggerController::AddBindAndActivateNativeManagedPatch(MethodDesc * fd,
     CONTRACTL_END;
 
     // For non-dynamic methods, we always expect to have a DJI, but just in case, we don't want the assert to AV.
-    _ASSERTE((dji == NULL) || (fd == dji->m_fd));
+    _ASSERTE((dji == NULL) || (fd == dji->m_nativeCodeVersion.GetMethodDesc()));
     _ASSERTE(g_patches != NULL);
     return DebuggerController::AddBindAndActivatePatchForMethodDesc(fd, dji, offsetNative, PATCH_KIND_NATIVE_MANAGED, fp, pAppDomain);
 }
@@ -2077,7 +2067,6 @@ BOOL DebuggerController::AddBindAndActivatePatchForMethodDesc(MethodDesc *fd,
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         THROWS;
         GC_NOTRIGGER;
         MODE_ANY; // don't really care what mode we're in.
@@ -2160,7 +2149,6 @@ void DebuggerController::RemovePatchesFromModule(Module *pModule, AppDomain *pAp
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -2187,7 +2175,7 @@ void DebuggerController::RemovePatchesFromModule(Module *pModule, AppDomain *pAp
         {
             DebuggerJitInfo * dji = patch->GetDJI();
 
-            _ASSERTE(patch->key.module == dji->m_fd->GetModule());
+            _ASSERTE(patch->key.module == dji->m_nativeCodeVersion.GetMethodDesc()->GetModule());
 
             // It is not necessary to check for m_fd->GetModule() here. It will
             // be covered by other module unload notifications issued for the appdomain.
@@ -2217,7 +2205,6 @@ bool DebuggerController::ModuleHasPatches( Module* pModule )
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -2243,11 +2230,11 @@ bool DebuggerController::ModuleHasPatches( Module* pModule )
         {
             DebuggerJitInfo * dji = patch->GetDJI();
 
-            _ASSERTE(patch->key.module == dji->m_fd->GetModule());
+            _ASSERTE(patch->key.module == dji->m_nativeCodeVersion.GetMethodDesc()->GetModule());
 
             // It may be sufficient to just check m_pLoaderModule here. Since this is used for debug-only
             // check, we will check for m_fd->GetModule() as well to catch more potential problems.
-            if ( (dji->m_pLoaderModule == pModule) || (dji->m_fd->GetModule() == pModule) )
+            if ( (dji->m_pLoaderModule == pModule) || (dji->m_nativeCodeVersion.GetMethodDesc()->GetModule() == pModule) )
             {
                 return true;
             }
@@ -2572,7 +2559,6 @@ DPOSS_ACTION DebuggerController::ScanForTriggers(CORDB_ADDRESS_TYPE *address,
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         // @todo - should this throw or not?
         NOTHROW;
 
@@ -2585,7 +2571,6 @@ DPOSS_ACTION DebuggerController::ScanForTriggers(CORDB_ADDRESS_TYPE *address,
         PRECONDITION(CheckPointer(context));
         PRECONDITION(CheckPointer(pDcq));
         PRECONDITION(CheckPointer(pTpr));
-
     }
     CONTRACTL_END;
 
@@ -2725,6 +2710,16 @@ DPOSS_ACTION DebuggerController::ScanForTriggers(CORDB_ADDRESS_TYPE *address,
             patch = NULL;
         }
     }
+
+#ifdef FEATURE_DATABREAKPOINT
+    if (stWhat & ST_SINGLE_STEP &&
+        tpr != TPR_TRIGGER_ONLY_THIS && 
+        DebuggerDataBreakpoint::TriggerDataBreakpoint(thread, context))
+    {
+        DebuggerDataBreakpoint *pDataBreakpoint = new (interopsafe) DebuggerDataBreakpoint(thread);
+        pDcq->dcqEnqueue(pDataBreakpoint, FALSE);
+    }
+#endif
 
     if (stWhat & ST_SINGLE_STEP &&
         tpr != TPR_TRIGGER_ONLY_THIS)
@@ -2867,7 +2862,7 @@ DPOSS_ACTION DebuggerController::DispatchPatchOrSingleStep(Thread *thread, CONTE
 
     CONTRACT_VIOLATION(ThrowsViolation);
 
-    LOG((LF_CORDB|LF_ENC,LL_INFO1000,"DC:DPOSS at 0x%x trigger:0x%x\n", address, which));
+    LOG((LF_CORDB|LF_ENC,LL_INFO1000,"DC:DPOSS at 0x%p trigger:0x%x\n", address, which));
 
     // We should only have an exception if some managed thread was running.
     // Thus we should never be here when we're stopped.
@@ -2904,7 +2899,7 @@ DPOSS_ACTION DebuggerController::DispatchPatchOrSingleStep(Thread *thread, CONTE
                                                      thread,
                                                      TY_SHORT_CIRCUIT);
 
-        // We will only come back here on a RemapOppporunity that wasn't taken, or on a RemapComplete.
+        // We will only come back here on a RemapOpportunity that wasn't taken, or on a RemapComplete.
         // If we processed a RemapComplete (which returns TPR_IGNORE_AND_STOP), then don't want to handle
         // additional breakpoints on the current line because we've already effectively executed to that point
         // and would have hit them already. If they are new, we also don't want to hit them because eg. if are
@@ -3103,7 +3098,6 @@ void DebuggerController::EnableSingleStep()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3140,7 +3134,6 @@ BOOL DebuggerController::IsSingleStepEnabled(Thread *pThread)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3163,7 +3156,6 @@ void DebuggerController::EnableSingleStep(Thread *pThread)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3185,7 +3177,6 @@ void DebuggerController::DisableSingleStep()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3287,7 +3278,6 @@ void DebuggerController::EnableExceptionHook()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3304,7 +3294,6 @@ void DebuggerController::DisableExceptionHook()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3331,7 +3320,6 @@ BOOL DebuggerController::DispatchExceptionHook(Thread *thread,
     // This can only modify controller's internal state. Can't send managed debug events.
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         GC_NOTRIGGER;
         NOTHROW;
         MODE_ANY;
@@ -3396,7 +3384,6 @@ void DebuggerController::EnableUnwind(FramePointer fp)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3455,7 +3442,6 @@ bool DebuggerController::DispatchUnwind(Thread *thread,
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER; // don't send IPC events
         MODE_COOPERATIVE; // TriggerUnwind always is coop
@@ -3569,7 +3555,6 @@ void DebuggerController::EnableTraceCall(FramePointer maxFrame)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3607,7 +3592,6 @@ VOID DebuggerController::PatchTargetVisitor(TADDR pVirtualTraceCallTarget, VOID*
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3638,7 +3622,6 @@ void DebuggerController::DisableTraceCall()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3825,7 +3808,6 @@ void DebuggerController::EnableMethodEnter()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3858,7 +3840,6 @@ void DebuggerController::DisableMethodEnter()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -3903,8 +3884,8 @@ void DebuggerController::DispatchMethodEnter(void * pIP, FramePointer fp)
     }
 
     LOG((LF_CORDB, LL_INFO100000, "DC::DispatchMethodEnter for '%s::%s'\n",
-        dji->m_fd->m_pszDebugClassName,
-        dji->m_fd->m_pszDebugMethodName));
+        dji->m_nativeCodeVersion.GetMethodDesc()->m_pszDebugClassName,
+        dji->m_nativeCodeVersion.GetMethodDesc()->m_pszDebugMethodName));
 
     ControllerLockHolder lockController;
 
@@ -4021,7 +4002,6 @@ bool DebuggerController::SendEvent(Thread *thread, bool fIpChanged)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         SENDEVENT_CONTRACT_ITEMS;
     }
@@ -4083,7 +4063,6 @@ void ThisFunctionMayHaveTriggerAGC()
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         GC_TRIGGERS;
         NOTHROW;
     }
@@ -4110,7 +4089,6 @@ bool DebuggerController::DispatchNativeException(EXCEPTION_RECORD *pException,
 {
     CONTRACTL
     {
-        SO_INTOLERANT;
         NOTHROW;
 
         // If this exception is for the debugger, then we may trigger a GC.
@@ -4686,7 +4664,6 @@ TP_RESULT DebuggerPatchSkip::TriggerExceptionHook(Thread *thread, CONTEXT * cont
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
         // Patch skippers only operate on patches set in managed code. But the infrastructure may have
@@ -4987,7 +4964,6 @@ bool DebuggerBreakpoint::SendEvent(Thread *thread, bool fIpChanged)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         SENDEVENT_CONTRACT_ITEMS;
     }
@@ -5820,12 +5796,12 @@ bool DebuggerStepper::TrapStep(ControllerStackInfo *info, bool in)
     // What if the thread is stopped at a managed debug event outside of a filter ctx? Eg, stopped
     // somewhere directly in mscorwks (like sending a LogMsg or ClsLoad event) or even at WaitForSingleObject.
     // ActiveFrame is either the stepper's initial frame or the frame of a filterctx.
-    bool fIsActivFrameLive = (info->m_activeFrame.fp == info->m_bottomFP);
+    bool fIsActiveFrameLive = (info->m_activeFrame.fp == info->m_bottomFP);
 
     // If this thread isn't stopped in managed code, it can't be at the active frame.
     if (GetManagedStoppedCtx(this->GetThread()) == NULL)
     {
-        fIsActivFrameLive = false;
+        fIsActiveFrameLive = false;
     }
 
     bool fIsJump             = false;
@@ -5834,7 +5810,7 @@ bool DebuggerStepper::TrapStep(ControllerStackInfo *info, bool in)
     // If m_activeFrame is not the actual active frame,
     // we should skip this first switch - never single step, and
     // assume our context is bogus.
-    if (fIsActivFrameLive)
+    if (fIsActiveFrameLive)
     {
         LOG((LF_CORDB,LL_INFO10000, "DC::TS: immediate?\n"));
 
@@ -5974,7 +5950,7 @@ bool DebuggerStepper::TrapStep(ControllerStackInfo *info, bool in)
                 walker.Next();
             }
         }
-    } // if (fIsActivFrameLive)
+    } // if (fIsActiveFrameLive)
 
     //
     // Use our range, if we're in the original
@@ -6639,7 +6615,6 @@ bool DebuggerStepper::SetRangesFromIL(DebuggerJitInfo *dji, COR_DEBUG_STEP_RANGE
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         WRAPPER(THROWS);
         GC_NOTRIGGER;
         PRECONDITION(ThisIsHelperThreadWorker()); // Only help initializes a stepper.
@@ -6652,7 +6627,7 @@ bool DebuggerStepper::SetRangesFromIL(DebuggerJitInfo *dji, COR_DEBUG_STEP_RANGE
     // Note: we used to pass in the IP from the active frame to GetJitInfo, but there seems to be no value in that, and
     // it was causing problems creating a stepper while sitting in ndirect stubs after we'd returned from the unmanaged
     // function that had been called.
-    MethodDesc *fd = dji->m_fd;
+    MethodDesc *fd = dji->m_nativeCodeVersion.GetMethodDesc();
 
     // The "+1" is for internal use, when we need to
     // set an intermediate patch in pitched code.  Isn't
@@ -7142,7 +7117,7 @@ TP_RESULT DebuggerStepper::TriggerPatch(DebuggerControllerPatch *patch,
                         dji = g_pDebugger->GetJitInfoFromAddr((TADDR) traceManagerRetAddr);
                         
                         MethodDesc * mdNative = (dji == NULL) ? 
-                            g_pEEInterface->GetNativeCodeMethodDesc(dac_cast<PCODE>(traceManagerRetAddr)) : dji->m_fd;
+                            g_pEEInterface->GetNativeCodeMethodDesc(dac_cast<PCODE>(traceManagerRetAddr)) : dji->m_nativeCodeVersion.GetMethodDesc();
                         _ASSERTE(mdNative != NULL);
 
                         // Find the method that the return is to.
@@ -7290,7 +7265,7 @@ void DebuggerStepper::TriggerMethodEnter(Thread * thread,
 
     _ASSERTE(!IsFrozen());
 
-    MethodDesc * pDesc = dji->m_fd;
+    MethodDesc * pDesc = dji->m_nativeCodeVersion.GetMethodDesc();
     LOG((LF_CORDB, LL_INFO10000, "DJMCStepper::TME, desc=%p, addr=%p\n",
         pDesc, ip));
 
@@ -7381,7 +7356,7 @@ void DebuggerStepper::TriggerMethodEnter(Thread * thread,
 // We never single-step into calls (we place a patch at the call destination).
 bool DebuggerStepper::TriggerSingleStep(Thread *thread, const BYTE *ip)
 {
-    LOG((LF_CORDB,LL_INFO10000,"DS:TSS this:0x%x, @ ip:0x%x\n", this, ip));
+    LOG((LF_CORDB,LL_INFO10000,"DS:TSS this:0x%p, @ ip:0x%p\n", this, ip));
 
     _ASSERTE(!IsFrozen());
 
@@ -7443,7 +7418,7 @@ bool DebuggerStepper::TriggerSingleStep(Thread *thread, const BYTE *ip)
 
     DisableAll();
 
-    LOG((LF_CORDB,LL_INFO10000, "DS::TSS m_fp:0x%x, activeFP:0x%x fpExc:0x%x\n",
+    LOG((LF_CORDB,LL_INFO10000, "DS::TSS m_fp:0x%p, activeFP:0x%p fpExc:0x%p\n",
         m_fp.GetSPValue(), info.m_activeFrame.fp.GetSPValue(), m_fpException.GetSPValue()));
 
     if (DetectHandleLCGMethods((PCODE)ip, fd, &info))
@@ -7531,7 +7506,6 @@ void DebuggerStepper::TriggerUnwind(Thread *thread,
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         THROWS; // from GetJitInfo
         GC_NOTRIGGER; // don't send IPC events
         MODE_COOPERATIVE; // TriggerUnwind always is coop
@@ -7655,7 +7629,7 @@ void DebuggerStepper::PrepareForSendEvent(StackTraceTicket ticket)
                     dmi = dji->m_methodInfo;
 
                     CONSISTENCY_CHECK_MSGF(dmi->IsJMCFunction(), ("JMC stepper %p stopping in non-jmc method, MD=%p, '%s::%s'",
-                        this, dji->m_fd, dji->m_fd->m_pszDebugClassName, dji->m_fd->m_pszDebugMethodName));
+                        this, dji->m_nativeCodeVersion.GetMethodDesc(), dji->m_nativeCodeVersion.GetMethodDesc()->m_pszDebugClassName, dji->m_nativeCodeVersion.GetMethodDesc()->m_pszDebugMethodName));
 
                 }
 
@@ -7670,7 +7644,6 @@ bool DebuggerStepper::SendEvent(Thread *thread, bool fIpChanged)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         SENDEVENT_CONTRACT_ITEMS;
     }
@@ -7931,7 +7904,7 @@ void DebuggerJMCStepper::TriggerMethodEnter(Thread * thread,
 
     _ASSERTE(!IsFrozen());
 
-    MethodDesc * pDesc = dji->m_fd;
+    MethodDesc * pDesc = dji->m_nativeCodeVersion.GetMethodDesc();
     LOG((LF_CORDB, LL_INFO10000, "DJMCStepper::TME, desc=%p, addr=%p\n",
         pDesc, ip));
 
@@ -8298,7 +8271,6 @@ bool DebuggerThreadStarter::SendEvent(Thread *thread, bool fIpChanged)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         SENDEVENT_CONTRACT_ITEMS;
     }
@@ -8510,7 +8482,6 @@ bool DebuggerUserBreakpoint::SendEvent(Thread *thread, bool fIpChanged)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         SENDEVENT_CONTRACT_ITEMS;
     }
@@ -8566,6 +8537,22 @@ TP_RESULT DebuggerFuncEvalComplete::TriggerPatch(DebuggerControllerPatch *patch,
 
     // Restore the thread's context to what it was before we hijacked it for this func eval.
     CONTEXT *pCtx = GetManagedLiveCtx(thread);
+#ifdef FEATURE_DATABREAKPOINT
+#ifdef FEATURE_PAL    
+        #error Not supported
+#endif // FEATURE_PAL
+#if defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
+    // If a data breakpoint is set while we hit a breakpoint inside a FuncEval, this will make sure the data breakpoint stays
+    m_pDE->m_context.Dr0 = pCtx->Dr0;
+    m_pDE->m_context.Dr1 = pCtx->Dr1;
+    m_pDE->m_context.Dr2 = pCtx->Dr2;
+    m_pDE->m_context.Dr3 = pCtx->Dr3;
+    m_pDE->m_context.Dr6 = pCtx->Dr6;
+    m_pDE->m_context.Dr7 = pCtx->Dr7;
+#else
+    #error Not supported
+#endif
+#endif
     CORDbgCopyThreadContext(reinterpret_cast<DT_CONTEXT *>(pCtx), 
                             reinterpret_cast<DT_CONTEXT *>(&(m_pDE->m_context)));
 
@@ -8579,7 +8566,6 @@ bool DebuggerFuncEvalComplete::SendEvent(Thread *thread, bool fIpChanged)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         THROWS;
         SENDEVENT_CONTRACT_ITEMS;
     }
@@ -8638,7 +8624,7 @@ DebuggerEnCBreakpoint::DebuggerEnCBreakpoint(SIZE_T offset,
 {
     _ASSERTE( jitInfo != NULL );
     // Add and activate the specified patch
-    AddBindAndActivateNativeManagedPatch(jitInfo->m_fd, jitInfo, offset, LEAF_MOST_FRAME, pAppDomain);
+    AddBindAndActivateNativeManagedPatch(jitInfo->m_nativeCodeVersion.GetMethodDesc(), jitInfo, offset, LEAF_MOST_FRAME, pAppDomain);
     LOG((LF_ENC,LL_INFO1000, "DEnCBPDEnCBP::adding %S patch!\n",
         fTriggerType == REMAP_PENDING ? W("remap pending") : W("remap complete")));
 }
@@ -8718,7 +8704,7 @@ TP_RESULT DebuggerEnCBreakpoint::TriggerPatch(DebuggerControllerPatch *patch,
     // what we are executing right now.
     DebuggerJitInfo *pJitInfo = m_jitInfo;
     _ASSERTE(pJitInfo);
-    _ASSERTE(pJitInfo->m_fd == pFD);
+    _ASSERTE(pJitInfo->m_nativeCodeVersion.GetMethodDesc() == pFD);
 
     // Grab the context for this thread. This is the context that was
     // passed to COMPlusFrameHandler.
@@ -8877,7 +8863,7 @@ DebuggerContinuableExceptionBreakpoint::DebuggerContinuableExceptionBreakpoint(T
 {
     _ASSERTE( jitInfo != NULL );
     // Add a native patch at the specified native offset, which is where we are going to resume execution.
-    AddBindAndActivateNativeManagedPatch(jitInfo->m_fd, jitInfo, nativeOffset, LEAF_MOST_FRAME, pAppDomain);
+    AddBindAndActivateNativeManagedPatch(jitInfo->m_nativeCodeVersion.GetMethodDesc(), jitInfo, nativeOffset, LEAF_MOST_FRAME, pAppDomain);
 }
 
 //---------------------------------------------------------------------------------------
@@ -8924,7 +8910,6 @@ bool DebuggerContinuableExceptionBreakpoint::SendEvent(Thread *thread, bool fIpC
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         SENDEVENT_CONTRACT_ITEMS;
     }
@@ -8957,4 +8942,93 @@ bool DebuggerContinuableExceptionBreakpoint::SendEvent(Thread *thread, bool fIpC
 
     return true;
 }
+
+#ifdef FEATURE_DATABREAKPOINT
+
+/* static */ bool DebuggerDataBreakpoint::TriggerDataBreakpoint(Thread *thread, CONTEXT * pContext)
+{
+    LOG((LF_CORDB, LL_INFO10000, "D::DDBP: Doing TriggerDataBreakpoint...\n"));
+
+    bool hitDataBp = false;
+    bool result = false;
+#ifdef FEATURE_PAL    
+    #error Not supported
+#endif // FEATURE_PAL    
+#if defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
+    PDR6 pdr6 = (PDR6)&(pContext->Dr6);
+
+    if (pdr6->B0 || pdr6->B1 || pdr6->B2 || pdr6->B3)
+    {
+        hitDataBp = true;
+    }
+#else // defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
+    #error Not supported
+#endif // defined(_TARGET_X86_) || defined(_TARGET_AMD64_)
+    if (hitDataBp)
+    {
+        if (g_pDebugger->IsThreadAtSafePlace(thread))
+        {
+            LOG((LF_CORDB, LL_INFO10000, "D::DDBP: HIT DATA BREAKPOINT...\n"));
+            result = true;
+        }
+        else
+        {
+            CONTEXT contextToAdjust;
+            BOOL adjustedContext = FALSE;
+            memcpy(&contextToAdjust, pContext, sizeof(CONTEXT));
+            adjustedContext = g_pEEInterface->AdjustContextForWriteBarrierForDebugger(&contextToAdjust);        
+            if (adjustedContext)
+            {
+                LOG((LF_CORDB, LL_INFO10000, "D::DDBP: HIT DATA BREAKPOINT INSIDE WRITE BARRIER...\n"));
+                DebuggerDataBreakpoint *pDataBreakpoint = new (interopsafe) DebuggerDataBreakpoint(thread);
+                pDataBreakpoint->AddAndActivateNativePatchForAddress((CORDB_ADDRESS_TYPE*)GetIP(&contextToAdjust), FramePointer::MakeFramePointer(GetFP(&contextToAdjust)), true, DPT_DEFAULT_TRACE_TYPE);
+            }
+            else
+            {
+                LOG((LF_CORDB, LL_INFO10000, "D::DDBP: HIT DATA BREAKPOINT BUT STILL NEED TO ROLL ...\n"));
+                DebuggerDataBreakpoint *pDataBreakpoint = new (interopsafe) DebuggerDataBreakpoint(thread);
+                pDataBreakpoint->EnableSingleStep();
+            }
+            result = false;
+        }
+    }
+    else
+    {
+        LOG((LF_CORDB, LL_INFO10000, "D::DDBP: DIDN'T TRIGGER DATA BREAKPOINT...\n"));
+        result = false;
+    }
+    return result;
+}
+
+TP_RESULT DebuggerDataBreakpoint::TriggerPatch(DebuggerControllerPatch *patch, Thread *thread,  TRIGGER_WHY tyWhy)
+{
+    if (g_pDebugger->IsThreadAtSafePlace(thread))
+    {
+        return TPR_TRIGGER;
+    }
+    else
+    {
+        LOG((LF_CORDB, LL_INFO10000, "D::DDBP: REACH RETURN OF JIT HELPER BUT STILL NEED TO ROLL ...\n"));
+        this->EnableSingleStep();
+        return TPR_IGNORE;
+    }
+}
+
+bool DebuggerDataBreakpoint::TriggerSingleStep(Thread *thread, const BYTE *ip)
+{
+    if (g_pDebugger->IsThreadAtSafePlace(thread))
+    {
+        LOG((LF_CORDB, LL_INFO10000, "D:DDBP: Finally safe for stopping, stop stepping\n"));
+        this->DisableSingleStep();
+        return true;
+    }
+    else
+    {
+        LOG((LF_CORDB, LL_INFO10000, "D:DDBP: Still not safe for stopping, continue stepping\n"));
+        return false;
+    }
+}
+
+#endif // FEATURE_DATABREAKPOINT
+
 #endif // !DACCESS_COMPILE

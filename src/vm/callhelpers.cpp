@@ -25,12 +25,6 @@
 
 void AssertMulticoreJitAllowedModule(PCODE pTarget)
 {
-    CONTRACTL
-    {
-        SO_NOT_MAINLINE;
-    }
-    CONTRACTL_END;
-
     MethodDesc* pMethod = Entry2MethodDesc(pTarget, NULL); 
 
     Module * pModule = pMethod->GetModule_NoLogging();
@@ -60,8 +54,6 @@ void CallDescrWorkerWithHandler(
                 CallDescrData *   pCallDescrData,
                 BOOL              fCriticalCall)
 {
-    STATIC_CONTRACT_SO_INTOLERANT;
-
 #if defined(FEATURE_MULTICOREJIT) && defined(_DEBUG)
 
     // For multicore JITting, background thread should not call managed code, except when calling system code (e.g. throwing managed exception)
@@ -103,7 +95,6 @@ void CallDescrWorker(CallDescrData * pCallDescrData)
 #endif // 0
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
-    STATIC_CONTRACT_SO_TOLERANT;
 
     _ASSERTE(!NingenEnabled() && "You cannot invoke managed code inside the ngen compilation process.");
 
@@ -208,6 +199,12 @@ void * DispatchCallSimple(
     callDescrData.pSrc = pSrc;
     callDescrData.numStackSlots = numStackSlotsToCopy;
 #endif
+
+#ifdef CALLDESCR_RETBUFFARGREG
+    UINT64 retBuffArgPlaceholder = 0;
+    callDescrData.pRetBuffArg = &retBuffArgPlaceholder;
+#endif
+
 #ifdef CALLDESCR_FPARGREGS
     callDescrData.pFloatArgumentRegisters = NULL;
 #endif
@@ -318,12 +315,6 @@ void FillInRegTypeMap(int argOffset, CorElementType typ, BYTE * pMap)
 }
 #endif // CALLDESCR_REGTYPEMAP
 
-#if defined(_DEBUG) && defined(FEATURE_COMINTEROP)
-extern int g_fMainThreadApartmentStateSet;
-extern int g_fInitializingInitialAD;
-extern Volatile<LONG> g_fInExecuteMainMethod;
-#endif
-
 //*******************************************************************************
 #ifdef FEATURE_INTERPRETER
 void MethodDescCallSite::CallTargetWorker(const ARG_SLOT *pArguments, ARG_SLOT *pReturnValue, int cbReturnValue, bool transitionToPreemptive)
@@ -349,14 +340,6 @@ void MethodDescCallSite::CallTargetWorker(const ARG_SLOT *pArguments, ARG_SLOT *
         MODE_COOPERATIVE;
         PRECONDITION(GetAppDomain()->CheckCanExecuteManagedCode(m_pMD));
         PRECONDITION(m_pMD->CheckActivated());          // EnsureActive will trigger, so we must already be activated
-
-#ifdef FEATURE_COMINTEROP
-        // If we're an exe, then we must either be initializing the first AD, or have already setup the main thread's
-        //  COM apartment state.
-        // If you hit this assert, then you likely introduced code during startup that could inadvertently 
-        //  initialize the COM apartment state of the main thread before we set it based on the user attribute.
-        PRECONDITION(g_fInExecuteMainMethod ? (g_fMainThreadApartmentStateSet || g_fInitializingInitialAD) : TRUE);
-#endif // FEATURE_COMINTEROP
     }
     CONTRACTL_END;
 
@@ -398,8 +381,6 @@ void MethodDescCallSite::CallTargetWorker(const ARG_SLOT *pArguments, ARG_SLOT *
         //
         ENABLE_FORBID_GC_LOADER_USE_IN_THIS_SCOPE();
 
-        _ASSERTE(GetAppDomain()->ShouldHaveCode());
-
 #ifdef FEATURE_INTERPRETER
         _ASSERTE(isCallConv(m_methodSig.GetCallingConvention(), IMAGE_CEE_CS_CALLCONV_DEFAULT)
                  || isCallConv(m_methodSig.GetCallingConvention(), CorCallingConvention(IMAGE_CEE_CS_CALLCONV_C))
@@ -427,7 +408,7 @@ void MethodDescCallSite::CallTargetWorker(const ARG_SLOT *pArguments, ARG_SLOT *
                 TypeHandle thReturnValueType;
                 if (m_methodSig.GetReturnTypeNormalized(&thReturnValueType) == ELEMENT_TYPE_VALUETYPE)
                 {
-                    _ASSERTE(cbReturnValue >= thReturnValueType.GetSize());
+                    _ASSERTE((DWORD)cbReturnValue >= thReturnValueType.GetSize());
                 }
             }
 #endif // UNIX_AMD64_ABI
@@ -597,6 +578,9 @@ void MethodDescCallSite::CallTargetWorker(const ARG_SLOT *pArguments, ARG_SLOT *
 #ifdef CALLDESCR_ARGREGS
     callDescrData.pArgumentRegisters = (ArgumentRegisters*)(pTransitionBlock + TransitionBlock::GetOffsetOfArgumentRegisters());
 #endif
+#ifdef CALLDESCR_RETBUFFARGREG
+    callDescrData.pRetBuffArg = (UINT64*)(pTransitionBlock + TransitionBlock::GetOffsetOfRetBuffArgReg());
+#endif
 #ifdef CALLDESCR_FPARGREGS
     callDescrData.pFloatArgumentRegisters = pFloatArgumentRegisters;
 #endif
@@ -627,7 +611,7 @@ void MethodDescCallSite::CallTargetWorker(const ARG_SLOT *pArguments, ARG_SLOT *
 
     if (pReturnValue != NULL)
     {
-        _ASSERTE(cbReturnValue <= sizeof(callDescrData.returnValue));
+        _ASSERTE((DWORD)cbReturnValue <= sizeof(callDescrData.returnValue));
         memcpyNoGCRefs(pReturnValue, &callDescrData.returnValue, cbReturnValue);
 
 #if !defined(_WIN64) && BIGENDIAN
@@ -653,7 +637,7 @@ void CallDefaultConstructor(OBJECTREF ref)
     }
     CONTRACTL_END;
 
-    MethodTable *pMT = ref->GetTrueMethodTable();
+    MethodTable *pMT = ref->GetMethodTable();
 
     PREFIX_ASSUME(pMT != NULL);
 

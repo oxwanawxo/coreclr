@@ -37,6 +37,7 @@
 ////////////////////////////////////////////////////////////////////////////////////
 
 #ifdef _MSC_VER
+#pragma float_control(push)
 #pragma float_control(precise, off)
 #endif
 
@@ -121,6 +122,13 @@ FCIMPL1_V(float, COMSingle::Cbrt, float x)
     return (float)cbrtf(x);
 FCIMPLEND
 
+#if defined(_MSC_VER) && defined(_TARGET_AMD64_)
+// The /fp:fast form of `ceilf` for AMD64 does not correctly handle: `-1.0 < value <= -0.0`
+// https://github.com/dotnet/coreclr/issues/19739
+#pragma float_control(push)
+#pragma float_control(precise, on)
+#endif
+
 /*====================================Ceil======================================
 **
 ==============================================================================*/
@@ -129,6 +137,10 @@ FCIMPL1_V(float, COMSingle::Ceil, float x)
 
     return (float)ceilf(x);
 FCIMPLEND
+
+#if defined(_MSC_VER) && defined(_TARGET_AMD64_)
+#pragma float_control(pop)
+#endif
 
 /*=====================================Cos======================================
 **
@@ -175,6 +187,24 @@ FCIMPL2_VV(float, COMSingle::FMod, float x, float y)
     return (float)fmodf(x, y);
 FCIMPLEND
 
+/*=====================================FusedMultiplyAdd==========================
+**
+==============================================================================*/
+FCIMPL3_VVV(float, COMSingle::FusedMultiplyAdd, float x, float y, float z)
+    FCALL_CONTRACT;
+
+    return (float)fmaf(x, y, z);
+FCIMPLEND
+
+/*=====================================Ilog2====================================
+**
+==============================================================================*/
+FCIMPL1_V(int, COMSingle::ILogB, float x)
+    FCALL_CONTRACT;
+
+    return (int)ilogbf(x);
+FCIMPLEND
+
 /*=====================================Log======================================
 **
 ==============================================================================*/
@@ -182,6 +212,15 @@ FCIMPL1_V(float, COMSingle::Log, float x)
     FCALL_CONTRACT;
 
     return (float)logf(x);
+FCIMPLEND
+
+/*=====================================Log2=====================================
+**
+==============================================================================*/
+FCIMPL1_V(float, COMSingle::Log2, float x)
+    FCALL_CONTRACT;
+
+    return (float)log2f(x);
 FCIMPLEND
 
 /*====================================Log10=====================================
@@ -209,6 +248,15 @@ FCIMPL2_VV(float, COMSingle::Pow, float x, float y)
     FCALL_CONTRACT;
 
     return (float)powf(x, y);
+FCIMPLEND
+
+/*=====================================ScaleB===================================
+**
+==============================================================================*/
+FCIMPL2_VI(float, COMSingle::ScaleB, float x, int n)
+    FCALL_CONTRACT;
+
+    return (float)scalbnf(x, n);
 FCIMPLEND
 
 /*=====================================Sin======================================
@@ -257,7 +305,7 @@ FCIMPL1_V(float, COMSingle::Tanh, float x)
 FCIMPLEND
 
 #ifdef _MSC_VER
-#pragma float_control(precise, on )
+#pragma float_control(pop)
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////////

@@ -48,7 +48,7 @@ REM ===
 REM =========================================================================================
 
 set __DotNetToolDir=%__ThisScriptPath%..\Tools
-set __DotNetCmd=%__DotNetToolDir%\dotnetcli\dotnet.exe 
+set __DotNetCmd=%__ThisScriptPath%..\dotnet.cmd
 set __PackageDir=%__ThisScriptPath%..\Packages
 set __CsprojPath=%__ThisScriptPath%\src\Common\stress_dependencies\stress_dependencies.csproj
 
@@ -81,7 +81,7 @@ if errorlevel 1 goto Fail
 
 REM Get downloaded dll path
 echo Locating coredistools.dll
-FOR /F "delims=" %%i IN ('dir %__PackageDir%\coredistools.dll /b/s ^| findstr /R "runtime.win[0-9]*-%__Arch%"') DO set __LibPath=%%i
+FOR /F "delims=" %%i IN ('dir %__PackageDir%\coredistools.dll /b/s ^| findstr /R "win-%__Arch%"') DO set __LibPath=%%i
 echo CoreDisTools library path: %__LibPath%
 if not exist "%__LibPath%" (
     echo Failed to locate the downloaded library: %__LibPath%

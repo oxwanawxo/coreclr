@@ -595,6 +595,18 @@ BOOL interceptor_ICJI::isValueClass(CORINFO_CLASS_HANDLE cls)
     return temp;
 }
 
+// Decides how the JIT should do the optimization to inline the check for
+//     GetTypeFromHandle(handle) == obj.GetType() (for CORINFO_INLINE_TYPECHECK_SOURCE_VTABLE)
+//     GetTypeFromHandle(X) == GetTypeFromHandle(Y) (for CORINFO_INLINE_TYPECHECK_SOURCE_TOKEN)
+CorInfoInlineTypeCheck interceptor_ICJI::canInlineTypeCheck(CORINFO_CLASS_HANDLE         cls,
+                                                            CorInfoInlineTypeCheckSource source)
+{
+    mc->cr->AddCall("canInlineTypeCheck");
+    CorInfoInlineTypeCheck temp = original_ICorJitInfo->canInlineTypeCheck(cls, source);
+    mc->recCanInlineTypeCheck(cls, source, temp);
+    return temp;
+}
+
 // If this method returns true, JIT will do optimization to inline the check for
 //     GetTypeFromHandle(handle) == obj.GetType()
 BOOL interceptor_ICJI::canInlineTypeCheckWithObjectVTable(CORINFO_CLASS_HANDLE cls)
@@ -683,6 +695,23 @@ unsigned interceptor_ICJI::getClassSize(CORINFO_CLASS_HANDLE cls)
     return temp;
 }
 
+// return the number of bytes needed by an instance of the class allocated on the heap
+unsigned interceptor_ICJI::getHeapClassSize(CORINFO_CLASS_HANDLE cls)
+{
+    mc->cr->AddCall("getHeapClassSize");
+    unsigned temp = original_ICorJitInfo->getHeapClassSize(cls);
+    mc->recGetHeapClassSize(cls, temp);
+    return temp;
+}
+
+BOOL interceptor_ICJI::canAllocateOnStack(CORINFO_CLASS_HANDLE cls)
+{
+    mc->cr->AddCall("canAllocateOnStack");
+    BOOL temp = original_ICorJitInfo->canAllocateOnStack(cls);
+    mc->recCanAllocateOnStack(cls, temp);
+    return temp;
+}
+
 unsigned interceptor_ICJI::getClassAlignmentRequirement(CORINFO_CLASS_HANDLE cls, BOOL fDoubleAlignHint)
 {
     mc->cr->AddCall("getClassAlignmentRequirement");
@@ -739,11 +768,12 @@ BOOL interceptor_ICJI::checkMethodModifier(CORINFO_METHOD_HANDLE hMethod, LPCSTR
 
 // returns the "NEW" helper optimized for "newCls."
 CorInfoHelpFunc interceptor_ICJI::getNewHelper(CORINFO_RESOLVED_TOKEN* pResolvedToken,
-                                               CORINFO_METHOD_HANDLE   callerHandle)
+                                               CORINFO_METHOD_HANDLE   callerHandle,
+                                               bool* pHasSideEffects)
 {
     mc->cr->AddCall("getNewHelper");
-    CorInfoHelpFunc temp = original_ICorJitInfo->getNewHelper(pResolvedToken, callerHandle);
-    mc->recGetNewHelper(pResolvedToken, callerHandle, temp);
+    CorInfoHelpFunc temp = original_ICorJitInfo->getNewHelper(pResolvedToken, callerHandle, pHasSideEffects);
+    mc->recGetNewHelper(pResolvedToken, callerHandle, pHasSideEffects, temp);
     return temp;
 }
 
@@ -957,12 +987,21 @@ TypeCompareState interceptor_ICJI::compareTypesForEquality(CORINFO_CLASS_HANDLE 
     return temp;
 }
 
-// returns is the intersection of cls1 and cls2.
+// returns the intersection of cls1 and cls2.
 CORINFO_CLASS_HANDLE interceptor_ICJI::mergeClasses(CORINFO_CLASS_HANDLE cls1, CORINFO_CLASS_HANDLE cls2)
 {
     mc->cr->AddCall("mergeClasses");
     CORINFO_CLASS_HANDLE temp = original_ICorJitInfo->mergeClasses(cls1, cls2);
     mc->recMergeClasses(cls1, cls2, temp);
+    return temp;
+}
+
+// Returns true if cls2 is known to be a more specific type than cls1.
+BOOL interceptor_ICJI::isMoreSpecificType(CORINFO_CLASS_HANDLE cls1, CORINFO_CLASS_HANDLE cls2)
+{
+    mc->cr->AddCall("isMoreSpecificType");
+    BOOL temp = original_ICorJitInfo->isMoreSpecificType(cls1, cls2);
+    mc->recIsMoreSpecificType(cls1, cls2, temp);
     return temp;
 }
 
@@ -1452,14 +1491,15 @@ const char* interceptor_ICJI::getMethodName(CORINFO_METHOD_HANDLE ftn,       /* 
     return temp;
 }
 
-const char* interceptor_ICJI::getMethodNameFromMetadata(CORINFO_METHOD_HANDLE ftn,          /* IN */
-                                                        const char**          className,    /* OUT */
-                                                        const char**          namespaceName /* OUT */
+const char* interceptor_ICJI::getMethodNameFromMetadata(CORINFO_METHOD_HANDLE ftn,                  /* IN */
+                                                        const char**          className,            /* OUT */
+                                                        const char**          namespaceName,        /* OUT */
+                                                        const char**          enclosingClassName   /* OUT */
                                                         )
 {
     mc->cr->AddCall("getMethodNameFromMetadata");
-    const char* temp = original_ICorJitInfo->getMethodNameFromMetadata(ftn, className, namespaceName);
-    mc->recGetMethodNameFromMetadata(ftn, (char*)temp, className, namespaceName);
+    const char* temp = original_ICorJitInfo->getMethodNameFromMetadata(ftn, className, namespaceName, enclosingClassName);
+    mc->recGetMethodNameFromMetadata(ftn, (char*)temp, className, namespaceName, enclosingClassName);
     return temp;
 }
 
@@ -1797,6 +1837,20 @@ void* interceptor_ICJI::getFieldAddress(CORINFO_FIELD_HANDLE field, void** ppInd
     return temp;
 }
 
+// return the class handle for the current value of a static field
+CORINFO_CLASS_HANDLE interceptor_ICJI::getStaticFieldCurrentClass(CORINFO_FIELD_HANDLE field, bool* pIsSpeculative)
+{
+    mc->cr->AddCall("getStaticFieldCurrentClass");
+    bool                 localIsSpeculative = false;
+    CORINFO_CLASS_HANDLE result = original_ICorJitInfo->getStaticFieldCurrentClass(field, &localIsSpeculative);
+    mc->recGetStaticFieldCurrentClass(field, localIsSpeculative, result);
+    if (pIsSpeculative != nullptr)
+    {
+        *pIsSpeculative = localIsSpeculative;
+    }
+    return result;
+}
+
 // registers a vararg sig & returns a VM cookie for it (which can contain other stuff)
 CORINFO_VARARGS_HANDLE interceptor_ICJI::getVarArgsHandle(CORINFO_SIG_INFO* pSig, void** ppIndirection)
 {
@@ -1823,6 +1877,14 @@ InfoAccessType interceptor_ICJI::constructStringLiteral(CORINFO_MODULE_HANDLE mo
     InfoAccessType temp = original_ICorJitInfo->constructStringLiteral(module, metaTok, ppValue);
     mc->recConstructStringLiteral(module, metaTok, *ppValue, temp);
     return temp;
+}
+
+bool interceptor_ICJI::convertPInvokeCalliToCall(CORINFO_RESOLVED_TOKEN* pResolvedToken, bool fMustConvert)
+{
+    mc->cr->AddCall("convertPInvokeCalliToCall");
+    bool result = original_ICorJitInfo->convertPInvokeCalliToCall(pResolvedToken, fMustConvert);
+    mc->recConvertPInvokeCalliToCall(pResolvedToken, fMustConvert, result);
+    return result;
 }
 
 InfoAccessType interceptor_ICJI::emptyStringLiteral(void** ppValue)

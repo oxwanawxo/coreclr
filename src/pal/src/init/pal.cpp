@@ -44,6 +44,7 @@ SET_DEFAULT_DEBUG_CHANNEL(PAL); // some headers have code with asserts, so do th
 #include "pal/init.h"
 #include "pal/numa.h"
 #include "pal/stackstring.hpp"
+#include "pal/cgroup.h"
 
 #if HAVE_MACH_EXCEPTIONS
 #include "../exception/machexception.h"
@@ -94,7 +95,6 @@ using namespace CorUnix;
 
 extern "C" BOOL CRTInitStdStreams( void );
 
-
 Volatile<INT> init_count = 0;
 Volatile<BOOL> shutdown_intent = 0;
 Volatile<LONG> g_coreclrInitialized = 0;
@@ -108,10 +108,13 @@ SIZE_T g_defaultStackSize = 0;
    very first PAL_Initialize call, and is freed afterward. */
 static PCRITICAL_SECTION init_critsec = NULL;
 
+static DWORD g_initializeDLLFlags = PAL_INITIALIZE_DLL;
+
 static int Initialize(int argc, const char *const argv[], DWORD flags);
 static BOOL INIT_IncreaseDescriptorLimit(void);
 static LPWSTR INIT_FormatCommandLine (int argc, const char * const *argv);
 static LPWSTR INIT_ConvertEXEPath(LPCSTR exe_name);
+static BOOL INIT_SharedFilesPath(void);
 
 #ifdef _DEBUG
 extern void PROCDumpThreadList(void);
@@ -150,9 +153,33 @@ int
 PALAPI
 PAL_Initialize(
     int argc,
-    const char *const argv[])
+    char *const argv[])
 {
     return Initialize(argc, argv, PAL_INITIALIZE);
+}
+
+/*++
+Function:
+  PAL_InitializeWithFlags
+
+Abstract:
+  This function is the first function of the PAL to be called.
+  Internal structure initialization is done here. It could be called
+  several time by the same process, a reference count is kept.
+
+Return:
+  0 if successful
+  -1 if it failed
+
+--*/
+int
+PALAPI
+PAL_InitializeWithFlags(
+    int argc,
+    const char *const argv[],
+    DWORD flags)
+{
+    return Initialize(argc, argv, flags);
 }
 
 /*++
@@ -171,7 +198,29 @@ int
 PALAPI
 PAL_InitializeDLL()
 {
-    return Initialize(0, NULL, PAL_INITIALIZE_DLL);
+    return Initialize(0, NULL, g_initializeDLLFlags);
+}
+
+/*++
+Function:
+  PAL_SetInitializeDLLFlags
+
+Abstract:
+  This sets the global PAL_INITIALIZE flags that PAL_InitializeDLL
+  will use. It needs to be called before any PAL_InitializeDLL call
+  is made so typical it is used in a __attribute__((constructor))
+  function to make sure. 
+
+Return:
+  none
+
+--*/
+void
+PALAPI
+PAL_SetInitializeDLLFlags(
+    DWORD flags)
+{
+    g_initializeDLLFlags = flags;
 }
 
 #ifdef ENSURE_PRIMARY_STACK_SIZE
@@ -190,7 +239,7 @@ Abstract:
   real life scenarios work.
 
 --*/
-__attribute__((noinline,optnone))
+__attribute__((noinline,NOOPT_ATTRIBUTE))
 void
 EnsureStackSize(SIZE_T stackSize)
 {
@@ -308,6 +357,20 @@ Initialize(
         gPID = getpid();
         gSID = getsid(gPID);
 
+        // The gSharedFilesPath is allocated dynamically so its destructor does not get 
+        // called unexpectedly during cleanup
+        gSharedFilesPath = InternalNew<PathCharString>();
+        if (gSharedFilesPath == nullptr)
+        {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            goto done;
+        }
+
+        if (INIT_SharedFilesPath() == FALSE)
+        {
+            goto done;
+        }
+
         fFirstTimeInit = true;
 
         InitializeDefaultStackSize();
@@ -324,6 +387,8 @@ Initialize(
         {
             goto done;
         }
+
+        InitializeCGroup();
 
         // Initialize the environment.
         if (FALSE == EnvironInitialize())
@@ -346,7 +411,11 @@ Initialize(
             // we use large numbers of threads or have many open files.
         }
 
-        SharedMemoryManager::StaticInitialize();
+        if (!SharedMemoryManager::StaticInitialize())
+        {
+            ERROR("Shared memory static initialization failed!\n");
+            goto CLEANUP0;
+        }
 
         /* initialize the shared memory infrastructure */
         if (!SHMInitialize())
@@ -645,6 +714,7 @@ CLEANUP1a:
 CLEANUP1:
     SHMCleanup();
 CLEANUP0:
+    CleanupCGroup();
     TLSCleanup();
     ERROR("PAL_Initialize failed\n");
     SetLastError(palError);
@@ -972,14 +1042,11 @@ PALCommonCleanup()
         PROCDumpThreadList();
 #endif
     }
-
-    // Mark that the PAL is uninitialized
-    init_count = 0;
 }
 
 BOOL PALIsShuttingDown()
 {
-    /* ROTORTODO: This function may be used to provide a reader/writer-like
+    /* TODO: This function may be used to provide a reader/writer-like
        mechanism (or a ref counting one) to prevent PAL APIs that need to access 
        PAL runtime data, from working when PAL is shutting down. Each of those API 
        should acquire a read access while executing. The shutting down code would
@@ -991,7 +1058,7 @@ BOOL PALIsShuttingDown()
 
 void PALSetShutdownIntent()
 {
-    /* ROTORTODO: See comment in PALIsShuttingDown */
+    /* TODO: See comment in PALIsShuttingDown */
     shutdown_intent = TRUE;
 }
 
@@ -1284,4 +1351,64 @@ static LPWSTR INIT_ConvertEXEPath(LPCSTR exe_path)
     }
 
     return return_value;
+}
+
+/*++
+Function:
+  INIT_SharedFilesPath
+
+Abstract:
+    Initializes the shared application
+--*/
+static BOOL INIT_SharedFilesPath(void)
+{
+#ifdef __APPLE__
+    // Store application group Id. It will be null if not set
+    gApplicationGroupId = getenv("DOTNET_SANDBOX_APPLICATION_GROUP_ID");
+
+    if (nullptr != gApplicationGroupId)
+    {
+        // Verify the length of the application group ID
+        gApplicationGroupIdLength = strlen(gApplicationGroupId);
+        if (gApplicationGroupIdLength > MAX_APPLICATION_GROUP_ID_LENGTH)
+        {
+            SetLastError(ERROR_BAD_LENGTH);
+            return FALSE;
+        }
+
+        // In sandbox, all IPC files (locks, pipes) should be written to the application group
+        // container. There will be no write permissions to TEMP_DIRECTORY_PATH
+        if (!GetApplicationContainerFolder(*gSharedFilesPath, gApplicationGroupId, gApplicationGroupIdLength))
+        {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return FALSE;
+        }
+
+        // Verify the size of the path won't exceed maximum allowed size
+        if (gSharedFilesPath->GetCount() + SHARED_MEMORY_MAX_FILE_PATH_CHAR_COUNT + 1 /* null terminator */ > MAX_LONGPATH)
+        {
+            SetLastError(ERROR_FILENAME_EXCED_RANGE);
+            return FALSE;
+        }
+
+        // Check if the path already exists and it's a directory
+        struct stat statInfo;
+        int statResult = stat(*gSharedFilesPath, &statInfo);
+
+        // If the path exists, check that it's a directory
+        if (statResult != 0 || !(statInfo.st_mode & S_IFDIR))
+        {
+            SetLastError(ERROR_PATH_NOT_FOUND);
+            return FALSE;
+        }
+
+        return TRUE;
+    }
+#endif // __APPLE__
+
+    // If we are here, then we are not in sandbox mode, resort to TEMP_DIRECTORY_PATH as shared files path
+    return gSharedFilesPath->Set(TEMP_DIRECTORY_PATH);
+
+    // We can verify statically the non sandboxed case, since the size is known during compile time
+    static_assert_no_msg(string_countof(TEMP_DIRECTORY_PATH) + SHARED_MEMORY_MAX_FILE_PATH_CHAR_COUNT + 1 /* null terminator */ <= MAX_LONGPATH);
 }

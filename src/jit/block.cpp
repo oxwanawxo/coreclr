@@ -64,12 +64,8 @@ unsigned SsaStressHashHelper()
 }
 #endif
 
-EHSuccessorIter::EHSuccessorIter(Compiler* comp, BasicBlock* block)
-    : m_comp(comp)
-    , m_block(block)
-    , m_curRegSucc(nullptr)
-    , m_curTry(comp->ehGetBlockExnFlowDsc(block))
-    , m_remainingRegSuccs(block->NumSucc(comp))
+EHSuccessorIterPosition::EHSuccessorIterPosition(Compiler* comp, BasicBlock* block)
+    : m_remainingRegSuccs(block->NumSucc(comp)), m_curRegSucc(nullptr), m_curTry(comp->ehGetBlockExnFlowDsc(block))
 {
     // If "block" is a "leave helper" block (the empty BBJ_ALWAYS block that pairs with a
     // preceding BBJ_CALLFINALLY block to implement a "leave" IL instruction), then no exceptions
@@ -86,11 +82,11 @@ EHSuccessorIter::EHSuccessorIter(Compiler* comp, BasicBlock* block)
     if (m_curTry == nullptr && m_remainingRegSuccs > 0)
     {
         // Examine the successors to see if any are the start of try blocks.
-        FindNextRegSuccTry();
+        FindNextRegSuccTry(comp, block);
     }
 }
 
-void EHSuccessorIter::FindNextRegSuccTry()
+void EHSuccessorIterPosition::FindNextRegSuccTry(Compiler* comp, BasicBlock* block)
 {
     assert(m_curTry == nullptr);
 
@@ -98,32 +94,32 @@ void EHSuccessorIter::FindNextRegSuccTry()
     while (m_remainingRegSuccs > 0)
     {
         m_remainingRegSuccs--;
-        m_curRegSucc = m_block->GetSucc(m_remainingRegSuccs, m_comp);
-        if (m_comp->bbIsTryBeg(m_curRegSucc))
+        m_curRegSucc = block->GetSucc(m_remainingRegSuccs, comp);
+        if (comp->bbIsTryBeg(m_curRegSucc))
         {
             assert(m_curRegSucc->hasTryIndex()); // Since it is a try begin.
             unsigned newTryIndex = m_curRegSucc->getTryIndex();
 
             // If the try region started by "m_curRegSucc" (represented by newTryIndex) contains m_block,
             // we've already yielded its handler, as one of the EH handler successors of m_block itself.
-            if (m_comp->bbInExnFlowRegions(newTryIndex, m_block))
+            if (comp->bbInExnFlowRegions(newTryIndex, block))
             {
                 continue;
             }
 
             // Otherwise, consider this try.
-            m_curTry = m_comp->ehGetDsc(newTryIndex);
+            m_curTry = comp->ehGetDsc(newTryIndex);
             break;
         }
     }
 }
 
-void EHSuccessorIter::operator++(void)
+void EHSuccessorIterPosition::Advance(Compiler* comp, BasicBlock* block)
 {
     assert(m_curTry != nullptr);
     if (m_curTry->ebdEnclosingTryIndex != EHblkDsc::NO_ENCLOSING_INDEX)
     {
-        m_curTry = m_comp->ehGetDsc(m_curTry->ebdEnclosingTryIndex);
+        m_curTry = comp->ehGetDsc(m_curTry->ebdEnclosingTryIndex);
 
         // If we've gone over into considering try's containing successors,
         // then the enclosing try must have the successor as its first block.
@@ -142,10 +138,10 @@ void EHSuccessorIter::operator++(void)
 
     // We've exhausted all try blocks.
     // See if there are any remaining regular successors that start try blocks.
-    FindNextRegSuccTry();
+    FindNextRegSuccTry(comp, block);
 }
 
-BasicBlock* EHSuccessorIter::operator*()
+BasicBlock* EHSuccessorIterPosition::Current(Compiler* comp, BasicBlock* block)
 {
     assert(m_curTry != nullptr);
     return m_curTry->ExFlowBlock();
@@ -363,17 +359,10 @@ void BasicBlock::dspFlags()
     {
         printf("IBC ");
     }
-#ifdef LEGACY_BACKEND
-    if (bbFlags & BBF_FORWARD_SWITCH)
-    {
-        printf("fswitch ");
-    }
-#else  // !LEGACY_BACKEND
     if (bbFlags & BBF_IS_LIR)
     {
         printf("LIR ");
     }
-#endif // LEGACY_BACKEND
     if (bbFlags & BBF_KEEP_BBJ_ALWAYS)
     {
         printf("KEEP ");
@@ -404,7 +393,7 @@ unsigned BasicBlock::dspPreds()
             printf(",");
             count += 1;
         }
-        printf("BB%02u", pred->flBlock->bbNum);
+        printf(FMT_BB, pred->flBlock->bbNum);
         count += 4;
 
         // Account for %02u only handling 2 digits, but we can display more than that.
@@ -440,7 +429,7 @@ unsigned BasicBlock::dspCheapPreds()
             printf(",");
             count += 1;
         }
-        printf("BB%02u", pred->block->bbNum);
+        printf(FMT_BB, pred->block->bbNum);
         count += 4;
 
         // Account for %02u only handling 2 digits, but we can display more than that.
@@ -466,7 +455,7 @@ unsigned BasicBlock::dspSuccs(Compiler* compiler)
     for (unsigned i = 0; i < numSuccs; i++)
     {
         printf("%s", (count == 0) ? "" : ",");
-        printf("BB%02u", GetSucc(i, compiler)->bbNum);
+        printf(FMT_BB, GetSucc(i, compiler)->bbNum);
         count++;
     }
     return count;
@@ -488,7 +477,7 @@ void BasicBlock::dspJumpKind()
             break;
 
         case BBJ_EHCATCHRET:
-            printf(" -> BB%02u (cret)", bbJumpDest->bbNum);
+            printf(" -> " FMT_BB " (cret)", bbJumpDest->bbNum);
             break;
 
         case BBJ_THROW:
@@ -506,24 +495,24 @@ void BasicBlock::dspJumpKind()
         case BBJ_ALWAYS:
             if (bbFlags & BBF_KEEP_BBJ_ALWAYS)
             {
-                printf(" -> BB%02u (ALWAYS)", bbJumpDest->bbNum);
+                printf(" -> " FMT_BB " (ALWAYS)", bbJumpDest->bbNum);
             }
             else
             {
-                printf(" -> BB%02u (always)", bbJumpDest->bbNum);
+                printf(" -> " FMT_BB " (always)", bbJumpDest->bbNum);
             }
             break;
 
         case BBJ_LEAVE:
-            printf(" -> BB%02u (leave)", bbJumpDest->bbNum);
+            printf(" -> " FMT_BB " (leave)", bbJumpDest->bbNum);
             break;
 
         case BBJ_CALLFINALLY:
-            printf(" -> BB%02u (callf)", bbJumpDest->bbNum);
+            printf(" -> " FMT_BB " (callf)", bbJumpDest->bbNum);
             break;
 
         case BBJ_COND:
-            printf(" -> BB%02u (cond)", bbJumpDest->bbNum);
+            printf(" -> " FMT_BB " (cond)", bbJumpDest->bbNum);
             break;
 
         case BBJ_SWITCH:
@@ -535,7 +524,7 @@ void BasicBlock::dspJumpKind()
             jumpTab = bbJumpSwt->bbsDstTab;
             do
             {
-                printf("%cBB%02u", (jumpTab == bbJumpSwt->bbsDstTab) ? ' ' : ',', (*jumpTab)->bbNum);
+                printf("%c" FMT_BB, (jumpTab == bbJumpSwt->bbsDstTab) ? ' ' : ',', (*jumpTab)->bbNum);
             } while (++jumpTab, --jumpCnt);
 
             printf(" (switch)");
@@ -552,7 +541,7 @@ void BasicBlock::dspBlockHeader(Compiler* compiler,
                                 bool      showFlags /*= false*/,
                                 bool      showPreds /*= true*/)
 {
-    printf("BB%02u ", bbNum);
+    printf(FMT_BB " ", bbNum);
     dspBlockILRange();
     if (showKind)
     {
@@ -590,7 +579,7 @@ const char* BasicBlock::dspToString(int blockNumPadding /* = 2*/)
 
     auto& buffer    = buffers[nextBufferIndex];
     nextBufferIndex = (nextBufferIndex + 1) % _countof(buffers);
-    _snprintf_s(buffer, _countof(buffer), _countof(buffer), "BB%02u%*s [%04u]", bbNum, blockNumPadding, "", bbID);
+    _snprintf_s(buffer, _countof(buffer), _countof(buffer), FMT_BB "%*s [%04u]", bbNum, blockNumPadding, "", bbID);
     return buffer;
 }
 
@@ -599,7 +588,7 @@ const char* BasicBlock::dspToString(int blockNumPadding /* = 2*/)
 // Allocation function for MemoryPhiArg.
 void* BasicBlock::MemoryPhiArg::operator new(size_t sz, Compiler* comp)
 {
-    return comp->compGetMem(sz, CMK_MemoryPhiArg);
+    return comp->getAllocator(CMK_MemoryPhiArg).allocate<char>(sz);
 }
 
 //------------------------------------------------------------------------
@@ -636,9 +625,6 @@ bool BasicBlock::CloneBlockState(
     to->bbCodeOffs    = from->bbCodeOffs;
     to->bbCodeOffsEnd = from->bbCodeOffsEnd;
     VarSetOps::AssignAllowUninitRhs(compiler, to->bbScope, from->bbScope);
-#if FEATURE_STACK_FP_X87
-    to->bbFPStateX87 = from->bbFPStateX87;
-#endif // FEATURE_STACK_FP_X87
     to->bbNatLoopNum = from->bbNatLoopNum;
 #ifdef DEBUG
     to->bbLoopNum     = from->bbLoopNum;
@@ -663,9 +649,6 @@ bool BasicBlock::CloneBlockState(
 // LIR helpers
 void BasicBlock::MakeLIR(GenTree* firstNode, GenTree* lastNode)
 {
-#ifdef LEGACY_BACKEND
-    unreached();
-#else  // !LEGACY_BACKEND
     assert(!IsLIR());
     assert((firstNode == nullptr) == (lastNode == nullptr));
     assert((firstNode == lastNode) || firstNode->Precedes(lastNode));
@@ -673,18 +656,13 @@ void BasicBlock::MakeLIR(GenTree* firstNode, GenTree* lastNode)
     m_firstNode = firstNode;
     m_lastNode  = lastNode;
     bbFlags |= BBF_IS_LIR;
-#endif // LEGACY_BACKEND
 }
 
 bool BasicBlock::IsLIR()
 {
-#ifdef LEGACY_BACKEND
-    return false;
-#else  // !LEGACY_BACKEND
     const bool isLIR = (bbFlags & BBF_IS_LIR) != 0;
     assert((bbTreeList == nullptr) || ((isLIR) == !bbTreeList->IsStatement()));
     return isLIR;
-#endif // LEGACY_BACKEND
 }
 
 //------------------------------------------------------------------------
@@ -1311,12 +1289,10 @@ BasicBlock* Compiler::bbNewBasicBlock(BBjumpKinds jumpKind)
         block->bbNum = ++fgBBNumMax;
     }
 
-#ifndef LEGACY_BACKEND
     if (compRationalIRForm)
     {
         block->bbFlags |= BBF_IS_LIR;
     }
-#endif // !LEGACY_BACKEND
 
     block->bbRefs   = 1;
     block->bbWeight = BB_UNITY_WEIGHT;
@@ -1380,4 +1356,144 @@ BasicBlock* Compiler::bbNewBasicBlock(BBjumpKinds jumpKind)
     block->bbNatLoopNum = BasicBlock::NOT_IN_LOOP;
 
     return block;
+}
+
+//------------------------------------------------------------------------------
+// DisplayStaticSizes: display various static sizes of the BasicBlock data structure.
+//
+// Arguments:
+//    fout  - where to write the output
+//
+// Return Value:
+//    None
+//
+// Note: This function only does something if MEASURE_BLOCK_SIZE is defined, which it might
+// be in private Release builds.
+//
+/* static */
+void BasicBlock::DisplayStaticSizes(FILE* fout)
+{
+#if MEASURE_BLOCK_SIZE
+
+    BasicBlock* bbDummy = nullptr;
+
+    fprintf(fout, "\n");
+    fprintf(fout, "Offset / size of bbNext                = %3u / %3u\n", offsetof(BasicBlock, bbNext),
+            sizeof(bbDummy->bbNext));
+    fprintf(fout, "Offset / size of bbPrev                = %3u / %3u\n", offsetof(BasicBlock, bbPrev),
+            sizeof(bbDummy->bbPrev));
+    fprintf(fout, "Offset / size of bbFlags               = %3u / %3u\n", offsetof(BasicBlock, bbFlags),
+            sizeof(bbDummy->bbFlags));
+    fprintf(fout, "Offset / size of bbNum                 = %3u / %3u\n", offsetof(BasicBlock, bbNum),
+            sizeof(bbDummy->bbNum));
+    fprintf(fout, "Offset / size of bbPostOrderNum        = %3u / %3u\n", offsetof(BasicBlock, bbPostOrderNum),
+            sizeof(bbDummy->bbPostOrderNum));
+    fprintf(fout, "Offset / size of bbRefs                = %3u / %3u\n", offsetof(BasicBlock, bbRefs),
+            sizeof(bbDummy->bbRefs));
+    fprintf(fout, "Offset / size of bbWeight              = %3u / %3u\n", offsetof(BasicBlock, bbWeight),
+            sizeof(bbDummy->bbWeight));
+    fprintf(fout, "Offset / size of bbJumpKind            = %3u / %3u\n", offsetof(BasicBlock, bbJumpKind),
+            sizeof(bbDummy->bbJumpKind));
+    fprintf(fout, "Offset / size of bbJumpOffs            = %3u / %3u\n", offsetof(BasicBlock, bbJumpOffs),
+            sizeof(bbDummy->bbJumpOffs));
+    fprintf(fout, "Offset / size of bbJumpDest            = %3u / %3u\n", offsetof(BasicBlock, bbJumpDest),
+            sizeof(bbDummy->bbJumpDest));
+    fprintf(fout, "Offset / size of bbJumpSwt             = %3u / %3u\n", offsetof(BasicBlock, bbJumpSwt),
+            sizeof(bbDummy->bbJumpSwt));
+    fprintf(fout, "Offset / size of bbEntryState          = %3u / %3u\n", offsetof(BasicBlock, bbEntryState),
+            sizeof(bbDummy->bbEntryState));
+    fprintf(fout, "Offset / size of bbStkTempsIn          = %3u / %3u\n", offsetof(BasicBlock, bbStkTempsIn),
+            sizeof(bbDummy->bbStkTempsIn));
+    fprintf(fout, "Offset / size of bbStkTempsOut         = %3u / %3u\n", offsetof(BasicBlock, bbStkTempsOut),
+            sizeof(bbDummy->bbStkTempsOut));
+    fprintf(fout, "Offset / size of bbTryIndex            = %3u / %3u\n", offsetof(BasicBlock, bbTryIndex),
+            sizeof(bbDummy->bbTryIndex));
+    fprintf(fout, "Offset / size of bbHndIndex            = %3u / %3u\n", offsetof(BasicBlock, bbHndIndex),
+            sizeof(bbDummy->bbHndIndex));
+    fprintf(fout, "Offset / size of bbCatchTyp            = %3u / %3u\n", offsetof(BasicBlock, bbCatchTyp),
+            sizeof(bbDummy->bbCatchTyp));
+    fprintf(fout, "Offset / size of bbStkDepth            = %3u / %3u\n", offsetof(BasicBlock, bbStkDepth),
+            sizeof(bbDummy->bbStkDepth));
+    fprintf(fout, "Offset / size of bbFPinVars            = %3u / %3u\n", offsetof(BasicBlock, bbFPinVars),
+            sizeof(bbDummy->bbFPinVars));
+    fprintf(fout, "Offset / size of bbCheapPreds          = %3u / %3u\n", offsetof(BasicBlock, bbCheapPreds),
+            sizeof(bbDummy->bbCheapPreds));
+    fprintf(fout, "Offset / size of bbPreds               = %3u / %3u\n", offsetof(BasicBlock, bbPreds),
+            sizeof(bbDummy->bbPreds));
+    fprintf(fout, "Offset / size of bbReach               = %3u / %3u\n", offsetof(BasicBlock, bbReach),
+            sizeof(bbDummy->bbReach));
+    fprintf(fout, "Offset / size of bbIDom                = %3u / %3u\n", offsetof(BasicBlock, bbIDom),
+            sizeof(bbDummy->bbIDom));
+    fprintf(fout, "Offset / size of bbDfsNum              = %3u / %3u\n", offsetof(BasicBlock, bbDfsNum),
+            sizeof(bbDummy->bbDfsNum));
+    fprintf(fout, "Offset / size of bbCodeOffs            = %3u / %3u\n", offsetof(BasicBlock, bbCodeOffs),
+            sizeof(bbDummy->bbCodeOffs));
+    fprintf(fout, "Offset / size of bbCodeOffsEnd         = %3u / %3u\n", offsetof(BasicBlock, bbCodeOffsEnd),
+            sizeof(bbDummy->bbCodeOffsEnd));
+    fprintf(fout, "Offset / size of bbVarUse              = %3u / %3u\n", offsetof(BasicBlock, bbVarUse),
+            sizeof(bbDummy->bbVarUse));
+    fprintf(fout, "Offset / size of bbVarDef              = %3u / %3u\n", offsetof(BasicBlock, bbVarDef),
+            sizeof(bbDummy->bbVarDef));
+    fprintf(fout, "Offset / size of bbLiveIn              = %3u / %3u\n", offsetof(BasicBlock, bbLiveIn),
+            sizeof(bbDummy->bbLiveIn));
+    fprintf(fout, "Offset / size of bbLiveOut             = %3u / %3u\n", offsetof(BasicBlock, bbLiveOut),
+            sizeof(bbDummy->bbLiveOut));
+    // Can't do bitfield bbMemoryUse, bbMemoryDef, bbMemoryLiveIn, bbMemoryLiveOut, bbMemoryHavoc
+    fprintf(fout, "Offset / size of bbMemorySsaPhiFunc    = %3u / %3u\n", offsetof(BasicBlock, bbMemorySsaPhiFunc),
+            sizeof(bbDummy->bbMemorySsaPhiFunc));
+    fprintf(fout, "Offset / size of bbMemorySsaNumIn      = %3u / %3u\n", offsetof(BasicBlock, bbMemorySsaNumIn),
+            sizeof(bbDummy->bbMemorySsaNumIn));
+    fprintf(fout, "Offset / size of bbMemorySsaNumOut     = %3u / %3u\n", offsetof(BasicBlock, bbMemorySsaNumOut),
+            sizeof(bbDummy->bbMemorySsaNumOut));
+    fprintf(fout, "Offset / size of bbScope               = %3u / %3u\n", offsetof(BasicBlock, bbScope),
+            sizeof(bbDummy->bbScope));
+    fprintf(fout, "Offset / size of bbCseGen              = %3u / %3u\n", offsetof(BasicBlock, bbCseGen),
+            sizeof(bbDummy->bbCseGen));
+#if ASSERTION_PROP
+    fprintf(fout, "Offset / size of bbAssertionGen        = %3u / %3u\n", offsetof(BasicBlock, bbAssertionGen),
+            sizeof(bbDummy->bbAssertionGen));
+#endif // ASSERTION_PROP
+    fprintf(fout, "Offset / size of bbCseIn               = %3u / %3u\n", offsetof(BasicBlock, bbCseIn),
+            sizeof(bbDummy->bbCseIn));
+#if ASSERTION_PROP
+    fprintf(fout, "Offset / size of bbAssertionIn         = %3u / %3u\n", offsetof(BasicBlock, bbAssertionIn),
+            sizeof(bbDummy->bbAssertionIn));
+#endif // ASSERTION_PROP
+    fprintf(fout, "Offset / size of bbCseOut              = %3u / %3u\n", offsetof(BasicBlock, bbCseOut),
+            sizeof(bbDummy->bbCseOut));
+#if ASSERTION_PROP
+    fprintf(fout, "Offset / size of bbAssertionOut        = %3u / %3u\n", offsetof(BasicBlock, bbAssertionOut),
+            sizeof(bbDummy->bbAssertionOut));
+#endif // ASSERTION_PROP
+    fprintf(fout, "Offset / size of bbEmitCookie          = %3u / %3u\n", offsetof(BasicBlock, bbEmitCookie),
+            sizeof(bbDummy->bbEmitCookie));
+
+#if FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+    fprintf(fout, "Offset / size of bbUnwindNopEmitCookie = %3u / %3u\n", offsetof(BasicBlock, bbUnwindNopEmitCookie),
+            sizeof(bbDummy->bbUnwindNopEmitCookie));
+#endif // FEATURE_EH_FUNCLETS && defined(_TARGET_ARM_)
+
+#ifdef VERIFIER
+    fprintf(fout, "Offset / size of bbStackIn             = %3u / %3u\n", offsetof(BasicBlock, bbStackIn),
+            sizeof(bbDummy->bbStackIn));
+    fprintf(fout, "Offset / size of bbStackOut            = %3u / %3u\n", offsetof(BasicBlock, bbStackOut),
+            sizeof(bbDummy->bbStackOut));
+    fprintf(fout, "Offset / size of bbTypesIn             = %3u / %3u\n", offsetof(BasicBlock, bbTypesIn),
+            sizeof(bbDummy->bbTypesIn));
+    fprintf(fout, "Offset / size of bbTypesOut            = %3u / %3u\n", offsetof(BasicBlock, bbTypesOut),
+            sizeof(bbDummy->bbTypesOut));
+#endif // VERIFIER
+
+#ifdef DEBUG
+    fprintf(fout, "Offset / size of bbLoopNum             = %3u / %3u\n", offsetof(BasicBlock, bbLoopNum),
+            sizeof(bbDummy->bbLoopNum));
+#endif // DEBUG
+
+    fprintf(fout, "Offset / size of bbNatLoopNum          = %3u / %3u\n", offsetof(BasicBlock, bbNatLoopNum),
+            sizeof(bbDummy->bbNatLoopNum));
+
+    fprintf(fout, "\n");
+    fprintf(fout, "Size of BasicBlock                     = %3u\n", sizeof(BasicBlock));
+
+#endif // MEASURE_BLOCK_SIZE
 }

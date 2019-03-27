@@ -5,12 +5,6 @@
 // File: methodtable.cpp
 //
 
-
-//
-
-//
-// ============================================================================
-
 #include "common.h"
 
 #include "clsload.hpp"
@@ -44,7 +38,6 @@
 #include "listlock.h"
 #include "methodimpl.h"
 #include "guidfromname.h"
-#include "stackprobe.h"
 #include "encee.h"
 #include "encee.h"
 #include "comsynchronizable.h"
@@ -62,9 +55,7 @@
 #include "winrttypenameconverter.h"
 #endif // FEATURE_COMINTEROP
 
-#ifdef FEATURE_TYPEEQUIVALENCE
 #include "typeequivalencehash.hpp"
-#endif
 
 #include "generics.h"
 #include "genericdict.h"
@@ -559,7 +550,7 @@ BOOL  MethodTable::IsInitError()
 void MethodTable::SetClassInited()
 {
     WRAPPER_NO_CONTRACT;
-    _ASSERTE(!IsClassPreInited() || MscorlibBinder::IsClass(this, CLASS__SHARED_STATICS));
+    _ASSERTE(!IsClassPreInited());
     GetDomainLocalModule()->SetClassInitialized(this);
 }
 
@@ -610,14 +601,6 @@ void MethodTable::SetComObjectType()
     SetFlag(enum_flag_ComObject);
 }
 
-#if defined(FEATURE_TYPEEQUIVALENCE)
-void MethodTable::SetHasTypeEquivalence()
-{
-    LIMITED_METHOD_CONTRACT;
-    SetFlag(enum_flag_HasTypeEquivalence);
-}
-#endif
-
 #ifdef FEATURE_ICASTABLE
 void MethodTable::SetICastable()
 {
@@ -650,25 +633,7 @@ WORD MethodTable::GetNumMethods()
 PTR_BaseDomain MethodTable::GetDomain()
 {
     LIMITED_METHOD_DAC_CONTRACT;
-    g_IBCLogger.LogMethodTableAccess(this);
-    return GetLoaderModule()->GetDomain();
-}
-
-//==========================================================================================
-BOOL MethodTable::IsDomainNeutral()
-{
-    STATIC_CONTRACT_NOTHROW;
-    STATIC_CONTRACT_GC_NOTRIGGER;
-    STATIC_CONTRACT_SO_TOLERANT;
-    STATIC_CONTRACT_FORBID_FAULT;
-    STATIC_CONTRACT_SUPPORTS_DAC;
-
-    BOOL ret = GetLoaderModule()->GetAssembly()->IsDomainNeutral();
-#ifndef DACCESS_COMPILE
-    _ASSERTE(!ret == !GetLoaderAllocator()->IsDomainNeutral());
-#endif
-
-    return ret;
+    return dac_cast<PTR_BaseDomain>(AppDomain::GetCurrentDomain());
 }
 
 //==========================================================================================
@@ -773,13 +738,6 @@ PTR_MethodTable InterfaceInfo_t::GetApproxMethodTable(Module * pContainingModule
     MethodTable *pServerMT = (*pServer)->GetMethodTable();
     PREFIX_ASSUME(pServerMT != NULL);
 
-    if (pServerMT->IsTransparentProxy())
-    {
-        // If pServer is a TP, then the interface method desc is the one to
-        // use to dispatch the call.
-        RETURN(pItfMD);
-    }
-
 #ifdef FEATURE_ICASTABLE
     // In case of ICastable, instead of trying to find method implementation in the real object type
     // we call pObj.GetValueInternal() and call GetMethodDescForInterfaceMethod() again with whatever type it returns.
@@ -812,7 +770,7 @@ PTR_MethodTable InterfaceInfo_t::GetApproxMethodTable(Module * pContainingModule
         TypeHandle resulTypeHnd = resultTypeObj->GetType();
         MethodTable *pResultMT = resulTypeHnd.GetMethodTable();
 
-        RETURN(pResultMT->GetMethodDescForInterfaceMethod(ownerType, pItfMD));
+        RETURN(pResultMT->GetMethodDescForInterfaceMethod(ownerType, pItfMD, TRUE /* throwOnConflict */));
     }
 #endif    
 
@@ -833,7 +791,7 @@ PTR_MethodTable InterfaceInfo_t::GetApproxMethodTable(Module * pContainingModule
 #endif // !FEATURE_COMINTEROP
 
     // Handle pure COM+ types.
-    RETURN (pServerMT->GetMethodDescForInterfaceMethod(ownerType, pItfMD));
+    RETURN (pServerMT->GetMethodDescForInterfaceMethod(ownerType, pItfMD, TRUE /* throwOnConflict */));
 }
 
 #ifdef FEATURE_COMINTEROP
@@ -871,7 +829,7 @@ MethodDesc *MethodTable::GetMethodDescForComInterfaceMethod(MethodDesc *pItfMD, 
 
         // Calling GetTarget here instead of FindDispatchImpl gives us caching functionality to increase speed.
         PCODE tgt = VirtualCallStubManager::GetTarget(
-            pItfMT->GetLoaderAllocator()->GetDispatchToken(pItfMT->GetTypeID(), pItfMD->GetSlot()), this);
+            pItfMT->GetLoaderAllocator()->GetDispatchToken(pItfMT->GetTypeID(), pItfMD->GetSlot()), this, TRUE /* throwOnConflict */);
 
         if (tgt != NULL)
         {
@@ -942,7 +900,7 @@ MethodTable* CreateMinimalMethodTable(Module* pContainingModule,
     pMT->SetLoaderModule(pContainingModule);
     pMT->SetLoaderAllocator(pContainingModule->GetLoaderAllocator());
     pMT->SetInternalCorElementType(ELEMENT_TYPE_CLASS);
-    pMT->SetBaseSize(ObjSizeOf(Object));
+    pMT->SetBaseSize(OBJECT_BASESIZE);
 
 #ifdef _DEBUG
     pClass->SetDebugClassName("dynamicClass");
@@ -1376,7 +1334,6 @@ BOOL MethodTable::IsEquivalentTo_Worker(MethodTable *pOtherMT COMMA_INDEBUG(Type
         THROWS;
         GC_TRIGGERS;
         MODE_ANY;
-        SO_TOLERANT; // we are called from MethodTable::CanCastToClass
     }
     CONTRACTL_END;
 
@@ -1405,13 +1362,7 @@ BOOL MethodTable::IsEquivalentTo_Worker(MethodTable *pOtherMT COMMA_INDEBUG(Type
         return (GetApproxArrayElementTypeHandle().IsEquivalentTo(pOtherMT->GetApproxArrayElementTypeHandle() COMMA_INDEBUG(&newVisited)));
     }
 
-    BOOL bResult = FALSE;
-    
-    BEGIN_SO_INTOLERANT_CODE(GetThread());
-    bResult = IsEquivalentTo_WorkerInner(pOtherMT COMMA_INDEBUG(&newVisited));
-    END_SO_INTOLERANT_CODE;
-
-    return bResult;
+    return IsEquivalentTo_WorkerInner(pOtherMT COMMA_INDEBUG(&newVisited));
 }
 
 //==========================================================================================
@@ -1423,15 +1374,16 @@ BOOL MethodTable::IsEquivalentTo_WorkerInner(MethodTable *pOtherMT COMMA_INDEBUG
         THROWS;
         GC_TRIGGERS;
         MODE_ANY;
-        SO_INTOLERANT;
         LOADS_TYPE(CLASS_DEPENDENCIES_LOADED);
     }
     CONTRACTL_END;
 
+    TypeEquivalenceHashTable *typeHashTable = NULL;
     AppDomain *pDomain = GetAppDomain();
     if (pDomain != NULL)
     {
-        TypeEquivalenceHashTable::EquivalenceMatch match = pDomain->GetTypeEquivalenceCache()->CheckEquivalence(TypeHandle(this), TypeHandle(pOtherMT));
+        typeHashTable = pDomain->GetTypeEquivalenceCache();
+        TypeEquivalenceHashTable::EquivalenceMatch match = typeHashTable->CheckEquivalence(TypeHandle(this), TypeHandle(pOtherMT));
         switch (match)
         {
         case TypeEquivalenceHashTable::Match:
@@ -1448,9 +1400,10 @@ BOOL MethodTable::IsEquivalentTo_WorkerInner(MethodTable *pOtherMT COMMA_INDEBUG
 
     BOOL fEquivalent = FALSE;
 
+    // Check if type is generic
     if (HasInstantiation())
     {
-        // we limit variance on generics only to interfaces
+        // Limit variance on generics only to interfaces
         if (!IsInterface() || !pOtherMT->IsInterface())
         {
             fEquivalent = FALSE;
@@ -1461,12 +1414,14 @@ BOOL MethodTable::IsEquivalentTo_WorkerInner(MethodTable *pOtherMT COMMA_INDEBUG
         Instantiation inst1 = GetInstantiation();
         Instantiation inst2 = pOtherMT->GetInstantiation();
 
+        // Verify generic argument count
         if (inst1.GetNumArgs() != inst2.GetNumArgs())
         {
             fEquivalent = FALSE;
             goto EquivalenceCalculated;
         }
 
+        // Verify each generic argument type
         for (DWORD i = 0; i < inst1.GetNumArgs(); i++)
         {
             if (!inst1[i].IsEquivalentTo(inst2[i] COMMA_INDEBUG(pVisited)))
@@ -1498,22 +1453,23 @@ BOOL MethodTable::IsEquivalentTo_WorkerInner(MethodTable *pOtherMT COMMA_INDEBUG
         }
 
         // arrays of structures have their own unshared MTs and will take this path
-        fEquivalent = (GetApproxArrayElementTypeHandle().IsEquivalentTo(pOtherMT->GetApproxArrayElementTypeHandle() COMMA_INDEBUG(pVisited)));
+        TypeHandle elementType1 = GetApproxArrayElementTypeHandle();
+        TypeHandle elementType2 = pOtherMT->GetApproxArrayElementTypeHandle();
+        fEquivalent = elementType1.IsEquivalentTo(elementType2 COMMA_INDEBUG(pVisited));
         goto EquivalenceCalculated;
     }
 
     fEquivalent = CompareTypeDefsForEquivalence(GetCl(), pOtherMT->GetCl(), GetModule(), pOtherMT->GetModule(), NULL);
 
 EquivalenceCalculated:
-    // Only record equivalence matches if we are in an AppDomain
-    if (pDomain != NULL)
+    // Record equivalence matches if a table exists
+    if (typeHashTable != NULL)
     {
         // Collectible type results will not get cached.
-        if ((!this->Collectible() && !pOtherMT->Collectible()))
+        if ((!Collectible() && !pOtherMT->Collectible()))
         {
-            TypeEquivalenceHashTable::EquivalenceMatch match;
-            match = fEquivalent ? TypeEquivalenceHashTable::Match : TypeEquivalenceHashTable::NoMatch;
-            pDomain->GetTypeEquivalenceCache()->RecordEquivalence(TypeHandle(this), TypeHandle(pOtherMT), match);
+            auto match = fEquivalent ? TypeEquivalenceHashTable::Match : TypeEquivalenceHashTable::NoMatch;
+            typeHashTable->RecordEquivalence(TypeHandle(this), TypeHandle(pOtherMT), match);
         }
     }
 
@@ -1532,7 +1488,6 @@ BOOL MethodTable::CanCastToInterface(MethodTable *pTargetMT, TypeHandlePairList 
         INSTANCE_CHECK;
         PRECONDITION(CheckPointer(pTargetMT));
         PRECONDITION(pTargetMT->IsInterface());
-        PRECONDITION(!IsTransparentProxy());
         PRECONDITION(IsRestored_NoLogging());
     }
     CONTRACTL_END
@@ -1702,11 +1657,9 @@ BOOL MethodTable::CanCastToNonVariantInterface(MethodTable *pTargetMT)
         GC_NOTRIGGER;
         MODE_ANY;
         INSTANCE_CHECK;
-        SO_TOLERANT;
         PRECONDITION(CheckPointer(pTargetMT));
         PRECONDITION(pTargetMT->IsInterface());
         PRECONDITION(!pTargetMT->HasVariance());
-        PRECONDITION(!IsTransparentProxy());
         PRECONDITION(IsRestored_NoLogging());
     }
     CONTRACTL_END
@@ -1728,10 +1681,8 @@ TypeHandle::CastResult MethodTable::CanCastToInterfaceNoGC(MethodTable *pTargetM
         GC_NOTRIGGER;
         MODE_ANY;
         INSTANCE_CHECK;
-        SO_TOLERANT;
         PRECONDITION(CheckPointer(pTargetMT));
         PRECONDITION(pTargetMT->IsInterface());
-        PRECONDITION(!IsTransparentProxy());
         PRECONDITION(IsRestored_NoLogging());
     }
     CONTRACTL_END
@@ -1756,7 +1707,6 @@ TypeHandle::CastResult MethodTable::CanCastToClassNoGC(MethodTable *pTargetMT)
         GC_NOTRIGGER;
         MODE_ANY;
         INSTANCE_CHECK;
-        SO_TOLERANT;
         PRECONDITION(CheckPointer(pTargetMT));
         PRECONDITION(!pTargetMT->IsArray());
         PRECONDITION(!pTargetMT->IsInterface());
@@ -1800,7 +1750,6 @@ MethodTable::IsExternallyVisible()
         THROWS;
         MODE_ANY;
         GC_TRIGGERS;
-        SO_INTOLERANT;
     }
     CONTRACTL_END;
 
@@ -2061,7 +2010,6 @@ BOOL MethodTable::ImplementsEquivalentInterface(MethodTable *pInterface)
     {
         THROWS;
         GC_TRIGGERS;
-        SO_TOLERANT;
         PRECONDITION(pInterface->IsInterface()); // class we are looking up should be an interface
     }
     CONTRACTL_END;
@@ -2092,7 +2040,7 @@ BOOL MethodTable::ImplementsEquivalentInterface(MethodTable *pInterface)
 }
 
 //==========================================================================================
-MethodDesc *MethodTable::GetMethodDescForInterfaceMethod(MethodDesc *pInterfaceMD)
+MethodDesc *MethodTable::GetMethodDescForInterfaceMethod(MethodDesc *pInterfaceMD, BOOL throwOnConflict)
 {
     CONTRACTL
     {
@@ -2103,11 +2051,11 @@ MethodDesc *MethodTable::GetMethodDescForInterfaceMethod(MethodDesc *pInterfaceM
     CONTRACTL_END;
     WRAPPER_NO_CONTRACT;
 
-    return GetMethodDescForInterfaceMethod(TypeHandle(pInterfaceMD->GetMethodTable()), pInterfaceMD);
+    return GetMethodDescForInterfaceMethod(TypeHandle(pInterfaceMD->GetMethodTable()), pInterfaceMD, throwOnConflict);
 }
 
 //==========================================================================================
-MethodDesc *MethodTable::GetMethodDescForInterfaceMethod(TypeHandle ownerType, MethodDesc *pInterfaceMD)
+MethodDesc *MethodTable::GetMethodDescForInterfaceMethod(TypeHandle ownerType, MethodDesc *pInterfaceMD, BOOL throwOnConflict)
 {
     CONTRACTL
     {
@@ -2125,17 +2073,27 @@ MethodDesc *MethodTable::GetMethodDescForInterfaceMethod(TypeHandle ownerType, M
     MethodTable *pInterfaceMT = ownerType.AsMethodTable();
 
 #ifdef CROSSGEN_COMPILE
-    DispatchSlot implSlot(FindDispatchSlot(pInterfaceMT->GetTypeID(), pInterfaceMD->GetSlot()));
+    DispatchSlot implSlot(FindDispatchSlot(pInterfaceMT->GetTypeID(), pInterfaceMD->GetSlot(), throwOnConflict));
+    if (implSlot.IsNull())
+    {
+        _ASSERTE(!throwOnConflict);
+        return NULL;
+    }
     PCODE pTgt = implSlot.GetTarget();
 #else
     PCODE pTgt = VirtualCallStubManager::GetTarget(
         pInterfaceMT->GetLoaderAllocator()->GetDispatchToken(pInterfaceMT->GetTypeID(), pInterfaceMD->GetSlot()),
-        this);
+        this, throwOnConflict);
+    if (pTgt == NULL)
+    {
+        _ASSERTE(!throwOnConflict);
+        return NULL;
+    }
 #endif
     pMD = MethodTable::GetMethodDescForSlotAddress(pTgt);
 
 #ifdef _DEBUG
-    MethodDesc *pDispSlotMD = FindDispatchSlotForInterfaceMD(ownerType, pInterfaceMD).GetMethodDesc();
+    MethodDesc *pDispSlotMD = FindDispatchSlotForInterfaceMD(ownerType, pInterfaceMD, throwOnConflict).GetMethodDesc();
     _ASSERTE(pDispSlotMD == pMD);
 #endif // _DEBUG
 
@@ -2313,7 +2271,6 @@ bool MethodTable::ClassifyEightBytesWithManagedLayout(SystemVStructRegisterPassi
     {
         THROWS;
         GC_TRIGGERS;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -2596,7 +2553,6 @@ bool MethodTable::ClassifyEightBytesWithNativeLayout(SystemVStructRegisterPassin
     {
         THROWS;
         GC_TRIGGERS;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -2677,11 +2633,6 @@ bool MethodTable::ClassifyEightBytesWithNativeLayout(SystemVStructRegisterPassin
         unsigned normalizedFieldOffset = fieldOffset + startOffsetOfStruct;
 
         unsigned int fieldNativeSize = pFieldMarshaler->NativeSize();
-        if (fieldNativeSize > SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES)
-        {
-            // Pass on stack in this case.
-            return false;
-        }
 
         _ASSERTE(fieldNativeSize != (unsigned int)-1);
 
@@ -2732,6 +2683,23 @@ bool MethodTable::ClassifyEightBytesWithNativeLayout(SystemVStructRegisterPassin
             case VT_R8:
                 fieldClassificationType = SystemVClassificationTypeSSE;
                 break;
+            case VT_RECORD:
+            {
+                MethodTable* pFieldMT = ((FieldMarshaler_FixedArray*)pFieldMarshaler)->GetElementMethodTable();
+
+                bool inEmbeddedStructPrev = helperPtr->inEmbeddedStruct;
+                helperPtr->inEmbeddedStruct = true;
+                bool structRet = pFieldMT->ClassifyEightBytesWithNativeLayout(helperPtr, nestingLevel + 1, normalizedFieldOffset, useNativeLayout);
+                helperPtr->inEmbeddedStruct = inEmbeddedStructPrev;
+
+                if (!structRet)
+                {
+                    // If the nested struct says not to enregister, there's no need to continue analyzing at this level. Just return do not enregister.
+                    return false;
+                }
+
+                continue;
+            }
             case VT_DECIMAL:
             case VT_DATE:
             case VT_BSTR:
@@ -2742,7 +2710,6 @@ bool MethodTable::ClassifyEightBytesWithNativeLayout(SystemVStructRegisterPassin
             case VT_HRESULT:
             case VT_CARRAY:
             case VT_USERDEFINED:
-            case VT_RECORD:
             case VT_FILETIME:
             case VT_BLOB:
             case VT_STREAM:
@@ -2901,7 +2868,6 @@ bool MethodTable::ClassifyEightBytesWithNativeLayout(SystemVStructRegisterPassin
             switch (cls)
             {
 #ifdef FEATURE_COMINTEROP
-            case NFT_BSTR:
             case NFT_HSTRING:
             case NFT_VARIANT:
             case NFT_VARIANTBOOL:
@@ -2919,6 +2885,7 @@ bool MethodTable::ClassifyEightBytesWithNativeLayout(SystemVStructRegisterPassin
             case NFT_DELEGATE:
             case NFT_SAFEHANDLE:
             case NFT_CRITICALHANDLE:
+            case NFT_BSTR:
                 fieldClassificationType = SystemVClassificationTypeInteger;
                 break;
 
@@ -3072,7 +3039,7 @@ void  MethodTable::AssignClassifiedEightByteTypes(SystemVStructRegisterPassingHe
             else
             {
                 fieldSize = helperPtr->fieldSizes[ordinal];
-                _ASSERTE(fieldSize > 0 && fieldSize <= SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES);
+                _ASSERTE(fieldSize > 0);
 
                 fieldClassificationType = helperPtr->fieldClassifications[ordinal];
                 _ASSERTE(fieldClassificationType != SystemVClassificationTypeMemory && fieldClassificationType != SystemVClassificationTypeUnknown);
@@ -3110,7 +3077,7 @@ void  MethodTable::AssignClassifiedEightByteTypes(SystemVStructRegisterPassingHe
             }
 
             accumulatedSizeForEightByte += fieldSize;
-            if (accumulatedSizeForEightByte == SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES)
+            while (accumulatedSizeForEightByte >= SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES)
             {
                 // Save data for this eightbyte.
                 helperPtr->eightByteSizes[currentEightByte] = SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES;
@@ -3120,8 +3087,14 @@ void  MethodTable::AssignClassifiedEightByteTypes(SystemVStructRegisterPassingHe
                 currentEightByte++;
                 _ASSERTE(currentEightByte <= CLR_SYSTEMV_MAX_EIGHTBYTES_COUNT_TO_PASS_IN_REGISTERS);
 
-                currentEightByteOffset = offset + fieldSize;
-                accumulatedSizeForEightByte = 0;
+                currentEightByteOffset += SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES;
+                accumulatedSizeForEightByte -= SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES;
+
+                // If a field is large enough to span multiple eightbytes, then set the eightbyte classification to the field's classification.
+                if (accumulatedSizeForEightByte > 0)
+                {
+                    helperPtr->eightByteClassifications[currentEightByte] = fieldClassificationType;
+                }
             }
 
             _ASSERTE(accumulatedSizeForEightByte < SYSTEMV_EIGHT_BYTE_SIZE_IN_BYTES);
@@ -3388,7 +3361,6 @@ void MethodTable::DoRunClassInitThrowing()
         THROWS;
         GC_TRIGGERS;
         MODE_ANY;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -3402,7 +3374,6 @@ void MethodTable::DoRunClassInitThrowing()
     Thread *pThread;
     pThread = GetThread();
     _ASSERTE(pThread);
-    INTERIOR_STACK_PROBE_FOR(pThread, 8);
 
     AppDomain *pDomain = GetAppDomain();
 
@@ -3489,7 +3460,7 @@ void MethodTable::DoRunClassInitThrowing()
                 if (hNewInitException != NULL && 
                     InterlockedCompareExchangeT((&pEntry->m_hInitException), hNewInitException, hOrigInitException) != hOrigInitException)
                 {
-                    pEntry->m_pLoaderAllocator->ClearHandle(hNewInitException);
+                    pEntry->m_pLoaderAllocator->FreeHandle(hNewInitException);
                 }
             }
         }
@@ -3678,7 +3649,6 @@ void MethodTable::DoRunClassInitThrowing()
     g_IBCLogger.LogMethodTableAccess(this);
 Exit:
     ;
-    END_INTERIOR_STACK_PROBE;
 }
 
 //==========================================================================================
@@ -3688,14 +3658,12 @@ void MethodTable::CheckRunClassInitThrowing()
     {
         THROWS;
         GC_TRIGGERS;
-        SO_TOLERANT;
         INJECT_FAULT(COMPlusThrowOM());
         PRECONDITION(IsFullyLoaded());
     }
     CONTRACTL_END;
 
     {   // Debug-only code causes SO volation, so add exception.
-        CONTRACT_VIOLATION(SOToleranceViolation);
         CONSISTENCY_CHECK(CheckActivated());
     }
 
@@ -3729,7 +3697,6 @@ void MethodTable::CheckRunClassInitAsIfConstructingThrowing()
     {
         THROWS;
         GC_TRIGGERS;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -3827,7 +3794,6 @@ static void FastCallFinalize(Object *obj, PCODE funcPtr, BOOL fCriticalCall)
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
     STATIC_CONTRACT_MODE_COOPERATIVE;
-    STATIC_CONTRACT_SO_INTOLERANT;
 
     BEGIN_CALL_TO_MANAGEDEX(fCriticalCall ? EEToManagedCriticalCall : EEToManagedDefault);
 
@@ -3896,8 +3862,7 @@ void MethodTable::CallFinalizer(Object *obj)
         THROWS;
         GC_TRIGGERS;
         MODE_COOPERATIVE;
-        PRECONDITION(obj->GetMethodTable()->HasFinalizer() ||
-                     obj->GetMethodTable()->IsTransparentProxy());
+        PRECONDITION(obj->GetMethodTable()->HasFinalizer());
     }
     CONTRACTL_END;
 
@@ -4008,7 +3973,7 @@ OBJECTREF MethodTable::GetManagedClassObject()
         GC_TRIGGERS;
         MODE_COOPERATIVE;
         INJECT_FAULT(COMPlusThrowOM());
-        PRECONDITION(!IsTransparentProxy() && !IsArray());      // Arrays and remoted objects can't go through this path.  
+        PRECONDITION(!IsArray());      // Arrays can't go through this path.  
         POSTCONDITION(GetWriteableData()->m_hExposedClassObject != 0);
         //REENTRANT
     }
@@ -4024,15 +3989,9 @@ OBJECTREF MethodTable::GetManagedClassObject()
         // Make sure that we have been restored
         CheckRestore();
 
-        if (IsTransparentProxy())       // Extra protection in a retail build against doing this on a transparent proxy. 
-            return NULL;
-
         REFLECTCLASSBASEREF  refClass = NULL;
         GCPROTECT_BEGIN(refClass);
-        if (GetAssembly()->IsIntrospectionOnly())
-            refClass = (REFLECTCLASSBASEREF) AllocateObject(MscorlibBinder::GetClass(CLASS__CLASS_INTROSPECTION_ONLY));
-        else
-            refClass = (REFLECTCLASSBASEREF) AllocateObject(g_pRuntimeTypeClass);
+        refClass = (REFLECTCLASSBASEREF) AllocateObject(g_pRuntimeTypeClass);
 
         LoaderAllocator *pLoaderAllocator = GetLoaderAllocator();
 
@@ -4045,7 +4004,7 @@ OBJECTREF MethodTable::GetManagedClassObject()
 
         if (FastInterlockCompareExchangePointer(&(EnsureWritablePages(GetWriteableDataForWrite())->m_hExposedClassObject), exposedClassObjectHandle, static_cast<LOADERHANDLE>(NULL)))
         {
-            pLoaderAllocator->ClearHandle(exposedClassObjectHandle);
+            pLoaderAllocator->FreeHandle(exposedClassObjectHandle);
         }
 
         GCPROTECT_END();
@@ -4297,7 +4256,8 @@ void MethodTable::Save(DataImage *image, DWORD profilingFlags)
     {
         if (!image->IsStored(it.GetIndirectionSlot()))
         {
-            if (CanInternVtableChunk(image, it))
+            if (!MethodTable::VTableIndir2_t::isRelative
+                && CanInternVtableChunk(image, it))
                 image->StoreInternedStructure(it.GetIndirectionSlot(), it.GetSize(), DataImage::ITEM_VTABLE_CHUNK);
             else
                 image->StoreStructure(it.GetIndirectionSlot(), it.GetSize(), DataImage::ITEM_VTABLE_CHUNK);
@@ -4989,7 +4949,7 @@ void MethodTable::Fixup(DataImage *image)
             // Virtual slots live in chunks pointed to by vtable indirections
 
             slotBase = (PVOID) GetVtableIndirections()[GetIndexOfVtableIndirection(slotNumber)].GetValueMaybeNull();
-            slotOffset = GetIndexAfterVtableIndirection(slotNumber) * sizeof(PCODE);
+            slotOffset = GetIndexAfterVtableIndirection(slotNumber) * sizeof(MethodTable::VTableIndir2_t);
         }
         else if (HasSingleNonVirtualSlot())
         {
@@ -5016,7 +4976,7 @@ void MethodTable::Fixup(DataImage *image)
         if (pMD->GetMethodTable() == this)
         {
             ZapRelocationType relocType;
-            if (slotNumber >= GetNumVirtuals())
+            if (slotNumber >= GetNumVirtuals() || MethodTable::VTableIndir2_t::isRelative)
                 relocType = IMAGE_REL_BASED_RelativePointer;
             else
                 relocType = IMAGE_REL_BASED_PTR;
@@ -5039,9 +4999,15 @@ void MethodTable::Fixup(DataImage *image)
             _ASSERTE(pSourceMT->GetMethodDescForSlot(slotNumber) == pMD);
 #endif
 
+            ZapRelocationType relocType;
+            if (MethodTable::VTableIndir2_t::isRelative)
+                relocType = IMAGE_REL_BASED_RELPTR;
+            else
+                relocType = IMAGE_REL_BASED_PTR;
+
             if (image->CanEagerBindToMethodDesc(pMD) && pMD->GetLoaderModule() == pZapModule)
             {
-                pMD->FixupSlot(image, slotBase, slotOffset);
+                pMD->FixupSlot(image, slotBase, slotOffset, relocType);
             }
             else
             {
@@ -5050,7 +5016,7 @@ void MethodTable::Fixup(DataImage *image)
                     ZapNode * importThunk = image->GetVirtualImportThunk(pMD->GetMethodTable(), pMD, slotNumber);
                     // On ARM, make sure that the address to the virtual thunk that we write into the
                     // vtable "chunk" has the Thumb bit set.
-                    image->FixupFieldToNode(slotBase, slotOffset, importThunk ARM_ARG(THUMB_CODE));
+                    image->FixupFieldToNode(slotBase, slotOffset, importThunk ARM_ARG(THUMB_CODE) NOT_ARM_ARG(0), relocType);
                 }
                 else
                 {
@@ -5209,9 +5175,6 @@ void MethodTableWriteableData::Fixup(DataImage *image, MethodTable *pMT, BOOL ne
 
     MethodTableWriteableData *pNewNgenPrivateMT = (MethodTableWriteableData*) image->GetImagePointer(this);
     _ASSERTE(pNewNgenPrivateMT != NULL);
-
-    pNewNgenPrivateMT->m_dwFlags &= ~(enum_flag_RemotingConfigChecked |
-                                      enum_flag_CriticalTypePrepared);
 
     if (needsRestore)
         pNewNgenPrivateMT->m_dwFlags |= (enum_flag_UnrestoredTypeKey |
@@ -5390,12 +5353,12 @@ VOID DoAccessibilityCheckForConstraints(MethodTable *pAskingMT, TypeVarTypeDesc 
 // Used so that we can have one valuetype walking algorithm used for type equivalence walking of the parameters of the method.
 struct DoFullyLoadLocals
 {
-    DoFullyLoadLocals(DFLPendingList *pPendingParam, ClassLoadLevel levelParam, MethodTable *pMT, Generics::RecursionGraph *pVisited) :
-        newVisited(pVisited, TypeHandle(pMT)),
-        pPending(pPendingParam),
-        level(levelParam),
-        fBailed(FALSE)
-#ifdef FEATURE_COMINTEROP
+    DoFullyLoadLocals(DFLPendingList *pPendingParam, ClassLoadLevel levelParam, MethodTable *pMT, Generics::RecursionGraph *pVisited)
+        : newVisited(pVisited, TypeHandle(pMT))
+        , pPending(pPendingParam)
+        , level(levelParam)
+        , fBailed(FALSE)
+#ifdef FEATURE_TYPEEQUIVALENCE
         , fHasEquivalentStructParameter(FALSE)
 #endif
         , fHasTypeForwarderDependentStructParameter(FALSE)
@@ -5408,7 +5371,7 @@ struct DoFullyLoadLocals
     DFLPendingList * const pPending;
     const ClassLoadLevel level;
     BOOL fBailed;
-#ifdef FEATURE_COMINTEROP
+#ifdef FEATURE_TYPEEQUIVALENCE
     BOOL fHasEquivalentStructParameter;
 #endif
     BOOL fHasTypeForwarderDependentStructParameter;
@@ -5422,7 +5385,6 @@ static void CheckForEquivalenceAndFullyLoadType(Module *pModule, mdToken token, 
     {
         THROWS;
         GC_TRIGGERS;
-        SO_INTOLERANT;
     }
     CONTRACTL_END;
 
@@ -5608,7 +5570,6 @@ void MethodTable::DoFullyLoad(Generics::RecursionGraph * const pVisited,  const 
 
     }
 
-    BEGIN_SO_INTOLERANT_CODE(GetThread());
     // First ensure that we're loaded to just below CLASS_DEPENDENCIES_LOADED
     ClassLoader::EnsureLoaded(this, (ClassLoadLevel) (level-1));
 
@@ -5959,7 +5920,7 @@ void MethodTable::DoFullyLoad(Generics::RecursionGraph * const pVisited,  const 
             SetIsDependenciesLoaded();
 
 #if defined(FEATURE_COMINTEROP) && !defined(DACCESS_COMPILE)
-            if (WinRTSupported() && g_fEEStarted && !ContainsIntrospectionOnlyTypes())
+            if (WinRTSupported() && g_fEEStarted)
             {
                 _ASSERTE(GetAppDomain() != NULL);
 
@@ -6022,9 +5983,6 @@ void MethodTable::DoFullyLoad(Generics::RecursionGraph * const pVisited,  const 
         _ASSERTE(th.IsTypeDesc() && th.IsArray());
         _ASSERTE(!(level == CLASS_LOADED && !th.IsFullyLoaded()));
     }
-
-    END_SO_INTOLERANT_CODE;
-    
 #endif //!DACCESS_COMPILE
 } //MethodTable::DoFullyLoad
 
@@ -6164,20 +6122,7 @@ void MethodTable::Restore()
 
         EnsureWritablePages(pWriteableData, sizeof(MethodTableWriteableData) + sizeof(CrossModuleGenericsStaticsInfo));
 
-        if (IsDomainNeutral())
-        {
-            // If we are domain neutral, we have to use constituent of the instantiation to store
-            // statics. We need to ensure that we can create DomainModule in all domains
-            // that this instantiations may get activated in. PZM is good approximation of such constituent.
-            Module * pModuleForStatics = Module::GetPreferredZapModuleForMethodTable(this);
-
-            pInfo->m_pModuleForStatics = pModuleForStatics;
-            pInfo->m_DynamicTypeID = pModuleForStatics->AllocateDynamicEntry(this);
-        }
-        else
-        {
-            pInfo->m_pModuleForStatics = GetLoaderModule();
-        }
+        pInfo->m_pModuleForStatics = GetLoaderModule();
     }
 
     LOG((LF_ZAP, LL_INFO10000,
@@ -6704,7 +6649,7 @@ MethodTable *MethodTable::GetDefaultWinRTInterface()
 #endif // !DACCESS_COMPILE
 #endif // FEATURE_COMINTEROP
 
-#ifdef FEATURE_COMINTEROP
+#ifdef FEATURE_TYPEEQUIVALENCE
 #ifndef DACCESS_COMPILE
 
 WORD GetEquivalentMethodSlot(MethodTable * pOldMT, MethodTable * pNewMT, WORD wMTslot, BOOL *pfFound)
@@ -6714,20 +6659,15 @@ WORD GetEquivalentMethodSlot(MethodTable * pOldMT, MethodTable * pNewMT, WORD wM
         GC_NOTRIGGER;
     } CONTRACTL_END;
 
-    MethodDesc * pMDRet = NULL;
     *pfFound = FALSE;
 
+    WORD wVTslot = wMTslot;
+
+#ifdef FEATURE_COMINTEROP
     // Get the COM vtable slot corresponding to the given MT slot
-    WORD wVTslot;
     if (pOldMT->IsSparseForCOMInterop())
-    {
         wVTslot = pOldMT->GetClass()->GetSparseCOMInteropVTableMap()->LookupVTSlot(wMTslot);
-    }
-    else
-    {
-        wVTslot = wMTslot;
-    }
-    
+
     // If the other MT is not sparse, we can return the COM slot directly
     if (!pNewMT->IsSparseForCOMInterop()) 
     {
@@ -6749,9 +6689,18 @@ WORD GetEquivalentMethodSlot(MethodTable * pOldMT, MethodTable * pNewMT, WORD wM
 
     _ASSERTE(!*pfFound);
     return 0;
+
+#else
+    // No COM means there is no sparse interface
+    if (wVTslot < pNewMT->GetNumVirtuals())
+        *pfFound = TRUE;
+
+    return wVTslot;
+
+#endif // FEATURE_COMINTEROP
 }
 #endif // #ifdef DACCESS_COMPILE
-#endif // #ifdef FEATURE_COMINTEROP
+#endif // #ifdef FEATURE_TYPEEQUIVALENCE
 
 //==========================================================================================
 BOOL 
@@ -6937,7 +6886,8 @@ BOOL
 MethodTable::FindDispatchImpl(
     UINT32         typeID, 
     UINT32         slotNumber, 
-    DispatchSlot * pImplSlot)
+    DispatchSlot * pImplSlot,
+    BOOL           throwOnConflict)
 {
     CONTRACT (BOOL) {
         INSTANCE_CHECK;
@@ -7016,11 +6966,28 @@ MethodTable::FindDispatchImpl(
                 //
                 // See if we can find a default method from one of the implemented interfaces 
                 //
+
+                // Try exact match first
                 MethodDesc *pDefaultMethod = NULL;
-                if (FindDefaultInterfaceImplementation(
+                BOOL foundDefaultInterfaceImplementation  = FindDefaultInterfaceImplementation(
                     pIfcMD,     // the interface method being resolved
                     pIfcMT,     // the interface being resolved
-                    &pDefaultMethod))
+                    &pDefaultMethod,
+                    FALSE, // allowVariance
+                    throwOnConflict);
+
+                // If there's no exact match, try a variant match
+                if (!foundDefaultInterfaceImplementation && pIfcMT->HasVariance())
+                {
+                    foundDefaultInterfaceImplementation = FindDefaultInterfaceImplementation(
+                        pIfcMD,     // the interface method being resolved
+                        pIfcMT,     // the interface being resolved
+                        &pDefaultMethod,
+                        TRUE, // allowVariance
+                        throwOnConflict);
+                }
+
+                if (foundDefaultInterfaceImplementation)
                 {
                     // Now, construct a DispatchSlot to return in *pImplSlot
                     DispatchSlot ds(pDefaultMethod->GetMethodEntryPoint());
@@ -7085,7 +7052,7 @@ void ThrowExceptionForConflictingOverride(
     TypeString::AppendType(strTargetClassName, pTargetClass);
 
     COMPlusThrow(
-        kNotSupportedException,
+        kAmbiguousImplementationException,
         IDS_CLASSLOAD_AMBIGUOUS_OVERRIDE,
         strMethodName,
         strInterfaceName,
@@ -7099,7 +7066,9 @@ void ThrowExceptionForConflictingOverride(
 BOOL MethodTable::FindDefaultInterfaceImplementation(
     MethodDesc *pInterfaceMD,
     MethodTable *pInterfaceMT,
-    MethodDesc **ppDefaultMethod
+    MethodDesc **ppDefaultMethod,
+    BOOL allowVariance,
+    BOOL throwOnConflict
 )
 {
     CONTRACT(BOOL) {
@@ -7157,8 +7126,11 @@ BOOL MethodTable::FindDefaultInterfaceImplementation(
                 {
                     if (pCurMT->HasSameTypeDefAs(pInterfaceMT))
                     {
-                        // Generic variance match - we'll instantiate pCurMD with the right type arguments later
-                        pCurMD = pInterfaceMD;
+                        if (allowVariance && !pInterfaceMD->IsAbstract())
+                        {
+                            // Generic variance match - we'll instantiate pCurMD with the right type arguments later
+                            pCurMD = pInterfaceMD;
+                        }
                     }
                     else
                     {
@@ -7167,43 +7139,63 @@ BOOL MethodTable::FindDefaultInterfaceImplementation(
                         // Implicit override in default interface methods are not allowed
                         //
                         MethodIterator methodIt(pCurMT);
-                        for (; methodIt.IsValid(); methodIt.Next())
+                        for (; methodIt.IsValid() && pCurMD == NULL; methodIt.Next())
                         {
                             MethodDesc *pMD = methodIt.GetMethodDesc();
                             int targetSlot = pInterfaceMD->GetSlot();
 
-                            if (pMD->IsMethodImpl())
+                            // If this is not a MethodImpl, it can't be implementing the method we're looking for
+                            if (!pMD->IsMethodImpl())
+                                continue;
+                                
+                            // We have a MethodImpl - iterate over all the declarations it's implementing,
+                            // looking for the interface method we need.
+                            MethodImpl::Iterator it(pMD);
+                            for (; it.IsValid() && pCurMD == NULL; it.Next())
                             {
-                                MethodImpl::Iterator it(pMD);
-                                for (; it.IsValid(); it.Next())
+                                MethodDesc *pDeclMD = it.GetMethodDesc();
+
+                                // Is this the right slot?
+                                if (pDeclMD->GetSlot() != targetSlot)
+                                    continue;
+
+                                // Is this the right interface?
+                                if (!pDeclMD->HasSameMethodDefAs(pInterfaceMD))
+                                    continue;
+
+                                if (pInterfaceMD->HasClassInstantiation())
                                 {
-                                    MethodDesc *pDeclMD = it.GetMethodDesc();
+                                    // pInterfaceMD will be in the canonical form, so we need to check the specific
+                                    // instantiation against pInterfaceMT.
+                                    //
+                                    // The parent of pDeclMD is unreliable for this purpose because it may or
+                                    // may not be canonicalized. Let's go from the metadata.
 
-                                    if (pDeclMD->GetSlot() != targetSlot)
-                                        continue;
+                                    SigTypeContext typeContext = SigTypeContext(pCurMT);
 
-                                    MethodTable *pDeclMT = pDeclMD->GetMethodTable();
-                                    if (pDeclMT->ContainsGenericVariables())
+                                    mdTypeRef tkParent;
+                                    IfFailThrow(pMD->GetModule()->GetMDImport()->GetParentToken(it.GetToken(), &tkParent));
+
+                                    MethodTable* pDeclMT = ClassLoader::LoadTypeDefOrRefOrSpecThrowing(
+                                        pMD->GetModule(),
+                                        tkParent,
+                                        &typeContext).AsMethodTable();
+
+                                    // We do CanCastToInterface to also cover variance.
+                                    // We already know this is a method on the same type definition as the (generic)
+                                    // interface but we need to make sure the instantiations match.
+                                    if ((allowVariance && pDeclMT->CanCastToInterface(pInterfaceMT))
+                                        || pDeclMT == pInterfaceMT)
                                     {
-                                        TypeHandle thInstDeclMT = ClassLoader::LoadGenericInstantiationThrowing(
-                                            pDeclMT->GetModule(),
-                                            pDeclMT->GetCl(),
-                                            pCurMT->GetInstantiation());
-                                        MethodTable *pInstDeclMT = thInstDeclMT.GetMethodTable();
-                                        if (pInstDeclMT == pInterfaceMT)
-                                        {
-                                            // This is a matching override. We'll instantiate pCurMD later
-                                            pCurMD = pMD;
-                                            break;
-                                        }
-                                    }
-                                    else if (pDeclMD == pInterfaceMD)
-                                    {
-                                        // Exact match override 
+                                        // We have a match
                                         pCurMD = pMD;
-                                        break;
                                     }
-                                } 
+                                }
+                                else
+                                {
+                                    // No generics involved. If the method definitions match, it's a match.
+                                    pCurMD = pMD;
+                                }
                             }
                         }
                     }
@@ -7249,7 +7241,11 @@ BOOL MethodTable::FindDefaultInterfaceImplementation(
                             break;
                         }
 
-                        if (pCurMT->CanCastToInterface(pCandidateMT))
+                        if (allowVariance && pCandidateMT->HasSameTypeDefAs(pCurMT))
+                        {
+                            // Variant match on the same type - this is a tie
+                        }
+                        else if (pCurMT->CanCastToInterface(pCandidateMT))
                         {
                             // pCurMT is a more specific choice than IFoo/IBar both overrides IBlah :
                             if (!seenMoreSpecific)
@@ -7296,6 +7292,8 @@ BOOL MethodTable::FindDefaultInterfaceImplementation(
     }
 
     // scan to see if there are any conflicts
+    // If we are doing second pass (allowing variance), we know don't actually look for
+    // a conflict anymore, but pick the first match.
     MethodTable *pBestCandidateMT = NULL;
     MethodDesc *pBestCandidateMD = NULL;
     for (unsigned i = 0; i < candidatesCount; ++i)
@@ -7307,10 +7305,19 @@ BOOL MethodTable::FindDefaultInterfaceImplementation(
         {
             pBestCandidateMT = candidates[i].pMT;
             pBestCandidateMD = candidates[i].pMD;
+
+            // If this is a second pass lookup, we know this is a variant match. As such
+            // we pick the first result as the winner and don't look for a conflict.
+            if (allowVariance)
+                break;
         }
         else if (pBestCandidateMT != candidates[i].pMT)
         {
-            ThrowExceptionForConflictingOverride(this, pInterfaceMT, pInterfaceMD);
+            if (throwOnConflict)
+                ThrowExceptionForConflictingOverride(this, pInterfaceMT, pInterfaceMD);
+
+            *ppDefaultMethod = NULL;
+            RETURN(FALSE);
         }
     }
 
@@ -7328,48 +7335,40 @@ BOOL MethodTable::FindDefaultInterfaceImplementation(
 #endif // DACCESS_COMPILE
 
 //==========================================================================================
-DispatchSlot MethodTable::FindDispatchSlot(UINT32 typeID, UINT32 slotNumber)
-{
-    WRAPPER_NO_CONTRACT;
-    STATIC_CONTRACT_SO_TOLERANT;
-    DispatchSlot implSlot(NULL);
-    FindDispatchImpl(typeID, slotNumber, &implSlot);
-    return implSlot;
-}
-
-//==========================================================================================
-DispatchSlot MethodTable::FindDispatchSlot(DispatchToken tok)
+DispatchSlot MethodTable::FindDispatchSlot(UINT32 typeID, UINT32 slotNumber, BOOL throwOnConflict)
 {
     CONTRACTL
     {
         THROWS;
         GC_TRIGGERS;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
-    return FindDispatchSlot(tok.GetTypeID(), tok.GetSlotNumber());
+
+    DispatchSlot implSlot(NULL);
+    FindDispatchImpl(typeID, slotNumber, &implSlot, throwOnConflict);
+    return implSlot;
 }
 
 #ifndef DACCESS_COMPILE
 
 //==========================================================================================
-DispatchSlot MethodTable::FindDispatchSlotForInterfaceMD(MethodDesc *pMD)
+DispatchSlot MethodTable::FindDispatchSlotForInterfaceMD(MethodDesc *pMD, BOOL throwOnConflict)
 {
     WRAPPER_NO_CONTRACT;
     CONSISTENCY_CHECK(CheckPointer(pMD));
     CONSISTENCY_CHECK(pMD->IsInterface());
-    return FindDispatchSlotForInterfaceMD(TypeHandle(pMD->GetMethodTable()), pMD);
+    return FindDispatchSlotForInterfaceMD(TypeHandle(pMD->GetMethodTable()), pMD, throwOnConflict);
 }
 
 //==========================================================================================
-DispatchSlot MethodTable::FindDispatchSlotForInterfaceMD(TypeHandle ownerType, MethodDesc *pMD)
+DispatchSlot MethodTable::FindDispatchSlotForInterfaceMD(TypeHandle ownerType, MethodDesc *pMD, BOOL throwOnConflict)
 {
     WRAPPER_NO_CONTRACT;
     CONSISTENCY_CHECK(!ownerType.IsNull());
     CONSISTENCY_CHECK(CheckPointer(pMD));
     CONSISTENCY_CHECK(pMD->IsInterface());
-    return FindDispatchSlot(ownerType.GetMethodTable()->GetTypeID(), pMD->GetSlot());
+    return FindDispatchSlot(ownerType.GetMethodTable()->GetTypeID(), pMD->GetSlot(), throwOnConflict);
 }
 
 //==========================================================================================
@@ -7428,7 +7427,6 @@ UINT32 MethodTable::LookupTypeID()
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -7557,7 +7555,6 @@ MethodDesc * MethodTable::GetIntroducingMethodDesc(DWORD slotNumber)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -7923,7 +7920,6 @@ MethodDesc* MethodTable::GetMethodDescForSlotAddress(PCODE addr, BOOL fSpeculati
     {
         GC_NOTRIGGER;
         NOTHROW;
-        SO_TOLERANT;
         POSTCONDITION(CheckPointer(RETVAL, NULL_NOT_OK));
         POSTCONDITION(RETVAL->m_pDebugMethodTable.IsNull() || // We must be in BuildMethdTableThrowing()
                       RETVAL->SanityCheck());
@@ -7983,7 +7979,6 @@ BOOL MethodTable::ComputeContainsGenericVariables(Instantiation inst)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -8009,14 +8004,7 @@ BOOL MethodTable::SanityCheck()
 
     if (m_pEEClass.IsNull())
     {
-        if (IsAsyncPinType())
-        {
-            return TRUE;
-        }
-        else
-        {
-            return FALSE;
-        }
+        return FALSE;
     }
 
     EEClass * pClass = GetClass();
@@ -8029,7 +8017,7 @@ BOOL MethodTable::SanityCheck()
     if (GetNumGenericArgs() != 0)
         return (pCanonMT->GetClass() == pClass);
     else
-        return (pCanonMT == this) || IsArray() || IsTransparentProxy();
+        return (pCanonMT == this) || IsArray();
 }
 
 //==========================================================================================
@@ -8095,7 +8083,6 @@ MethodDesc * MethodTable::GetClassConstructor()
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -8226,7 +8213,6 @@ MethodTable * MethodTable::GetMethodTableMatchingParentClass(MethodTable * pWhic
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         PRECONDITION(CheckPointer(pWhichParent));
         PRECONDITION(IsRestored_NoLogging());
         PRECONDITION(pWhichParent->IsRestored_NoLogging());
@@ -8283,7 +8269,6 @@ Instantiation MethodTable::GetInstantiationOfParentClass(MethodTable *pWhichPare
     CONTRACTL {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         PRECONDITION(CheckPointer(pWhichParent));
         PRECONDITION(IsRestored_NoLogging());
         PRECONDITION(pWhichParent->IsRestored_NoLogging());
@@ -8318,7 +8303,8 @@ Instantiation MethodTable::GetInstantiationOfParentClass(MethodTable *pWhichPare
 InteropMethodTableData *MethodTable::LookupComInteropData()
 {
     WRAPPER_NO_CONTRACT;
-    return GetDomain()->LookupComInteropData(this);
+
+    return GetLoaderAllocator()->LookupComInteropData(this);
 }
 
 //==========================================================================================
@@ -8326,7 +8312,8 @@ InteropMethodTableData *MethodTable::LookupComInteropData()
 BOOL MethodTable::InsertComInteropData(InteropMethodTableData *pData)
 {
     WRAPPER_NO_CONTRACT;
-    return GetDomain()->InsertComInteropData(this, pData);
+
+    return GetLoaderAllocator()->InsertComInteropData(this, pData);
 }
 
 //==========================================================================================
@@ -8861,7 +8848,6 @@ void MethodTable::CheckInitMethodDataCache()
     CONTRACTL {
         THROWS;
         GC_NOTRIGGER;
-        SO_TOLERANT;
     } CONTRACTL_END;
     if (s_pMethodDataCache == NULL)
     {
@@ -9360,7 +9346,7 @@ CHECK MethodTable::CheckActivated()
 }
 
 #ifdef _MSC_VER
-// Optimization intended for EnsureInstanceActive, IsIntrospectionOnly, EnsureActive only
+// Optimization intended for EnsureInstanceActive, EnsureActive only
 #pragma optimize("t", on)
 #endif // _MSC_VER
 //==========================================================================================
@@ -9395,9 +9381,6 @@ VOID MethodTable::EnsureInstanceActive()
 
     if (HasInstantiation())
     {
-        // This is going to go recursive, so we need to use an interior stack probe
-        
-        INTERIOR_STACK_PROBE(GetThread());
         {
             Instantiation inst = GetInstantiation();
             for (DWORD i = 0; i < inst.GetNumArgs(); i++)
@@ -9409,45 +9392,10 @@ VOID MethodTable::EnsureInstanceActive()
                 }
             }
         }
-        END_INTERIOR_STACK_PROBE;
     }
 
 }
 #endif //!DACCESS_COMPILE
-
-//==========================================================================================
-BOOL MethodTable::IsIntrospectionOnly()
-{
-    WRAPPER_NO_CONTRACT;
-    return GetAssembly()->IsIntrospectionOnly();
-}
-
-//==========================================================================================
-BOOL MethodTable::ContainsIntrospectionOnlyTypes()
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END
-
-    // check this type
-    if (IsIntrospectionOnly())
-        return TRUE;
-
-    // check the instantiation
-    Instantiation inst = GetInstantiation();
-    for (DWORD i = 0; i < inst.GetNumArgs(); i++)
-    {
-        CONSISTENCY_CHECK(!inst[i].IsEncodedFixup());
-        if (inst[i].ContainsIntrospectionOnlyTypes())
-            return TRUE;
-    }
-
-    return FALSE;
-}
 
 //==========================================================================================
 #ifndef DACCESS_COMPILE
@@ -9652,7 +9600,6 @@ PCODE MethodTable::GetRestoredSlot(DWORD slotNumber)
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 
@@ -9693,7 +9640,6 @@ MethodTable * MethodTable::GetRestoredSlotMT(DWORD slotNumber)
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 
@@ -9734,7 +9680,6 @@ MethodDesc * MethodTable::GetParallelMethodDesc(MethodDesc * pDefMD)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -9777,8 +9722,7 @@ void MethodTable::SetSlot(UINT32 slotNumber, PCODE slotCode)
         if (fSharedVtableChunk)
         {
             MethodDesc* pMD = GetMethodDescForSlotAddress(slotCode);
-            _ASSERTE(pMD->HasStableEntryPoint());
-            _ASSERTE(pMD->GetStableEntryPoint() == slotCode);
+            _ASSERTE(pMD->IsVersionableWithVtableSlotBackpatch() || pMD->GetStableEntryPoint() == slotCode);
         }
     }
 #endif
@@ -9790,7 +9734,15 @@ void MethodTable::SetSlot(UINT32 slotNumber, PCODE slotCode)
     _ASSERTE(IsThumbCode(slotCode));
 #endif
 
-    *GetSlotPtrRaw(slotNumber) = slotCode;
+    TADDR slot = GetSlotPtrRaw(slotNumber);
+    if (slotNumber < GetNumVirtuals())
+    {
+        ((MethodTable::VTableIndir2_t *) slot)->SetValueMaybeNull(slotCode);
+    }
+    else
+    {
+        *((PCODE *)slot) = slotCode;
+    }
 }
 
 //==========================================================================================
@@ -9889,10 +9841,10 @@ MethodTable::TryResolveConstraintMethodApprox(
                 thInterfaceType.AsMethodTable()->GetCanonicalMethodTable())
             {
                 cPotentialMatchingInterfaces++;
-                pMD = pCanonMT->GetMethodDescForInterfaceMethod(thPotentialInterfaceType, pGenInterfaceMD);
+                pMD = pCanonMT->GetMethodDescForInterfaceMethod(thPotentialInterfaceType, pGenInterfaceMD, FALSE /* throwOnConflict */);
 
                 // See code:#TryResolveConstraintMethodApprox_DoNotReturnParentMethod
-                if ((pMD != NULL) && !pMD->GetMethodTable()->IsValueType())
+                if ((pMD != NULL) && !pMD->GetMethodTable()->IsValueType() && !pMD->IsInterface())
                 {
                     LOG((LF_JIT, LL_INFO10000, "TryResolveConstraintMethodApprox: %s::%s not a value type method\n",
                         pMD->m_pszDebugClassName, pMD->m_pszDebugMethodName));
@@ -9920,9 +9872,8 @@ MethodTable::TryResolveConstraintMethodApprox(
                 if (this->CanCastToInterface(pInterfaceMT))
                 {
                     // We can resolve to exact method
-                    pMD = this->GetMethodDescForInterfaceMethod(pInterfaceMT, pInterfaceMD);
-                    _ASSERTE(pMD != NULL);
-                    fIsExactMethodResolved = TRUE;
+                    pMD = this->GetMethodDescForInterfaceMethod(pInterfaceMT, pInterfaceMD, FALSE /* throwOnConflict */);
+                    fIsExactMethodResolved = pMD != NULL;
                 }
             }
 
@@ -9940,7 +9891,7 @@ MethodTable::TryResolveConstraintMethodApprox(
             // lookup at runtime, or when not sharing generic code).
             if (pCanonMT->CanCastToInterface(thInterfaceType.GetMethodTable()))
             {
-                pMD = pCanonMT->GetMethodDescForInterfaceMethod(thInterfaceType, pGenInterfaceMD);
+                pMD = pCanonMT->GetMethodDescForInterfaceMethod(thInterfaceType, pGenInterfaceMD, FALSE /* throwOnConflict */);
                 if (pMD == NULL)
                 {
                     LOG((LF_JIT, LL_INFO10000, "TryResolveConstraintMethodApprox: failed to find method desc for interface method\n"));
@@ -10030,28 +9981,14 @@ LPCWSTR MethodTable::GetPathForErrorMessages()
     }
 }
 
-
-bool MethodTable::ClassRequiresUnmanagedCodeCheck()
-{
-    LIMITED_METHOD_CONTRACT;
-    
-    return false;
-}
-
-
-
 BOOL MethodTable::Validate()
 {
     LIMITED_METHOD_CONTRACT;
 
     ASSERT_AND_CHECK(SanityCheck());
-    
-#ifdef _DEBUG    
-    if (m_pWriteableData.IsNull())
-    {
-        _ASSERTE(IsAsyncPinType());
-        return TRUE;
-    }
+
+#ifdef _DEBUG
+    ASSERT_AND_CHECK(!m_pWriteableData.IsNull());
 
     MethodTableWriteableData *pWriteableData = m_pWriteableData.GetValue();
     DWORD dwLastVerifiedGCCnt = pWriteableData->m_dwLastVerifedGCCnt;
@@ -10065,12 +10002,9 @@ BOOL MethodTable::Validate()
 
     if (IsArray())
     {
-        if (!IsAsyncPinType())
+        if (!SanityCheck())
         {
-            if (!SanityCheck())
-            {
-                ASSERT_AND_CHECK(!"Detected use of a corrupted OBJECTREF. Possible GC hole.");
-            }
+            ASSERT_AND_CHECK(!"Detected use of a corrupted OBJECTREF. Possible GC hole.");
         }
     }
     else if (!IsCanonicalMethodTable())
@@ -10097,7 +10031,7 @@ BOOL MethodTable::Validate()
 NOINLINE BYTE *MethodTable::GetLoaderAllocatorObjectForGC()
 {
     WRAPPER_NO_CONTRACT;
-    if (!Collectible() || ((PTR_AppDomain)GetLoaderModule()->GetDomain())->NoAccessToHandleTable())
+    if (!Collectible())
     {
         return NULL;
     }
@@ -10267,4 +10201,30 @@ BOOL MethodTable::IsInheritanceChainLayoutFixedInCurrentVersionBubble()
 
     return TRUE;
 }
+
+//
+// Is the inheritance chain fixed within the current version bubble?
+//
+BOOL MethodTable::IsInheritanceChainFixedInCurrentVersionBubble()
+{
+    STANDARD_VM_CONTRACT;
+
+    MethodTable * pMT = this;
+
+    if (pMT->IsValueType())
+    {
+        return pMT->GetModule()->IsInCurrentVersionBubble();
+    }
+
+    while ((pMT != g_pObjectClass) && (pMT != NULL))
+    {
+        if (!pMT->GetModule()->IsInCurrentVersionBubble())
+            return FALSE;
+
+        pMT = pMT->GetParentMethodTable();
+    }
+
+    return TRUE;
+}
+
 #endif // FEATURE_READYTORUN_COMPILER

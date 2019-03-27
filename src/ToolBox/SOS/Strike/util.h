@@ -82,6 +82,19 @@ struct IMDInternalImport;
         do { if (!(expr) ) { ExtOut(reason); ExtOut(msg); ExtOut(#expr); DebugBreak(); } } while (0)
 #endif
 
+// The native symbol reader dll name
+#if defined(_AMD64_)
+#define NATIVE_SYMBOL_READER_DLL W("Microsoft.DiaSymReader.Native.amd64.dll")
+#elif defined(_X86_)
+#define NATIVE_SYMBOL_READER_DLL W("Microsoft.DiaSymReader.Native.x86.dll")
+#elif defined(_ARM_)
+#define NATIVE_SYMBOL_READER_DLL W("Microsoft.DiaSymReader.Native.arm.dll")
+#elif defined(_ARM64_)
+// Use diasymreader until the package has an arm64 version - issue #7360
+//#define NATIVE_SYMBOL_READER_DLL W("Microsoft.DiaSymReader.Native.arm64.dll")
+#define NATIVE_SYMBOL_READER_DLL W("diasymreader.dll")
+#endif
+
 // PREFIX macros - Begin
 
 // SOS does not have support for Contracts.  Therefore we needed to duplicate
@@ -343,6 +356,7 @@ namespace Output
         DML_RCWrapper,
         DML_CCWrapper,
         DML_ManagedVar,
+        DML_Async,
     };
 
     /**********************************************************************\
@@ -444,6 +458,7 @@ inline void ExtOutIndent()  { WhitespaceOut(Output::g_Indent << 2); }
 #define DMLRCWrapper(addr) Output::BuildHexValue(addr, Output::DML_RCWrapper).GetPtr()
 #define DMLCCWrapper(addr) Output::BuildHexValue(addr, Output::DML_CCWrapper).GetPtr()
 #define DMLManagedVar(expansionName,frame,simpleName) Output::BuildManagedVarValue(expansionName, frame, simpleName, Output::DML_ManagedVar).GetPtr()
+#define DMLAsync(addr) Output::BuildHexValue(addr, Output::DML_Async).GetPtr()
 
 bool IsDMLEnabled();
 
@@ -1374,7 +1389,8 @@ const char *ElementTypeName (unsigned type);
 void DisplayFields (CLRDATA_ADDRESS cdaMT, DacpMethodTableData *pMTD, DacpMethodTableFieldData *pMTFD,
                     DWORD_PTR dwStartAddr = 0, BOOL bFirst=TRUE, BOOL bValueClass=FALSE);
 int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, __in_z LPCWSTR wszFieldName, BOOL bFirst=TRUE);
-int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, CLRDATA_ADDRESS cdaMT, __in_z LPCWSTR wszFieldName, BOOL bFirst=TRUE);
+int GetObjFieldOffset(CLRDATA_ADDRESS cdaObj, CLRDATA_ADDRESS cdaMT, __in_z LPCWSTR wszFieldName, BOOL bFirst=TRUE, DacpFieldDescData* pDacpFieldDescData=NULL);
+int GetValueFieldOffset(CLRDATA_ADDRESS cdaMT, __in_z LPCWSTR wszFieldName, DacpFieldDescData* pDacpFieldDescData);
 
 BOOL IsValidToken(DWORD_PTR ModuleAddr, mdTypeDef mb);
 void NameForToken_s(DacpModuleData *pModule, mdTypeDef mb, __out_ecount (capacity_mdName) WCHAR *mdName, size_t capacity_mdName, 
@@ -1646,9 +1662,11 @@ struct MethodTableInfo
     DWORD BaseSize;           // Caching BaseSize and ComponentSize for a MethodTable
     DWORD ComponentSize;      // here has HUGE perf benefits in heap traversals.
     BOOL  bContainsPointers;
+    BOOL  bCollectible;
     DWORD_PTR* GCInfoBuffer;  // Start of memory of GC info
     CGCDesc* GCInfo;    // Just past GC info (which is how it is stored)
     bool  ArrayOfVC;
+    TADDR LoaderAllocatorObjectHandle;
 };
 
 class MethodTableCache
@@ -1666,9 +1684,11 @@ protected:
             info.BaseSize = 0;
             info.ComponentSize = 0;
             info.bContainsPointers = false;
+            info.bCollectible = false;
             info.GCInfo = NULL;
             info.ArrayOfVC = false;
             info.GCInfoBuffer = NULL;
+            info.LoaderAllocatorObjectHandle = NULL;
         }
     };
     Node *head;
@@ -1828,6 +1848,8 @@ BOOL IsMethodTable (DWORD_PTR value);
 BOOL IsStringObject (size_t obj);
 BOOL IsObjectArray (DWORD_PTR objPointer);
 BOOL IsObjectArray (DacpObjectData *pData);
+BOOL IsDerivedFrom(CLRDATA_ADDRESS mtObj, __in_z LPCWSTR baseString);
+BOOL TryGetMethodDescriptorForDelegate(CLRDATA_ADDRESS delegateAddr, CLRDATA_ADDRESS* pMD);
 
 /* Returns a list of all modules in the process.
  * Params:
@@ -1933,6 +1955,8 @@ size_t NextOSPageAddress (size_t addr);
 // It uses g_special_mtCache for it's work.
 BOOL GetSizeEfficient(DWORD_PTR dwAddrCurrObj, 
     DWORD_PTR dwAddrMethTable, BOOL bLarge, size_t& s, BOOL& bContainsPointers);
+
+BOOL GetCollectibleDataEfficient(DWORD_PTR dwAddrMethTable, BOOL& bCollectible, TADDR& loaderAllocatorObjectHandle);
 
 // ObjSize now uses the methodtable cache for its work too.
 size_t ObjectSize (DWORD_PTR obj, BOOL fIsLargeObject=FALSE);
@@ -2811,6 +2835,7 @@ private:
 
     void PrintObjectHead(size_t objAddr,size_t typeID,size_t Size);
     void PrintObjectMember(size_t memberValue, bool dependentHandle);
+    void PrintLoaderAllocator(size_t memberValue);
     void PrintObjectTail();
 
     void PrintRootHead();
@@ -2842,8 +2867,10 @@ private:
         TADDR *Buffer;
         CGCDesc *GCDesc;
 
+        TADDR LoaderAllocatorObjectHandle;
         bool ArrayOfVC;
         bool ContainsPointers;
+        bool Collectible;
         size_t BaseSize;
         size_t ComponentSize;
         
@@ -2860,7 +2887,7 @@ private:
 
         MTInfo()
             : MethodTable(0), TypeName(0), Buffer(0), GCDesc(0),
-              ArrayOfVC(false), ContainsPointers(false), BaseSize(0), ComponentSize(0)
+              ArrayOfVC(false), ContainsPointers(false), Collectible(false), BaseSize(0), ComponentSize(0)
         {
         }
 

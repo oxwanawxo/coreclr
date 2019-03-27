@@ -13,7 +13,6 @@
 #include "eetwain.h"
 #include "codeman.h"
 #include "eeconfig.h"
-#include "stackprobe.h"
 #include "dbginterface.h"
 #include "generics.h"
 #ifdef FEATURE_INTERPRETER
@@ -128,7 +127,6 @@ BOOL CrawlFrame::IsInCalleesFrames(LPVOID stackPointer)
 MethodDesc* CrawlFrame::GetFunction()
 {
     LIMITED_METHOD_DAC_CONTRACT;
-    STATIC_CONTRACT_SO_TOLERANT;
     if (pFunc != NULL)
     {
         return pFunc;
@@ -519,7 +517,6 @@ void ExInfoWalker::WalkToManaged()
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
         SUPPORTS_DAC;
     }
@@ -558,7 +555,6 @@ UINT_PTR Thread::VirtualUnwindCallFrame(PREGDISPLAY pRD, EECodeInfo* pCodeInfo /
         GC_NOTRIGGER;
 
         PRECONDITION(GetControlPC(pRD) == GetIP(pRD->pCurrentContext));
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -598,7 +594,6 @@ PCODE Thread::VirtualUnwindCallFrame(T_CONTEXT* pContext,
         GC_NOTRIGGER;
         PRECONDITION(CheckPointer(pContext, NULL_NOT_OK));
         PRECONDITION(CheckPointer(pContextPointers, NULL_OK));
-        SO_TOLERANT;
         SUPPORTS_DAC;
     }
     CONTRACTL_END;
@@ -718,7 +713,6 @@ PCODE Thread::VirtualUnwindNonLeafCallFrame(T_CONTEXT* pContext, KNONVOLATILE_CO
         PRECONDITION(CheckPointer(pContext, NULL_NOT_OK));
         PRECONDITION(CheckPointer(pContextPointers, NULL_OK));
         PRECONDITION(CheckPointer(pFunctionEntry, NULL_OK));
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -763,7 +757,6 @@ UINT_PTR Thread::VirtualUnwindToFirstManagedCallFrame(T_CONTEXT* pContext)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -908,7 +901,6 @@ StackWalkAction Thread::StackWalkFramesEx(
     // that any C++ destructors pushed in this function will never execute, and it means that this function can
     // never have a dynamic contract.
     STATIC_CONTRACT_WRAPPER;
-    STATIC_CONTRACT_SO_INTOLERANT;
     SCAN_IGNORE_THROW;            // see contract above
     SCAN_IGNORE_TRIGGER;          // see contract above
 
@@ -1231,7 +1223,7 @@ BOOL StackFrameIterator::Init(Thread *    pThread,
     }
     INDEBUG(m_pRealStartFrame = m_crawl.pFrame);
 
-    if (m_crawl.pFrame != FRAME_TOP)
+    if (m_crawl.pFrame != FRAME_TOP && !(m_flags & SKIP_GSCOOKIE_CHECK))
     {
         m_crawl.SetCurGSCookie(Frame::SafeGetGSCookiePtr(m_crawl.pFrame));
     }
@@ -1324,7 +1316,7 @@ BOOL StackFrameIterator::ResetRegDisp(PREGDISPLAY pRegDisp,
         _ASSERTE(m_crawl.pFrame != NULL);
     }
 
-    if (m_crawl.pFrame != FRAME_TOP)
+    if (m_crawl.pFrame != FRAME_TOP && !(m_flags & SKIP_GSCOOKIE_CHECK))
     {
         m_crawl.SetCurGSCookie(Frame::SafeGetGSCookiePtr(m_crawl.pFrame));
     }
@@ -2441,8 +2433,6 @@ StackWalkAction StackFrameIterator::NextRaw(void)
                     _ASSERTE(orUnwind != NULL);
                     VALIDATEOBJECTREF(orUnwind);
 
-                    _ASSERTE(!orUnwind->IsTransparentProxy());
-
                     if (orUnwind != NULL)
                     {
                         orUnwind->LeaveObjMonitorAtException();
@@ -2789,7 +2779,6 @@ void StackFrameIterator::ProcessIp(PCODE Ip)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         SUPPORTS_DAC;
     } CONTRACTL_END;
 
@@ -3151,7 +3140,7 @@ void StackFrameIterator::PreProcessingForManagedFrames(void)
                                                         &m_crawl.codeManState);
 #endif // !DACCESS_COMPILE
 
-    if (m_pCachedGSCookie)
+    if (!(m_flags & SKIP_GSCOOKIE_CHECK) && m_pCachedGSCookie)
     {
         m_crawl.SetCurGSCookie(m_pCachedGSCookie);
     }
@@ -3202,7 +3191,6 @@ void StackFrameIterator::PostProcessingForManagedFrames(void)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
         SUPPORTS_DAC;
     }
@@ -3240,7 +3228,6 @@ void StackFrameIterator::PostProcessingForNoFrameTransition()
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
         SUPPORTS_DAC;
     }

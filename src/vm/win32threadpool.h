@@ -293,7 +293,7 @@ public:
     );
 
     static BOOL SetAppDomainRequestsActive(BOOL UnmanagedTP = FALSE);
-    static void ClearAppDomainRequestsActive(BOOL UnmanagedTP = FALSE, BOOL AdUnloading = FALSE, LONG index = -1);
+    static void ClearAppDomainRequestsActive(BOOL UnmanagedTP = FALSE,  LONG index = -1);
 
     static inline void UpdateLastDequeueTime()
     {
@@ -476,10 +476,7 @@ private:
 
                 {
                     GCX_COOP();
-                    AppDomainFromIDHolder ad(pDelegate->m_appDomainId, TRUE);
-                    if (!ad.IsUnloaded())
-                        // if no domain then handle already gone or about to go.
-                        StoreObjectInHandle(pDelegate->m_registeredWaitHandle, NULL);
+                    StoreObjectInHandle(pDelegate->m_registeredWaitHandle, NULL);
                 }
             }
 
@@ -700,7 +697,7 @@ public:
 
 	        while(lock != 0 || FastInterlockExchange( &lock, 1 ) != 0)
 	        {
-                YieldProcessor();           // indicate to the processor that we are spinning
+                YieldProcessorNormalized(); // indicate to the processor that we are spinning
 
 	            rounds++;
 	            

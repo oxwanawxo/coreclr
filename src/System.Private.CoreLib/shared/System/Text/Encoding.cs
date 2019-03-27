@@ -3,11 +3,8 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Diagnostics;
-using System.Globalization;
-using System.Threading;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
-using System.Diagnostics.CodeAnalysis;
 
 namespace System.Text
 {
@@ -74,7 +71,7 @@ namespace System.Text
     // generally executes faster.
     //
 
-    public abstract class Encoding : ICloneable
+    public abstract partial class Encoding : ICloneable
     {
         // For netcore we use UTF8 as default encoding since ANSI isn't available
         private static readonly UTF8Encoding.UTF8EncodingSealed s_defaultEncoding  = new UTF8Encoding.UTF8EncodingSealed(encoderShouldEmitUTF8Identifier: false);
@@ -261,19 +258,6 @@ namespace System.Text
             if (result != null)
                 return result;
 
-            //
-            // NOTE: If you add a new encoding that can be retrieved by codepage, be sure to
-            // add the corresponding item in EncodingTable.
-            // Otherwise, the code below will throw exception when trying to call
-            // EncodingTable.GetDataItem().
-            //
-            if (codepage < 0 || codepage > 65535)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(codepage), SR.Format(SR.ArgumentOutOfRange_Range, 0, 65535));
-            }
-
-
             switch (codepage)
             {
                 case CodePageDefault: return Default;            // 0
@@ -294,14 +278,13 @@ namespace System.Text
                     throw new ArgumentException(SR.Format(SR.Argument_CodepageNotSupported, codepage), nameof(codepage));
             }
 
-            // Is it a valid code page?
-            if (EncodingTable.GetCodePageDataItem(codepage) == null)
+            if (codepage < 0 || codepage > 65535)
             {
-                throw new NotSupportedException(
-                    SR.Format(SR.NotSupported_NoCodepageData, codepage));
+                throw new ArgumentOutOfRangeException(
+                    nameof(codepage), SR.Format(SR.ArgumentOutOfRange_Range, 0, 65535));
             }
 
-            return UTF8;
+            throw new NotSupportedException(SR.Format(SR.NotSupported_NoCodepageData, codepage));
         }
 
         public static Encoding GetEncoding(int codepage,
@@ -325,7 +308,7 @@ namespace System.Text
 
         // Returns an Encoding object for a given name or a given code page value.
         //
-        public static Encoding GetEncoding(String name)
+        public static Encoding GetEncoding(string name)
         {
             Encoding baseEncoding = EncodingProvider.GetEncodingFromProvider(name);
             if (baseEncoding != null)
@@ -342,7 +325,7 @@ namespace System.Text
 
         // Returns an Encoding object for a given name or a given code page value.
         //
-        public static Encoding GetEncoding(String name,
+        public static Encoding GetEncoding(string name,
             EncoderFallback encoderFallback, DecoderFallback decoderFallback)
         {
             Encoding baseEncoding = EncodingProvider.GetEncodingFromProvider(name, encoderFallback, decoderFallback);
@@ -386,7 +369,7 @@ namespace System.Text
         // Returns the name for this encoding that can be used with mail agent body tags.
         // If the encoding may not be used, the string is empty.
 
-        public virtual String BodyName
+        public virtual string BodyName
         {
             get
             {
@@ -399,62 +382,23 @@ namespace System.Text
         }
 
         // Returns the human-readable description of the encoding ( e.g. Hebrew (DOS)).
-#if PROJECTN
-        public virtual String EncodingName
+        public virtual string EncodingName
         {
             get
             {
-                string encodingName = GetLocalizedEncodingNameResource(this.CodePage);
-                if (encodingName == null)
+                if (_dataItem == null)
                 {
-                    throw new NotSupportedException(SR.Format(SR.MissingEncodingNameResource, this.CodePage));
+                    GetDataItem();
                 }
-
-                if (encodingName.StartsWith("Globalization_cp_", StringComparison.Ordinal))
-                {
-                    // On ProjectN, resource strings are stripped from retail builds and replaced by
-                    // their identifier names. Since this property is meant to be a localized string,
-                    // but we don't localize ProjectN, we specifically need to do something reasonable
-                    // in this case. This currently returns the English name of the encoding from a
-                    // static data table.
-                    encodingName = EncodingTable.GetCodePageDataItem(this.CodePage).EnglishName;
-                    if (encodingName == null)
-                    {
-                        throw new NotSupportedException(SR.Format(SR.MissingEncodingNameResource, this.WebName, this.CodePage));
-                    }
-                }
-                return encodingName;
+                
+                return _dataItem.DisplayName;
             }
         }
 
-        private static string GetLocalizedEncodingNameResource(int codePage)
-        {
-            switch (codePage)
-            {
-                case 1200: return SR.Globalization_cp_1200;
-                case 1201: return SR.Globalization_cp_1201;
-                case 12000: return SR.Globalization_cp_12000;
-                case 12001: return SR.Globalization_cp_12001;
-                case 20127: return SR.Globalization_cp_20127;
-                case 28591: return SR.Globalization_cp_28591;
-                case 65000: return SR.Globalization_cp_65000;
-                case 65001: return SR.Globalization_cp_65001;
-                default: return null;
-            }
-        }
-#else
-        public virtual String EncodingName
-        {
-            get
-            {
-                return SR.GetResourceString("Globalization_cp_" + _codePage.ToString());
-            }
-        }
-#endif
         // Returns the name for this encoding that can be used with mail agent header
         // tags.  If the encoding may not be used, the string is empty.
 
-        public virtual String HeaderName
+        public virtual string HeaderName
         {
             get
             {
@@ -467,7 +411,7 @@ namespace System.Text
         }
 
         // Returns the IANA preferred name for this encoding.
-        public virtual String WebName
+        public virtual string WebName
         {
             get
             {
@@ -603,7 +547,7 @@ namespace System.Text
         }
 
 
-        public virtual Object Clone()
+        public virtual object Clone()
         {
             Encoding newEncoding = (Encoding)this.MemberwiseClone();
 
@@ -612,12 +556,15 @@ namespace System.Text
             return newEncoding;
         }
 
-
         public bool IsReadOnly
         {
             get
             {
                 return (_isReadOnly);
+            }
+            private protected set
+            {
+                _isReadOnly = value;
             }
         }
 
@@ -646,7 +593,7 @@ namespace System.Text
             return GetByteCount(chars, 0, chars.Length);
         }
 
-        public virtual int GetByteCount(String s)
+        public virtual int GetByteCount(string s)
         {
             if (s == null)
                 throw new ArgumentNullException(nameof(s));
@@ -719,16 +666,6 @@ namespace System.Text
             }
         }
 
-        // For NLS Encodings, workhorse takes an encoder (may be null)
-        // Always validate parameters before calling internal version, which will only assert.
-        internal virtual unsafe int GetByteCount(char* chars, int count, EncoderNLS encoder)
-        {
-            Debug.Assert(chars != null);
-            Debug.Assert(count >= 0);
-
-            return GetByteCount(chars, count);
-        }
-
         // Returns a byte array containing the encoded representation of the given
         // character array.
         //
@@ -767,7 +704,7 @@ namespace System.Text
         // Returns a byte array containing the encoded representation of the given
         // string.
         //
-        public virtual byte[] GetBytes(String s)
+        public virtual byte[] GetBytes(string s)
         {
             if (s == null)
                 throw new ArgumentNullException(nameof(s),
@@ -817,20 +754,12 @@ namespace System.Text
             }
         }
 
-        public virtual int GetBytes(String s, int charIndex, int charCount,
+        public virtual int GetBytes(string s, int charIndex, int charCount,
                                        byte[] bytes, int byteIndex)
         {
             if (s == null)
                 throw new ArgumentNullException(nameof(s));
             return GetBytes(s.ToCharArray(), charIndex, charCount, bytes, byteIndex);
-        }
-
-        // This is our internal workhorse
-        // Always validate parameters before calling internal version, which will only assert.
-        internal virtual unsafe int GetBytes(char* chars, int charCount,
-                                                byte* bytes, int byteCount, EncoderNLS encoder)
-        {
-            return GetBytes(chars, charCount, bytes, byteCount);
         }
 
         // We expect this to be the workhorse for NLS Encodings, but for existing
@@ -951,13 +880,6 @@ namespace System.Text
             }
         }
 
-        // This is our internal workhorse
-        // Always validate parameters before calling internal version, which will only assert.
-        internal virtual unsafe int GetCharCount(byte* bytes, int count, DecoderNLS decoder)
-        {
-            return GetCharCount(bytes, count);
-        }
-
         // Returns a character array containing the decoded representation of a
         // given byte array.
         //
@@ -1064,15 +986,6 @@ namespace System.Text
             }
         }
 
-        // This is our internal workhorse
-        // Always validate parameters before calling internal version, which will only assert.
-        internal virtual unsafe int GetChars(byte* bytes, int byteCount,
-                                                char* chars, int charCount, DecoderNLS decoder)
-        {
-            return GetChars(bytes, byteCount, chars, charCount);
-        }
-
-
         [CLSCompliant(false)]
         public unsafe string GetString(byte* bytes, int byteCount)
         {
@@ -1082,14 +995,14 @@ namespace System.Text
             if (byteCount < 0)
                 throw new ArgumentOutOfRangeException(nameof(byteCount), SR.ArgumentOutOfRange_NeedNonNegNum);
 
-            return String.CreateStringFromEncoding(bytes, byteCount, this);
+            return string.CreateStringFromEncoding(bytes, byteCount, this);
         }
 
         public unsafe string GetString(ReadOnlySpan<byte> bytes)
         {
             fixed (byte* bytesPtr = &MemoryMarshal.GetNonNullPinnableReference(bytes))
             {
-                return GetString(bytesPtr, bytes.Length);
+                return string.CreateStringFromEncoding(bytesPtr, bytes.Length, this);
             }
         }
 
@@ -1184,7 +1097,7 @@ namespace System.Text
         // Returns a string containing the decoded representation of a given byte
         // array.
         //
-        public virtual String GetString(byte[] bytes)
+        public virtual string GetString(byte[] bytes)
         {
             if (bytes == null)
                 throw new ArgumentNullException(nameof(bytes),
@@ -1198,9 +1111,9 @@ namespace System.Text
         //
         // Internally we override this for performance
         //
-        public virtual String GetString(byte[] bytes, int index, int count)
+        public virtual string GetString(byte[] bytes, int index, int count)
         {
-            return new String(GetChars(bytes, index, count));
+            return new string(GetChars(bytes, index, count));
         }
 
         // Returns an encoding for Unicode format. The returned encoding will be
@@ -1241,10 +1154,9 @@ namespace System.Text
 
         private static Encoding BigEndianUTF32 => UTF32Encoding.s_bigEndianDefault;
 
-        public override bool Equals(Object value)
+        public override bool Equals(object value)
         {
-            Encoding that = value as Encoding;
-            if (that != null)
+            if (value is Encoding that)
                 return (_codePage == that._codePage) &&
                        (EncoderFallback.Equals(that.EncoderFallback)) &&
                        (DecoderFallback.Equals(that.DecoderFallback));
@@ -1292,6 +1204,12 @@ namespace System.Text
             encoder.ClearMustFlush();
         }
 
+        [StackTraceHidden]
+        internal static void ThrowConversionOverflow()
+        {
+            throw new ArgumentException(SR.Argument_ConversionOverflow);
+        }
+
         internal void ThrowCharsOverflow()
         {
             // Special message to include fallback type in case fallback's GetMaxCharCount is broken
@@ -1325,7 +1243,7 @@ namespace System.Text
                 _encoding = encoding;
             }
             
-            public Object GetRealObject(StreamingContext context)
+            public object GetRealObject(StreamingContext context)
             {
                 throw new PlatformNotSupportedException();
             }
@@ -1390,7 +1308,7 @@ namespace System.Text
                 _encoding = encoding;
             }
 
-            public Object GetRealObject(StreamingContext context)
+            public object GetRealObject(StreamingContext context)
             {
                 throw new PlatformNotSupportedException();
             }
@@ -1512,7 +1430,7 @@ namespace System.Text
                 return true;
             }
 
-            internal unsafe bool AddChar(char ch)
+            internal bool AddChar(char ch)
             {
                 return AddChar(ch, 1);
             }
@@ -1568,7 +1486,7 @@ namespace System.Text
                 }
             }
 
-            internal unsafe bool Fallback(byte fallbackByte)
+            internal bool Fallback(byte fallbackByte)
             {
                 // Build our buffer
                 byte[] byteBuffer = new byte[] { fallbackByte };
@@ -1577,7 +1495,7 @@ namespace System.Text
                 return Fallback(byteBuffer);
             }
 
-            internal unsafe bool Fallback(byte byte1, byte byte2)
+            internal bool Fallback(byte byte1, byte byte2)
             {
                 // Build our buffer
                 byte[] byteBuffer = new byte[] { byte1, byte2 };
@@ -1586,7 +1504,7 @@ namespace System.Text
                 return Fallback(byteBuffer);
             }
 
-            internal unsafe bool Fallback(byte byte1, byte byte2, byte byte3, byte byte4)
+            internal bool Fallback(byte byte1, byte byte2, byte byte3, byte byte4)
             {
                 // Build our buffer
                 byte[] byteBuffer = new byte[] { byte1, byte2, byte3, byte4 };
@@ -1619,7 +1537,7 @@ namespace System.Text
                 return true;
             }
 
-            internal unsafe int Count
+            internal int Count
             {
                 get
                 {
@@ -1687,34 +1605,34 @@ namespace System.Text
                 return true;
             }
 
-            internal unsafe bool AddByte(byte b1)
+            internal bool AddByte(byte b1)
             {
                 return (AddByte(b1, 0));
             }
 
-            internal unsafe bool AddByte(byte b1, byte b2)
+            internal bool AddByte(byte b1, byte b2)
             {
                 return (AddByte(b1, b2, 0));
             }
 
-            internal unsafe bool AddByte(byte b1, byte b2, int moreBytesExpected)
+            internal bool AddByte(byte b1, byte b2, int moreBytesExpected)
             {
                 return (AddByte(b1, 1 + moreBytesExpected) && AddByte(b2, moreBytesExpected));
             }
 
-            internal unsafe bool AddByte(byte b1, byte b2, byte b3)
+            internal bool AddByte(byte b1, byte b2, byte b3)
             {
                 return AddByte(b1, b2, b3, (int)0);
             }
 
-            internal unsafe bool AddByte(byte b1, byte b2, byte b3, int moreBytesExpected)
+            internal bool AddByte(byte b1, byte b2, byte b3, int moreBytesExpected)
             {
                 return (AddByte(b1, 2 + moreBytesExpected) &&
                         AddByte(b2, 1 + moreBytesExpected) &&
                         AddByte(b3, moreBytesExpected));
             }
 
-            internal unsafe bool AddByte(byte b1, byte b2, byte b3, byte b4)
+            internal bool AddByte(byte b1, byte b2, byte b3, byte b4)
             {
                 return (AddByte(b1, 3) &&
                         AddByte(b2, 2) &&
@@ -1777,7 +1695,7 @@ namespace System.Text
                 }
             }
 
-            internal unsafe int Count
+            internal int Count
             {
                 get
                 {

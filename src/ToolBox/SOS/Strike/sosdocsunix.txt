@@ -25,20 +25,21 @@ Object Inspection                  Examining code and stacks
 -----------------------------      -----------------------------
 DumpObj (dumpobj)                  Threads (clrthreads)
 DumpArray                          ThreadState
-DumpStackObjects (dso)             IP2MD (ip2md)
-DumpHeap (dumpheap)                u (clru)
-DumpVC                             DumpStack (dumpstack)
-GCRoot (gcroot)                    EEStack (eestack)
-PrintException (pe)                ClrStack (clrstack) 
-                                   GCInfo
-                                   EHInfo
-                                   bpmd (bpmd)
-
+DumpAsync (dumpasync)              IP2MD (ip2md)
+DumpDelegate (dumpdelegate)        u (clru)
+DumpStackObjects (dso)             DumpStack (dumpstack)
+DumpHeap (dumpheap)                EEStack (eestack)
+DumpVC                             CLRStack (clrstack)
+FinalizeQueue (finalizequeue)      GCInfo
+GCRoot (gcroot)                    EHInfo
+PrintException (pe)                bpmd (bpmd)
+                                   
 Examining CLR data structures      Diagnostic Utilities
 -----------------------------      -----------------------------
 DumpDomain                         VerifyHeap
 EEHeap (eeheap)                    FindAppDomain          
 Name2EE (name2ee)                  DumpLog (dumplog)
+SyncBlk (syncblk)
 DumpMT (dumpmt)
 DumpClass (dumpclass)
 DumpMD (dumpmd)                    
@@ -199,7 +200,23 @@ The arguments in detail:
 	    5b9a628c  4000002        4         System.Int32   instance        8 y
 	    5b9a628c  4000003        8         System.Int32   instance       12 z
 
+\\
 
+COMMAND: dumpasync.
+!DumpAsync [-addr <Object Address>]
+           [-mt <MethodTable address>]
+           [-type <partial type name>]
+           [-tasks]
+           [-completed]
+           [-fields]
+           [-stacks]
+           [-roots]
+
+!DumpAsync traverses the garbage collected heap, looking for objects representing
+async state machines as created when an async method's state is transferred to the
+heap.  This command recognizes async state machines defined as "async void", "async Task",
+"async Task<T>", "async ValueTask", and "async ValueTask<T>".  It also optionally supports
+any other tasks.
 \\
 
 COMMAND: dumpstackobjects.
@@ -218,6 +235,19 @@ interested in objects with invalid fields.
 The abbreviation dso can be used for brevity.
 \\
 
+COMMAND: dumpdelegate.
+!DumpDelegate <delegate address>
+
+!DumpDelegate finds and outputs the one or more method descriptors associated with a delegate object.
+
+For example:
+
+	0:000> !dumpdelegate
+    Target           Method           Name
+    000001461bacb0d8 00007ffc5c894b80 ConsoleApp16.Program.InstanceMethod()
+    000001461bacb098 00007ffc5c894b68 ConsoleApp16.Program.StaticMethod()
+\\
+
 COMMAND: dumpheap.
 DumpHeap [-stat] 
          [-strings] 
@@ -234,7 +264,7 @@ DumpHeap [-stat]
 
 DumpHeap is a powerful command that traverses the garbage collected heap, 
 collection statistics about objects. With it's various options, it can look for
-particular types, restrict to a range, or look for ThinLocks (see SyncBlk 
+particular types, restrict to a range, or look for ThinLocks (see syncblk 
 documentation). Finally, it will provide a warning if it detects excessive 
 fragmentation in the GC heap. 
 
@@ -287,7 +317,7 @@ The arguments in detail:
 -live     Only print live objects
 -dead     Only print dead objects (objects which will be collected in the
           next full GC)
--thinlock Report on any ThinLocks (an efficient locking scheme, see SyncBlk 
+-thinlock Report on any ThinLocks (an efficient locking scheme, see syncblk 
           documentation for more info)
 -startAtLowerBound 
           Force heap walk to begin at lower bound of a supplied address range.
@@ -400,6 +430,27 @@ MethodTable for it, and the Value column provides the start address:
 
 DumpVC is quite a specialized function. Some managed programs make heavy use 
 of value classes, while others do not.
+\\
+
+COMMAND: finalizequeue
+FinalizeQueue [-detail] | [-allReady] [-short]
+
+Displays all objects registered for finalization.
+The "-detail" option displays extra information about any SyncBlocks that need
+to be cleaned up. This data structure is cached and cleaned up by the 
+finalizer thread when it runs.
+
+The "-allReady" option displays all objects that are ready for finalization,
+regardless of whether they are already marked by the garbage collection
+as such, or will be marked by the next garbage collection. The objects that
+are in the "ready for finalization" list are finalizable objects that are
+no longer rooted. This option can be very expensive, because it verifies
+whether all the objects in the finalizable queues are still rooted.
+
+The "-short" option limits the output to the address of each object. If it is
+used in conjunction with -allReady, it enumerates all objects that have
+a finalizer that are no longer rooted. If it is used independently, it lists
+all objects in the finalizable and "ready for finalization" queues.
 \\
 
 COMMAND: gcroot.
@@ -1132,6 +1183,84 @@ For this kind of module, simply use price as the module name:
 Where are we getting these module names from? Run DumpDomain to see a list of
 all loaded modules in all domains. And remember that you can browse all the
 types in a module with DumpModule -mt <module pointer>.
+\\
+
+COMMAND: syncblk.
+SyncBlk [-all | <syncblk number>]
+
+A SyncBlock is a holder for extra information that doesn't need to be created 
+for every object. It can hold COM Interop data, HashCodes, and locking 
+information for thread-safe operations.
+
+When called without arguments, syncblk will print the list of SyncBlocks 
+corresponding to objects that are owned by a thread. For example, a
+
+    lock(MyObject)
+    {
+        ....
+    }
+
+statement will set MyObject to be owned by the current thread. A SyncBlock will
+be created for MyObject, and the thread ownership information stored there 
+(this is an oversimplification, see NOTE below). If another thread tries to 
+execute the same code, they won't be able to enter the block until the first 
+thread exits.
+
+This makes syncblk useful for detecting managed deadlocks. Consider that the
+following code is executed by Threads A & B:
+
+    Resource r1 = new Resource();
+    Resource r2 = new Resource();
+
+    ...
+    
+    lock(r1)                             lock(r2)
+    {                                    {
+        lock(r2)                             lock(r1)
+        {                                    {
+            ...                                  ...
+        }                                    }
+    }                                    }
+
+This is a deadlock situation, as Thread A could take r1, and Thread B r2, 
+leaving both threads with no option but to wait forever in the second lock 
+statement. syncblk will detect this with the following output:
+
+        0:003> syncblk
+        Index SyncBlock MonitorHeld Recursion Owning Thread Info   SyncBlock Owner
+          238 001e40ec            3         1 001e4e60   e04   3   00a7a194 Resource
+          239 001e4124            3         1 001e5980   ab8   4   00a7a1a4 Resource
+
+It means that Thread e04 owns object 00a7a194, and Thread ab8 owns object 
+00a7a1a4. Combine that information with the call stacks of the deadlock:
+
+(threads 3 and 4 have similar output)  
+        0:003> bt
+        ChildEBP RetAddr
+        0404ea04 77f5c524 SharedUserData!SystemCallStub+0x4
+        0404ea08 77e75ee0 ntdll!NtWaitForMultipleObjects+0xc
+        0404eaa4 5d9de9d6 KERNEL32!WaitForMultipleObjectsEx+0x12c
+        0404eb38 5d9def80 clr!Thread::DoAppropriateAptStateWait+0x156
+        0404ecc4 5d9dd8bb clr!Thread::DoAppropriateWaitWorker+0x360
+        0404ed20 5da628dd clr!Thread::DoAppropriateWait+0xbb
+        0404ede4 5da4e2e2 clr!CLREvent::Wait+0x29d
+        0404ee70 5da4dd41 clr!AwareLock::EnterEpilog+0x132
+        0404ef34 5da4efa3 clr!AwareLock::Enter+0x2c1
+        0404f09c 5d767880 clr!AwareLock::Contention+0x483
+        0404f1c4 03f00229 clr!JITutil_MonContention+0x2c0
+        0404f1f4 5b6ef077 image00400000!Worker.Work()+0x79
+        ...
+
+By looking at the code corresponding to Worker.Work()+0x79 (run "clru 03f00229"),
+you can see that thread 3 is attempting to acquire the Resource 00a7a1a4, which
+is owned by thread 4.
+  
+NOTE:
+It is not always the case that a SyncBlock will be created for every object 
+that is locked by a thread. In version 2.0 of the CLR and above, a mechanism 
+called a ThinLock will be used if there is not already a SyncBlock for the 
+object in question. ThinLocks will not be reported by the syncblk command. 
+You can use "dumpheap -thinlock" to list objects locked in this way.
 \\
 
 COMMAND: dumpmt.

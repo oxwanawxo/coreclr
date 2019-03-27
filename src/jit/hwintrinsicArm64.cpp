@@ -3,7 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 #include "jitpch.h"
-#include "hwintrinsicArm64.h"
+#include "hwintrinsic.h"
 
 #ifdef FEATURE_HW_INTRINSICS
 
@@ -11,7 +11,7 @@ namespace IsaFlag
 {
 enum Flag
 {
-#define HARDWARE_INTRINSIC_CLASS(flag, isa) isa = 1ULL << InstructionSet_##isa,
+#define HARDWARE_INTRINSIC_CLASS(flag, jit_config, isa) isa = 1ULL << InstructionSet_##isa,
 #include "hwintrinsiclistArm64.h"
     None     = 0,
     Base     = 1ULL << InstructionSet_Base,
@@ -44,17 +44,22 @@ static const HWIntrinsicInfo hwIntrinsicInfoArray[] = {
 };
 // clang-format on
 
-extern const char* getHWIntrinsicName(NamedIntrinsic intrinsic)
+//------------------------------------------------------------------------
+// lookup: Gets the HWIntrinsicInfo associated with a given NamedIntrinsic
+//
+// Arguments:
+//    id -- The NamedIntrinsic associated with the HWIntrinsic to lookup
+//
+// Return Value:
+//    The HWIntrinsicInfo associated with id
+const HWIntrinsicInfo& HWIntrinsicInfo::lookup(NamedIntrinsic id)
 {
-    return hwIntrinsicInfoArray[intrinsic - NI_HW_INTRINSIC_START - 1].intrinsicName;
-}
+    assert(id != NI_Illegal);
 
-const HWIntrinsicInfo& Compiler::getHWIntrinsicInfo(NamedIntrinsic intrinsic)
-{
-    assert(intrinsic > NI_HW_INTRINSIC_START);
-    assert(intrinsic < NI_HW_INTRINSIC_END);
+    assert(id > NI_HW_INTRINSIC_START);
+    assert(id < NI_HW_INTRINSIC_END);
 
-    return hwIntrinsicInfoArray[intrinsic - NI_HW_INTRINSIC_START - 1];
+    return hwIntrinsicInfoArray[id - NI_HW_INTRINSIC_START - 1];
 }
 
 //------------------------------------------------------------------------
@@ -72,7 +77,7 @@ InstructionSet Compiler::lookupHWIntrinsicISA(const char* className)
     {
         if (strcmp(className, "Base") == 0)
             return InstructionSet_Base;
-#define HARDWARE_INTRINSIC_CLASS(flag, isa)                                                                            \
+#define HARDWARE_INTRINSIC_CLASS(flag, jit_config, isa)                                                                \
     if (strcmp(className, #isa) == 0)                                                                                  \
         return InstructionSet_##isa;
 #include "hwintrinsiclistArm64.h"
@@ -101,22 +106,20 @@ NamedIntrinsic Compiler::lookupHWIntrinsic(const char* className, const char* me
         IsaFlag::Flag isaFlag = IsaFlag::flag(isa);
         for (int i = 0; i < NI_HW_INTRINSIC_END - NI_HW_INTRINSIC_START; i++)
         {
-            if ((isaFlag & hwIntrinsicInfoArray[i].isaflags) &&
-                strcmp(methodName, hwIntrinsicInfoArray[i].intrinsicName) == 0)
+            if ((isaFlag & hwIntrinsicInfoArray[i].isaflags) && strcmp(methodName, hwIntrinsicInfoArray[i].name) == 0)
             {
-                if (compSupports(isa))
+                if (compSupportsHWIntrinsic(isa))
                 {
                     // Intrinsic is supported on platform
-                    result = hwIntrinsicInfoArray[i].intrinsicID;
+                    result = hwIntrinsicInfoArray[i].id;
                 }
                 else
                 {
                     // When the intrinsic class is not supported
                     // Return NI_ARM64_PlatformNotSupported for all intrinsics
                     // Return NI_ARM64_IsSupported_False for the IsSupported property
-                    result = (hwIntrinsicInfoArray[i].intrinsicID != NI_ARM64_IsSupported_True)
-                                 ? NI_ARM64_PlatformNotSupported
-                                 : NI_ARM64_IsSupported_False;
+                    result = (hwIntrinsicInfoArray[i].id != NI_ARM64_IsSupported_True) ? NI_ARM64_PlatformNotSupported
+                                                                                       : NI_ARM64_IsSupported_False;
                 }
                 break;
             }
@@ -126,11 +129,172 @@ NamedIntrinsic Compiler::lookupHWIntrinsic(const char* className, const char* me
 }
 
 //------------------------------------------------------------------------
-// impCheckImmediate: check if immediate is const and in range for inlining
+// isFullyImplementedIsa: Gets a value that indicates whether the InstructionSet is fully implemented
 //
-bool Compiler::impCheckImmediate(GenTree* immediateOp, unsigned int max)
+// Arguments:
+//    isa - The InstructionSet to check
+//
+// Return Value:
+//    true if isa is supported; otherwise, false
+//
+// Notes:
+//    This currently returns true for all partially-implemented ISAs.
+//    TODO-Bug: Set this to return the correct values as https://github.com/dotnet/coreclr/issues/20427 is resolved.
+//
+bool HWIntrinsicInfo::isFullyImplementedIsa(InstructionSet isa)
 {
-    return immediateOp->IsCnsIntOrI() && (immediateOp->AsIntConCommon()->IconValue() < max);
+    switch (isa)
+    {
+        case InstructionSet_Base:
+        case InstructionSet_Crc32:
+        case InstructionSet_Aes:
+        case InstructionSet_Simd:
+        case InstructionSet_Sha1:
+        case InstructionSet_Sha256:
+            return true;
+
+        default:
+            assert(!"Unexpected Arm64 HW intrinsics ISA");
+            return false;
+    }
+}
+
+//------------------------------------------------------------------------
+// isScalarIsa: Gets a value that indicates whether the InstructionSet is scalar
+//
+// Arguments:
+//    isa - The InstructionSet to check
+//
+// Return Value:
+//    true if isa is scalar; otherwise, false
+bool HWIntrinsicInfo::isScalarIsa(InstructionSet isa)
+{
+    switch (isa)
+    {
+        case InstructionSet_Base:
+        case InstructionSet_Crc32:
+            return true;
+
+        case InstructionSet_Aes:
+        case InstructionSet_Simd:
+        case InstructionSet_Sha1:
+        case InstructionSet_Sha256:
+            return false;
+
+        default:
+            assert(!"Unexpected Arm64 HW intrinsics ISA");
+            return true;
+    }
+}
+
+//------------------------------------------------------------------------
+// addRangeCheckIfNeeded: add a GT_HW_INTRINSIC_CHK node for non-full-range imm-intrinsic
+//
+// Arguments:
+//    immOp      -- the operand of the intrinsic that points to the imm-arg
+//    max        -- maximum allowable value for the immOp
+//    mustExpand -- true if the compiler is compiling the fallback(GT_CALL) of this intrinsics
+//
+// Return Value:
+//     if necessary, add a GT_HW_INTRINSIC_CHK node which throws an ArgumentOutOfRangeException
+//     when the immOp is not in the valid range; otherwise, just return the provided immOp.
+//
+GenTree* Compiler::addRangeCheckIfNeeded(GenTree* immOp, unsigned int max, bool mustExpand)
+{
+    assert(immOp != nullptr);
+
+    // Need to range check only if we're must expand and don't have an appropriate constant
+    if (mustExpand && (!immOp->IsCnsIntOrI() || (immOp->AsIntConCommon()->IconValue() < max)))
+    {
+        GenTree* upperBoundNode = new (this, GT_CNS_INT) GenTreeIntCon(TYP_INT, max);
+        GenTree* index          = nullptr;
+        if ((immOp->gtFlags & GTF_SIDE_EFFECT) != 0)
+        {
+            index = fgInsertCommaFormTemp(&immOp);
+        }
+        else
+        {
+            index = gtCloneExpr(immOp);
+        }
+        GenTreeBoundsChk* hwIntrinsicChk = new (this, GT_HW_INTRINSIC_CHK)
+            GenTreeBoundsChk(GT_HW_INTRINSIC_CHK, TYP_VOID, index, upperBoundNode, SCK_RNGCHK_FAIL);
+        hwIntrinsicChk->gtThrowKind = SCK_ARG_RNG_EXCPN;
+        return gtNewOperNode(GT_COMMA, immOp->TypeGet(), hwIntrinsicChk, immOp);
+    }
+    else
+    {
+        return immOp;
+    }
+}
+
+//------------------------------------------------------------------------
+// compSupportsHWIntrinsic: compiler support of hardware intrinsics
+//
+// Arguments:
+//    isa - Instruction set
+// Return Value:
+//    true if
+//    - isa is a scalar ISA
+//    - isa is a SIMD ISA and featureSIMD=true
+//    - isa is fully implemented or EnableIncompleteISAClass=true
+bool Compiler::compSupportsHWIntrinsic(InstructionSet isa)
+{
+    return (featureSIMD || HWIntrinsicInfo::isScalarIsa(isa)) && (
+#ifdef DEBUG
+                                                                     JitConfig.EnableIncompleteISAClass() ||
+#endif
+                                                                     HWIntrinsicInfo::isFullyImplementedIsa(isa));
+}
+
+//------------------------------------------------------------------------
+// lookupNumArgs: gets the number of arguments for the hardware intrinsic.
+// This attempts to do a table based lookup but will fallback to the number
+// of operands in 'node' if the table entry is -1.
+//
+// Arguments:
+//    node      -- GenTreeHWIntrinsic* node with nullptr default value
+//
+// Return Value:
+//     number of arguments
+//
+int HWIntrinsicInfo::lookupNumArgs(const GenTreeHWIntrinsic* node)
+{
+    NamedIntrinsic intrinsic = node->gtHWIntrinsicId;
+
+    assert(intrinsic != NI_Illegal);
+    assert(intrinsic > NI_HW_INTRINSIC_START && intrinsic < NI_HW_INTRINSIC_END);
+
+    GenTree* op1     = node->gtGetOp1();
+    GenTree* op2     = node->gtGetOp2();
+    int      numArgs = 0;
+
+    if (op1 == nullptr)
+    {
+        return 0;
+    }
+
+    if (op1->OperIsList())
+    {
+        numArgs              = 0;
+        GenTreeArgList* list = op1->AsArgList();
+
+        while (list != nullptr)
+        {
+            numArgs++;
+            list = list->Rest();
+        }
+
+        // We should only use a list if we have 3 operands.
+        assert(numArgs >= 3);
+        return numArgs;
+    }
+
+    if (op2 == nullptr)
+    {
+        return 1;
+    }
+
+    return 2;
 }
 
 //------------------------------------------------------------------------
@@ -159,7 +323,62 @@ GenTree* Compiler::impHWIntrinsic(NamedIntrinsic        intrinsic,
     var_types            simdBaseType  = TYP_UNKNOWN;
     unsigned             simdSizeBytes = 0;
 
-    switch (getHWIntrinsicInfo(intrinsic).form)
+    switch (intrinsic)
+    {
+        case NI_Base_Vector64_AsByte:
+        case NI_Base_Vector64_AsInt16:
+        case NI_Base_Vector64_AsInt32:
+        case NI_Base_Vector64_AsSByte:
+        case NI_Base_Vector64_AsSingle:
+        case NI_Base_Vector64_AsUInt16:
+        case NI_Base_Vector64_AsUInt32:
+        case NI_Base_Vector128_As:
+        case NI_Base_Vector128_AsByte:
+        case NI_Base_Vector128_AsDouble:
+        case NI_Base_Vector128_AsInt16:
+        case NI_Base_Vector128_AsInt32:
+        case NI_Base_Vector128_AsInt64:
+        case NI_Base_Vector128_AsSByte:
+        case NI_Base_Vector128_AsSingle:
+        case NI_Base_Vector128_AsUInt16:
+        case NI_Base_Vector128_AsUInt32:
+        case NI_Base_Vector128_AsUInt64:
+        {
+            if (!featureSIMD)
+            {
+                return nullptr;
+            }
+
+            // We fold away the cast here, as it only exists to satisfy
+            // the type system. It is safe to do this here since the retNode type
+            // and the signature return type are both the same TYP_SIMD.
+
+            var_types op1SimdBaseType = TYP_UNKNOWN;
+
+            assert(!sig->hasThis());
+            assert(sig->numArgs == 1);
+            assert(JITtype2varType(sig->retType) == TYP_STRUCT);
+
+            simdBaseType    = getBaseTypeAndSizeOfSIMDType(sig->retTypeClass, &simdSizeBytes);
+            op1SimdBaseType = getBaseTypeOfSIMDType(info.compCompHnd->getArgClass(sig, sig->args));
+
+            if (!varTypeIsArithmetic(simdBaseType) || !varTypeIsArithmetic(op1SimdBaseType))
+            {
+                return nullptr;
+            }
+
+            retNode = impSIMDPopStack(getSIMDTypeForSize(simdSizeBytes), /* expectAddr: */ false, sig->retTypeClass);
+            SetOpLclRelatedToSIMDIntrinsic(retNode);
+            assert(retNode->gtType == getSIMDTypeForSize(getSIMDTypeSizeInBytes(sig->retTypeSigClass)));
+
+            return retNode;
+        }
+
+        default:
+            break;
+    }
+
+    switch (HWIntrinsicInfo::lookup(intrinsic).form)
     {
         case HWIntrinsicInfo::SimdBinaryOp:
         case HWIntrinsicInfo::SimdInsertOp:
@@ -181,22 +400,32 @@ GenTree* Compiler::impHWIntrinsic(NamedIntrinsic        intrinsic,
     // Simd instantiation type check
     if (simdClass != nullptr)
     {
-        simdBaseType = getBaseTypeAndSizeOfSIMDType(simdClass, &simdSizeBytes);
+        if (featureSIMD)
+        {
+            compFloatingPointUsed = true;
+
+            simdBaseType = getBaseTypeAndSizeOfSIMDType(simdClass, &simdSizeBytes);
+        }
 
         if (simdBaseType == TYP_UNKNOWN)
         {
-            return impUnsupportedHWIntrinsic(CORINFO_HELP_THROW_TYPE_NOT_SUPPORTED, method, sig, mustExpand);
+            return impUnsupportedHWIntrinsic(CORINFO_HELP_THROW_PLATFORM_NOT_SUPPORTED, method, sig, mustExpand);
         }
         simdType = getSIMDTypeForSize(simdSizeBytes);
     }
 
-    switch (getHWIntrinsicInfo(intrinsic).form)
+    switch (HWIntrinsicInfo::lookup(intrinsic).form)
     {
         case HWIntrinsicInfo::IsSupported:
             return gtNewIconNode((intrinsic == NI_ARM64_IsSupported_True) ? 1 : 0);
 
         case HWIntrinsicInfo::Unsupported:
             return impUnsupportedHWIntrinsic(CORINFO_HELP_THROW_PLATFORM_NOT_SUPPORTED, method, sig, mustExpand);
+
+        case HWIntrinsicInfo::UnaryOp:
+            op1 = impPopStack().val;
+
+            return gtNewScalarHWIntrinsicNode(JITtype2varType(sig->retType), op1, intrinsic);
 
         case HWIntrinsicInfo::SimdBinaryOp:
         case HWIntrinsicInfo::SimdBinaryRMWOp:
@@ -229,24 +458,16 @@ GenTree* Compiler::impHWIntrinsic(NamedIntrinsic        intrinsic,
             return gtNewSimdHWIntrinsicNode(simdType, op1, intrinsic, simdBaseType, simdSizeBytes);
 
         case HWIntrinsicInfo::SimdExtractOp:
-            if (!mustExpand && !impCheckImmediate(impStackTop(0).val, getSIMDVectorLength(simdSizeBytes, simdBaseType)))
-            {
-                // Immediate lane not constant or out of range
-                return nullptr;
-            }
-            op2 = impPopStack().val;
+            op2 =
+                addRangeCheckIfNeeded(impPopStack().val, getSIMDVectorLength(simdSizeBytes, simdBaseType), mustExpand);
             op1 = impSIMDPopStack(simdType);
 
             return gtNewScalarHWIntrinsicNode(JITtype2varType(sig->retType), op1, op2, intrinsic);
 
         case HWIntrinsicInfo::SimdInsertOp:
-            if (!mustExpand && !impCheckImmediate(impStackTop(1).val, getSIMDVectorLength(simdSizeBytes, simdBaseType)))
-            {
-                // Immediate lane not constant or out of range
-                return nullptr;
-            }
             op3 = impPopStack().val;
-            op2 = impPopStack().val;
+            op2 =
+                addRangeCheckIfNeeded(impPopStack().val, getSIMDVectorLength(simdSizeBytes, simdBaseType), mustExpand);
             op1 = impSIMDPopStack(simdType);
 
             return gtNewSimdHWIntrinsicNode(simdType, op1, op2, op3, intrinsic, simdBaseType, simdSizeBytes);
@@ -260,6 +481,7 @@ GenTree* Compiler::impHWIntrinsic(NamedIntrinsic        intrinsic,
 
         case HWIntrinsicInfo::Sha1RotateOp:
             assert(sig->numArgs == 1);
+            compFloatingPointUsed = true;
             return gtNewScalarHWIntrinsicNode(TYP_UINT, impPopStack().val, NI_ARM64_Sha1FixedRotate);
 
         default:

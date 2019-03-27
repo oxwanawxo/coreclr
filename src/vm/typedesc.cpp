@@ -25,8 +25,6 @@
 #include "compile.h"
 #endif
 #include "array.h"
-#include "stackprobe.h"
-
 
 #ifndef DACCESS_COMPILE
 #ifdef _DEBUG
@@ -107,12 +105,10 @@ PTR_Module TypeDesc::GetLoaderModule()
 
         _ASSERTE(GetInternalCorElementType() == ELEMENT_TYPE_FNPTR);
         PTR_FnPtrTypeDesc asFnPtr = dac_cast<PTR_FnPtrTypeDesc>(this);
-        BEGIN_SO_INTOLERANT_CODE_NOTHROW(GetThread(), fFail = TRUE );
         if (!fFail)
         {
-            retVal =  ClassLoader::ComputeLoaderModuleForFunctionPointer(asFnPtr->GetRetAndArgTypesPointer(), asFnPtr->GetNumArgs()+1);
+            retVal = ClassLoader::ComputeLoaderModuleForFunctionPointer(asFnPtr->GetRetAndArgTypesPointer(), asFnPtr->GetNumArgs()+1);
         }                                              
-        END_SO_INTOLERANT_CODE;
         return retVal;
     }
 }
@@ -136,25 +132,7 @@ PTR_BaseDomain TypeDesc::GetDomain()
     }
     CONTRACTL_END
 
-    Module *pZapModule = GetZapModule();
-    if (pZapModule != NULL)
-    {
-        return pZapModule->GetDomain();
-    }
-
-    if (HasTypeParam())
-    {
-        return GetBaseTypeParam().GetDomain();
-    }
-    if (IsGenericVariable())
-    {
-        PTR_TypeVarTypeDesc asVar = dac_cast<PTR_TypeVarTypeDesc>(this);
-        return asVar->GetModule()->GetDomain();
-    }
-    _ASSERTE(GetInternalCorElementType() == ELEMENT_TYPE_FNPTR);
-    PTR_FnPtrTypeDesc asFnPtr = dac_cast<PTR_FnPtrTypeDesc>(this);
-    return BaseDomain::ComputeBaseDomain(asFnPtr->GetRetAndArgTypesPointer()[0].GetDomain(),
-                                         Instantiation(asFnPtr->GetRetAndArgTypesPointer(), asFnPtr->GetNumArgs()+1));
+    return dac_cast<PTR_BaseDomain>(AppDomain::GetCurrentDomain());
 }
 
 PTR_Module TypeDesc::GetModule() {
@@ -163,7 +141,6 @@ PTR_Module TypeDesc::GetModule() {
         NOTHROW;
         GC_NOTRIGGER;
         FORBID_FAULT;
-        SO_TOLERANT;
         SUPPORTS_DAC;
         // Function pointer types belong to no module
         //PRECONDITION(GetInternalCorElementType() != ELEMENT_TYPE_FNPTR);
@@ -187,19 +164,6 @@ PTR_Module TypeDesc::GetModule() {
     _ASSERTE(GetInternalCorElementType() == ELEMENT_TYPE_FNPTR);
 
     return GetLoaderModule();
-}
-
-BOOL TypeDesc::IsDomainNeutral()
-{
-    CONTRACTL
-    {
-        NOTHROW;
-        GC_NOTRIGGER;
-        FORBID_FAULT;
-    }
-    CONTRACTL_END
-
-    return GetDomain()->IsSharedDomain();
 }
 
 BOOL ParamTypeDesc::OwnsTemplateMethodTable()
@@ -572,7 +536,6 @@ TypeHandle::CastResult TypeDesc::CanCastToNoGC(TypeHandle toType)
         NOTHROW;
         GC_NOTRIGGER;
         FORBID_FAULT;
-        SO_TOLERANT;
     }
     CONTRACTL_END
 
@@ -664,7 +627,6 @@ TypeHandle::CastResult TypeDesc::CanCastParamNoGC(TypeHandle fromParam, TypeHand
         NOTHROW;
         GC_NOTRIGGER;
         FORBID_FAULT;
-        SO_TOLERANT;
     }
     CONTRACTL_END
 
@@ -739,7 +701,6 @@ BOOL TypeDesc::IsEquivalentTo(TypeHandle type COMMA_INDEBUG(TypeHandlePairList *
         THROWS;
         GC_TRIGGERS;
         MODE_ANY;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -821,10 +782,7 @@ OBJECTREF ParamTypeDesc::GetManagedClassObject()
     if (m_hExposedClassObject == NULL) {
         REFLECTCLASSBASEREF  refClass = NULL;
         GCPROTECT_BEGIN(refClass);
-        if (GetAssembly()->IsIntrospectionOnly())
-            refClass = (REFLECTCLASSBASEREF) AllocateObject(MscorlibBinder::GetClass(CLASS__CLASS_INTROSPECTION_ONLY));
-        else
-            refClass = (REFLECTCLASSBASEREF) AllocateObject(g_pRuntimeTypeClass);
+        refClass = (REFLECTCLASSBASEREF) AllocateObject(g_pRuntimeTypeClass);
 
         LoaderAllocator *pLoaderAllocator = GetLoaderAllocator();
         TypeHandle th = TypeHandle(this);
@@ -838,7 +796,7 @@ OBJECTREF ParamTypeDesc::GetManagedClassObject()
         EnsureWritablePages(this);
         if (FastInterlockCompareExchangePointer(&m_hExposedClassObject, hExposedClassObject, static_cast<LOADERHANDLE>(NULL)))
         {
-            pLoaderAllocator->ClearHandle(hExposedClassObject);
+            pLoaderAllocator->FreeHandle(hExposedClassObject);
         }
 
         if (OwnsTemplateMethodTable())
@@ -2261,10 +2219,7 @@ OBJECTREF TypeVarTypeDesc::GetManagedClassObject()
     if (m_hExposedClassObject == NULL) {
         REFLECTCLASSBASEREF  refClass = NULL;
         GCPROTECT_BEGIN(refClass);
-        if (GetAssembly()->IsIntrospectionOnly())
-            refClass = (REFLECTCLASSBASEREF) AllocateObject(MscorlibBinder::GetClass(CLASS__CLASS_INTROSPECTION_ONLY));
-        else
-            refClass = (REFLECTCLASSBASEREF) AllocateObject(g_pRuntimeTypeClass);
+        refClass = (REFLECTCLASSBASEREF) AllocateObject(g_pRuntimeTypeClass);
 
         LoaderAllocator *pLoaderAllocator = GetLoaderAllocator();
         TypeHandle th = TypeHandle(this);
@@ -2277,7 +2232,7 @@ OBJECTREF TypeVarTypeDesc::GetManagedClassObject()
 
         if (FastInterlockCompareExchangePointer(EnsureWritablePages(&m_hExposedClassObject), hExposedClassObject, static_cast<LOADERHANDLE>(NULL)))
         {
-            pLoaderAllocator->ClearHandle(hExposedClassObject);
+            pLoaderAllocator->FreeHandle(hExposedClassObject);
         }
 
         GCPROTECT_END();
@@ -2335,53 +2290,6 @@ FnPtrTypeDesc::IsExternallyVisible() const
     // All return/arguments types are externally visible
     return TRUE;
 } // FnPtrTypeDesc::IsExternallyVisible
-
-// Returns TRUE if any of return or argument types is part of an assembly loaded for introspection.
-BOOL 
-FnPtrTypeDesc::IsIntrospectionOnly() const
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-    }
-    CONTRACTL_END;
-    
-    const TypeHandle * rgRetAndArgTypes = GetRetAndArgTypes();
-    for (DWORD i = 0; i <= m_NumArgs; i++)
-    {
-        if (rgRetAndArgTypes[i].IsIntrospectionOnly())
-        {
-            return TRUE;
-        }
-    }
-    // None of the return/arguments type was loaded for introspection
-    return FALSE;
-} // FnPtrTypeDesc::IsIntrospectionOnly
-
-// Returns TRUE if any of return or argument types is part of an assembly loaded for introspection.
-// Instantiations of generic types are also recursively checked.
-BOOL 
-FnPtrTypeDesc::ContainsIntrospectionOnlyTypes() const
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-    }
-    CONTRACTL_END;
-    
-    const TypeHandle * rgRetAndArgTypes = GetRetAndArgTypes();
-    for (DWORD i = 0; i <= m_NumArgs; i++)
-    {
-        if (rgRetAndArgTypes[i].ContainsIntrospectionOnlyTypes())
-        {
-            return TRUE;
-        }
-    }
-    // None of the return/arguments type contains types loaded for introspection
-    return FALSE;
-} // FnPtrTypeDesc::ContainsIntrospectionOnlyTypes
 
 #endif //DACCESS_COMPILE
 

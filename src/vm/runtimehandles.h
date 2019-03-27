@@ -30,84 +30,82 @@ typedef enum ReflectionCallConv {
 
 // Types used to expose method bodies via reflection.
 
-class ExceptionHandlingClause;
-class MethodBody;
-class LocalVariableInfo;
+class RuntimeExceptionHandlingClause;
+class RuntimeMethodBody;
+class RuntimeLocalVariableInfo;
 
 #ifdef USE_CHECKED_OBJECTREFS
-typedef REF<ExceptionHandlingClause> EXCEPTIONHANDLINGCLAUSEREF;
-typedef REF<MethodBody> METHODBODYREF;
-typedef REF<LocalVariableInfo> LOCALVARIABLEINFOREF;
+typedef REF<RuntimeExceptionHandlingClause> RUNTIMEEXCEPTIONHANDLINGCLAUSEREF;
+typedef REF<RuntimeMethodBody> RUNTIMEMETHODBODYREF;
+typedef REF<RuntimeLocalVariableInfo> RUNTIMELOCALVARIABLEINFOREF;
 #else
-typedef DPTR(ExceptionHandlingClause) EXCEPTIONHANDLINGCLAUSEREF;
-typedef DPTR(MethodBody) METHODBODYREF;
-typedef DPTR(LocalVariableInfo) LOCALVARIABLEINFOREF;
+typedef DPTR(RuntimeExceptionHandlingClause) RUNTIMEEXCEPTIONHANDLINGCLAUSEREF;
+typedef DPTR(RuntimeMethodBody) RUNTIMEMETHODBODYREF;
+typedef DPTR(RuntimeLocalVariableInfo) RUNTIMELOCALVARIABLEINFOREF;
 #endif
 
-class ExceptionHandlingClause : Object 
+class RuntimeExceptionHandlingClause : Object 
 {
 private:
     // Disallow creation and copy construction of these.
-    ExceptionHandlingClause() { }
-    ExceptionHandlingClause(ExceptionHandlingClause &r) { }    
+    RuntimeExceptionHandlingClause() { }
+    RuntimeExceptionHandlingClause(RuntimeExceptionHandlingClause &r) { }    
 
 public:
-    METHODBODYREF m_methodBody;
-    CorExceptionFlag m_flags;
-    INT32 m_tryOffset;
-    INT32 m_tryLength;
-    INT32 m_handlerOffset;
-    INT32 m_handlerLength;
-    mdTypeDef m_catchToken;
-    INT32 m_filterOffset;
+    RUNTIMEMETHODBODYREF _methodBody;
+    CorExceptionFlag _flags;
+    INT32 _tryOffset;
+    INT32 _tryLength;
+    INT32 _handlerOffset;
+    INT32 _handlerLength;
+    mdTypeDef _catchToken;
+    INT32 _filterOffset;
 };
 
-class MethodBody : Object 
+class RuntimeMethodBody : Object 
 {     
 private:
     // Disallow creation and copy construction of these.
-    MethodBody() { }
-    MethodBody(MethodBody &r) { }    
+    RuntimeMethodBody() { }
+    RuntimeMethodBody(RuntimeMethodBody &r) { }    
 
 public:
-    U1ARRAYREF m_IL;
-    PTRARRAYREF m_exceptionClauses;
-    PTRARRAYREF m_localVariables;
-    OBJECTREF m_methodBase;
+    U1ARRAYREF _IL;
+    PTRARRAYREF _exceptionClauses;
+    PTRARRAYREF _localVariables;
+    OBJECTREF _methodBase;
 
-    INT32 m_localVarSigToken;
-    INT32 m_maxStackSize;
-    CLR_BOOL m_initLocals;    
+    INT32 _localVarSigToken;
+    INT32 _maxStackSize;
+    CLR_BOOL _initLocals;    
 };
 
-class LocalVariableInfo : Object
+class RuntimeLocalVariableInfo : Object
 {
 private:
     // Disallow creation and copy construction of these.
-    LocalVariableInfo() { }
-    LocalVariableInfo(LocalVariableInfo &r) { }    
+    RuntimeLocalVariableInfo() { }
+    RuntimeLocalVariableInfo(RuntimeLocalVariableInfo &r) { }    
 
 public:
 
     REFLECTCLASSBASEREF GetType()
     {
-        return (REFLECTCLASSBASEREF)m_type;
+        return (REFLECTCLASSBASEREF)_type;
     }
 
     void SetType(OBJECTREF type)
     {
-        SetObjectReference(&m_type, type, GetAppDomain());
+        SetObjectReference(&_type, type, GetAppDomain());
     }
 
-    OBJECTREF m_type;
-    INT32 m_bIsPinned;
-    INT32 m_localIndex;
+    OBJECTREF _type;
+    INT32 _localIndex;
+    CLR_BOOL _isPinned;
 };
 
 class MdUtf8String {
 public:
-    static FCDECL3(FC_BOOL_RET, EqualsCaseSensitive, LPCUTF8 szLhs, LPCUTF8 szRhs, INT32 stringNumBytes);
-
     static
     BOOL QCALLTYPE EqualsCaseInsensitive(LPCUTF8 szLhs, LPCUTF8 szRhs, INT32 stringNumBytes);
 
@@ -126,11 +124,12 @@ public:
 
     // Static method on RuntimeTypeHandle
     static FCDECL1(Object*, Allocate, ReflectClassBaseObject *refType) ; //A.CI work	
-    static FCDECL5(Object*, CreateInstance, ReflectClassBaseObject* refThisUNSAFE,
+    static FCDECL6(Object*, CreateInstance, ReflectClassBaseObject* refThisUNSAFE,
                                             CLR_BOOL publicOnly,
                                             CLR_BOOL wrapExceptions,
                                             CLR_BOOL *pbCanBeCached,
-                                            MethodDesc** pConstructor);
+                                            MethodDesc** pConstructor,
+                                            CLR_BOOL *pbHasNoDefaultCtor);
 
     static FCDECL2(Object*, CreateCaInstance, ReflectClassBaseObject* refCaType, ReflectMethodObject* pCtorUNSAFE);
 
@@ -153,6 +152,8 @@ public:
     static FCDECL1_V(ReflectClassBaseObject*, GetTypeFromHandle, FCALLRuntimeTypeHandle th);
     static FCDECL1_V(EnregisteredTypeHandle, GetValueInternal, FCALLRuntimeTypeHandle RTH);
 
+    static FCDECL2(FC_BOOL_RET, IsEquivalentTo, ReflectClassBaseObject *rtType1UNSAFE, ReflectClassBaseObject *rtType2UNSAFE);
+
     static FCDECL2(FC_BOOL_RET, TypeEQ, Object* left, Object* right);
     static FCDECL2(FC_BOOL_RET, TypeNEQ, Object* left, Object* right);
 
@@ -172,7 +173,7 @@ public:
     void QCALLTYPE GetTypeByNameUsingCARules(LPCWSTR pwzClassName, QCall::ModuleHandle pModule, QCall::ObjectHandleOnStack retType);
 
     static
-    void QCALLTYPE GetTypeByName(LPCWSTR pwzClassName, BOOL bThrowOnError, BOOL bIgnoreCase, BOOL bReflectionOnly,
+    void QCALLTYPE GetTypeByName(LPCWSTR pwzClassName, BOOL bThrowOnError, BOOL bIgnoreCase,
                                  QCall::StackCrawlMarkHandle pStackMark, 
                                  ICLRPrivBinder * pPrivHostBinder,
                                  BOOL bLoadTypeFromPartialNameHack, QCall::ObjectHandleOnStack retType,
@@ -312,6 +313,8 @@ public:
     static
     void * QCALLTYPE GetFunctionPointer(MethodDesc * pMethod);
 
+    static BOOL QCALLTYPE GetIsCollectible(MethodDesc * pMethod);
+
     static FCDECL1(INT32, GetAttributes, MethodDesc *pMethod);
     static FCDECL1(INT32, GetImplAttributes, ReflectMethodObject *pMethodUNSAFE);
     static FCDECL1(ReflectClassBaseObject*, GetDeclaringType, MethodDesc *pMethod);
@@ -358,7 +361,7 @@ public:
     static
     void QCALLTYPE GetCallerType(QCall::StackCrawlMarkHandle pStackMark, QCall::ObjectHandleOnStack retType);
 
-    static FCDECL2(MethodBody*, GetMethodBody, ReflectMethodObject *pMethodUNSAFE, PTR_ReflectClassBaseObject pDeclaringType);
+    static FCDECL2(RuntimeMethodBody*, GetMethodBody, ReflectMethodObject *pMethodUNSAFE, PTR_ReflectClassBaseObject pDeclaringType);
 
     static FCDECL1(FC_BOOL_RET, IsConstructor, MethodDesc *pMethod);
 

@@ -364,8 +364,6 @@ public:
         return *this == TypeHandle(g_pObjectClass);
     }
 
-    DWORD IsTransparentProxy() const;
-
     // Retrieve the key corresponding to this handle
     TypeKey GetTypeKey() const;
 
@@ -472,8 +470,6 @@ public:
 
     PTR_LoaderAllocator GetLoaderAllocator() const;
 
-    BOOL IsDomainNeutral() const;
-
     // Get the class token, assuming the type handle represents a named type,
     // i.e. a class, a value type, a generic instantiation etc.
     inline mdTypeDef GetCl() const;
@@ -542,12 +538,6 @@ public:
     void CheckRestore() const;
     BOOL IsExternallyVisible() const;
 
-    // Is this type part of an assembly loaded for introspection?
-    BOOL IsIntrospectionOnly() const;
-
-    // Checks this type and its components for "IsIntrospectionOnly"
-    BOOL ContainsIntrospectionOnlyTypes() const;
-
     // Does this type participate in type equivalence?
     inline BOOL HasTypeEquivalence() const;
 
@@ -573,14 +563,6 @@ public:
     }
 
     INDEBUGIMPL(BOOL Verify();)             // DEBUGGING Make certain this is a valid type handle 
-
-#if defined(_DEBUG)
-    BOOL IsAppDomainAgile() const;
-    BOOL IsCheckAppDomainAgile() const;
-
-    BOOL IsArrayOfElementsAppDomainAgile() const;
-    BOOL IsArrayOfElementsCheckAppDomainAgile() const;
-#endif
 
 #ifdef DACCESS_COMPILE
     void EnumMemoryRegions(CLRDataEnumMemoryFlags flags);
@@ -692,7 +674,6 @@ inline CHECK CheckPointer(TypeHandle th, IsNullOK ok = NULL_NOT_OK)
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
     STATIC_CONTRACT_FORBID_FAULT;
-    STATIC_CONTRACT_SO_TOLERANT;
     SUPPORTS_DAC;
     STATIC_CONTRACT_CANNOT_TAKE_LOCK;
 

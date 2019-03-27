@@ -45,8 +45,6 @@ typedef DPTR(struct CORCOMPILE_EE_INFO_TABLE)
     PTR_CORCOMPILE_EE_INFO_TABLE;
 typedef DPTR(struct CORCOMPILE_HEADER)
     PTR_CORCOMPILE_HEADER;
-typedef DPTR(struct CORCOMPILE_IMPORT_TABLE_ENTRY)
-    PTR_CORCOMPILE_IMPORT_TABLE_ENTRY;
 typedef DPTR(struct CORCOMPILE_COLD_METHOD_ENTRY)
     PTR_CORCOMPILE_COLD_METHOD_ENTRY;
 typedef DPTR(struct CORCOMPILE_EXCEPTION_LOOKUP_TABLE)
@@ -238,7 +236,7 @@ struct CORCOMPILE_HEADER
 
     IMAGE_DATA_DIRECTORY    HelperTable;    // Table of function pointers to JIT helpers indexed by helper number
     IMAGE_DATA_DIRECTORY    ImportSections; // points to array of code:CORCOMPILE_IMPORT_SECTION
-    IMAGE_DATA_DIRECTORY    ImportTable;    // points to table CORCOMPILE_IMPORT_TABLE_ENTRY
+    IMAGE_DATA_DIRECTORY    Dummy0;
     IMAGE_DATA_DIRECTORY    StubsData;      // contains the value to register with the stub manager for the delegate stubs & AMD64 tail call stubs
     IMAGE_DATA_DIRECTORY    VersionInfo;    // points to a code:CORCOMPILE_VERSION_INFO
     IMAGE_DATA_DIRECTORY    Dependencies;   // points to an array of code:CORCOMPILE_DEPENDENCY
@@ -449,12 +447,6 @@ public :
     {
         return ((sectionType & ColdRange) == ColdRange) && ((sectionType & IBCProfiledSection) == IBCProfiledSection); 
     }
-};
-
-struct CORCOMPILE_IMPORT_TABLE_ENTRY
-{
-    USHORT                  wAssemblyRid;
-    USHORT                  wModuleRid;
 };
 
 struct CORCOMPILE_EE_INFO_TABLE
@@ -1331,7 +1323,8 @@ class ICorCompilePreloader
     CORCOMPILE_SECTION(READONLY_HOT) \
     CORCOMPILE_SECTION(READONLY_WARM) \
     CORCOMPILE_SECTION(READONLY_COLD) \
-    CORCOMPILE_SECTION(READONLY_VCHUNKS_AND_DICTIONARY) \
+    CORCOMPILE_SECTION(READONLY_VCHUNKS) \
+    CORCOMPILE_SECTION(READONLY_DICTIONARY) \
     CORCOMPILE_SECTION(CLASS_COLD) \
     CORCOMPILE_SECTION(CROSS_DOMAIN_INFO) \
     CORCOMPILE_SECTION(METHOD_PRECODE_COLD) \
@@ -1635,11 +1628,10 @@ class ICorCompileInfo
         ) = 0;
 
     // Encode a module for the imports table
-    virtual void EncodeModuleAsIndexes(
+    virtual void EncodeModuleAsIndex(
             CORINFO_MODULE_HANDLE fromHandle,
             CORINFO_MODULE_HANDLE handle,
-            DWORD *pAssemblyIndex,
-            DWORD *pModuleIndex,
+            DWORD *pIndex,
             IMetaDataAssemblyEmit *pAssemblyEmit) = 0;
 
 
@@ -1719,7 +1711,8 @@ class ICorCompileInfo
     //
     virtual void GetCallRefMap(
             CORINFO_METHOD_HANDLE hMethod,
-            GCRefMapBuilder * pBuilder) = 0;
+            GCRefMapBuilder * pBuilder,
+            bool isDispatchCell) = 0;
 
     // Returns a compressed block of debug information
     //
@@ -1744,6 +1737,8 @@ class ICorCompileInfo
     virtual HRESULT GetBaseJitFlags(
             IN  CORINFO_METHOD_HANDLE   hMethod,
             OUT CORJIT_FLAGS           *pFlags) = 0;
+
+    virtual ICorJitHost* GetJitHost() = 0;
 
     // needed for stubs to obtain the number of bytes to copy into the native image
     // return the beginning of the stub and the size to copy (in bytes)
@@ -1817,6 +1812,7 @@ extern bool g_fNGenWinMDResilient;
 
 #ifdef FEATURE_READYTORUN_COMPILER
 extern bool g_fReadyToRunCompilation;
+extern bool g_fLargeVersionBubble;
 #endif
 
 inline bool IsReadyToRunCompilation()
@@ -1827,5 +1823,12 @@ inline bool IsReadyToRunCompilation()
     return false;
 #endif
 }
+
+#ifdef FEATURE_READYTORUN_COMPILER
+inline bool IsLargeVersionBubbleEnabled()
+{
+    return g_fLargeVersionBubble;
+}
+#endif
 
 #endif /* COR_COMPILE_H_ */

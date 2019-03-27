@@ -472,6 +472,10 @@ BOOL OleVariant::IsValidArrayForSafeArrayElementType(BASEARRAYREF *pArrayRef, VA
         case VT_CY:
             return vtActual == VT_DECIMAL;
 
+        case VT_LPSTR:
+        case VT_LPWSTR:
+            return vtActual == VT_BSTR;
+
         default:
             return FALSE;
     }
@@ -1108,12 +1112,9 @@ void VariantData::NewVariant(VariantData * const& dest, const CVTypes type, INT6
 
 void SafeVariantClearHelper(_Inout_ VARIANT* pVar)
 {
-    STATIC_CONTRACT_SO_INTOLERANT;
     WRAPPER_NO_CONTRACT;
 
-    BEGIN_SO_TOLERANT_CODE(GetThread());
     VariantClear(pVar);
-    END_SO_TOLERANT_CODE;
 }
 
 class OutOfMemoryException;
@@ -1146,6 +1147,7 @@ void SafeVariantClear(VARIANT* pVar)
 
             SCAN_EHMARKER_END_TRY();
         }
+#pragma warning(suppress: 4101)
         PAL_CPP_CATCH_DERIVED(OutOfMemoryException, obj)
         {
             SCAN_EHMARKER_CATCH();
@@ -2542,7 +2544,10 @@ void OleVariant::MarshalRecordVariantOleToCom(VARIANT *pOleVariant,
             // Go to the registry to find the value class associated
             // with the record's guid.
             GUID guid;
-            IfFailThrow(pRecInfo->GetGuid(&guid));
+            {
+                GCX_PREEMP();
+                IfFailThrow(pRecInfo->GetGuid(&guid));
+            }
             MethodTable *pValueClass = GetValueTypeForGUID(guid);
             if (!pValueClass)
                 COMPlusThrow(kArgumentException, IDS_EE_CANNOT_MAP_TO_MANAGED_VC);
@@ -3769,11 +3774,7 @@ void OleVariant::MarshalCurrencyVariantOleToCom(VARIANT *pOleVariant,
     DECIMAL DecVal;
 
     // Convert the currency to a decimal.
-    HRESULT hr = VarDecFromCy(V_CY(pOleVariant), &DecVal);
-    IfFailThrow(hr);
-
-    if (FAILED(DecimalCanonicalize(&DecVal)))
-        COMPlusThrow(kOverflowException, W("Overflow_Currency"));
+    VarDecFromCyCanonicalize(V_CY(pOleVariant), &DecVal);
 
     // Store the value into the unboxes decimal and store the decimal in the variant.
     *(DECIMAL *) pDecimalRef->UnBox() = DecVal;   
@@ -3821,11 +3822,7 @@ void OleVariant::MarshalCurrencyVariantOleRefToCom(VARIANT *pOleVariant,
     DECIMAL DecVal;
 
     // Convert the currency to a decimal.
-    HRESULT hr = VarDecFromCy(*V_CYREF(pOleVariant), &DecVal);
-    IfFailThrow(hr);
-
-    if (FAILED(DecimalCanonicalize(&DecVal)))
-        COMPlusThrow(kOverflowException, W("Overflow_Currency"));
+    VarDecFromCyCanonicalize(*V_CYREF(pOleVariant), &DecVal);
 
     // Store the value into the unboxes decimal and store the decimal in the variant.
     *(DECIMAL *) pDecimalRef->UnBox() = DecVal;   
@@ -3855,11 +3852,7 @@ void OleVariant::MarshalCurrencyArrayOleToCom(void *oleArray, BASEARRAYREF *pCom
 
     while (pOle < pOleEnd)
     {
-        IfFailThrow(VarDecFromCy(*pOle++, pCom));
-        if (FAILED(DecimalCanonicalize(pCom)))
-            COMPlusThrow(kOverflowException, W("Overflow_Currency"));
-
-        pCom++;
+        VarDecFromCyCanonicalize(*pOle++, pCom++);
     }
 }
 
@@ -4267,87 +4260,89 @@ SAFEARRAY *OleVariant::CreateSafeArrayDescriptorForArrayRef(BASEARRAYREF *pArray
     ULONG nRank = (*pArrayRef)->GetRank();
 
     SafeArrayPtrHolder pSafeArray = NULL;
-    SafeComHolder<ITypeInfo> pITI = NULL;
-    SafeComHolder<IRecordInfo> pRecInfo = NULL;   
 
-        IfFailThrow(SafeArrayAllocDescriptorEx(vt, nRank, &pSafeArray));
+    IfFailThrow(SafeArrayAllocDescriptorEx(vt, nRank, &pSafeArray));
 
-        switch (vt)
+    switch (vt)
+    {
+        case VT_VARIANT:
         {
-            case VT_VARIANT:
-            {
-                // OleAut32.dll only sets FADF_HASVARTYPE, but VB says we also need to set
-                // the FADF_VARIANT bit for this safearray to destruct properly.  OleAut32
-                // doesn't want to change their code unless there's a strong reason, since
-                // it's all "black magic" anyway.
-                pSafeArray->fFeatures |= FADF_VARIANT;
-                break;
-            }
-
-            case VT_BSTR:
-            {
-                pSafeArray->fFeatures |= FADF_BSTR;
-                break;
-            }
-
-            case VT_UNKNOWN:
-            {
-                pSafeArray->fFeatures |= FADF_UNKNOWN;
-                break;
-            }
-
-            case VT_DISPATCH:
-            {
-                pSafeArray->fFeatures |= FADF_DISPATCH;
-                break;
-            }
-
-            case VT_RECORD:
-            {           
-                pSafeArray->fFeatures |= FADF_RECORD;
-                break;
-            }
+            // OleAut32.dll only sets FADF_HASVARTYPE, but VB says we also need to set
+            // the FADF_VARIANT bit for this safearray to destruct properly.  OleAut32
+            // doesn't want to change their code unless there's a strong reason, since
+            // it's all "black magic" anyway.
+            pSafeArray->fFeatures |= FADF_VARIANT;
+            break;
         }
 
-        //
-        // Fill in bounds
-        //
-
-        SAFEARRAYBOUND *bounds = pSafeArray->rgsabound;
-        SAFEARRAYBOUND *boundsEnd = bounds + nRank;
-        SIZE_T cElements;
-
-        if (!(*pArrayRef)->IsMultiDimArray()) 
+        case VT_BSTR:
         {
-            bounds[0].cElements = nElem;
-            bounds[0].lLbound = 0;
-            cElements = nElem;
-        } 
-        else 
-        {
-            const INT32 *count = (*pArrayRef)->GetBoundsPtr()      + nRank - 1;
-            const INT32 *lower = (*pArrayRef)->GetLowerBoundsPtr() + nRank - 1;
-
-            cElements = 1;
-            while (bounds < boundsEnd)
-            {
-                bounds->lLbound = *lower--;
-                bounds->cElements = *count--;
-                cElements *= bounds->cElements;
-                bounds++;
-            }
+            pSafeArray->fFeatures |= FADF_BSTR;
+            break;
         }
 
-        pSafeArray->cbElements = (unsigned)GetElementSizeForVarType(vt, pInterfaceMT);
-
-        // If the SAFEARRAY contains VT_RECORD's, then we need to set the 
-        // IRecordInfo.
-        if (vt == VT_RECORD)
+        case VT_UNKNOWN:
         {
-            IfFailThrow(GetITypeInfoForEEClass(pInterfaceMT, &pITI));
-            IfFailThrow(GetRecordInfoFromTypeInfo(pITI, &pRecInfo));
-            IfFailThrow(SafeArraySetRecordInfo(pSafeArray, pRecInfo));
+            pSafeArray->fFeatures |= FADF_UNKNOWN;
+            break;
         }
+
+        case VT_DISPATCH:
+        {
+            pSafeArray->fFeatures |= FADF_DISPATCH;
+            break;
+        }
+
+        case VT_RECORD:
+        {           
+            pSafeArray->fFeatures |= FADF_RECORD;
+            break;
+        }
+    }
+
+    //
+    // Fill in bounds
+    //
+
+    SAFEARRAYBOUND *bounds = pSafeArray->rgsabound;
+    SAFEARRAYBOUND *boundsEnd = bounds + nRank;
+    SIZE_T cElements;
+
+    if (!(*pArrayRef)->IsMultiDimArray()) 
+    {
+        bounds[0].cElements = nElem;
+        bounds[0].lLbound = 0;
+        cElements = nElem;
+    } 
+    else 
+    {
+        const INT32 *count = (*pArrayRef)->GetBoundsPtr()      + nRank - 1;
+        const INT32 *lower = (*pArrayRef)->GetLowerBoundsPtr() + nRank - 1;
+
+        cElements = 1;
+        while (bounds < boundsEnd)
+        {
+            bounds->lLbound = *lower--;
+            bounds->cElements = *count--;
+            cElements *= bounds->cElements;
+            bounds++;
+        }
+    }
+
+    pSafeArray->cbElements = (unsigned)GetElementSizeForVarType(vt, pInterfaceMT);
+
+    // If the SAFEARRAY contains VT_RECORD's, then we need to set the 
+    // IRecordInfo.
+    if (vt == VT_RECORD)
+    {
+        GCX_PREEMP();
+
+        SafeComHolder<ITypeInfo> pITI;
+        SafeComHolder<IRecordInfo> pRecInfo;
+        IfFailThrow(GetITypeInfoForEEClass(pInterfaceMT, &pITI));
+        IfFailThrow(GetRecordInfoFromTypeInfo(pITI, &pRecInfo));
+        IfFailThrow(SafeArraySetRecordInfo(pSafeArray, pRecInfo));
+    }
 
     pSafeArray.SuppressRelease();
     RETURN pSafeArray;
@@ -4677,11 +4672,11 @@ void OleVariant::ConvertValueClassToVariant(OBJECTREF *pBoxedValueClass, VARIANT
     V_RECORDINFO(pRecHolder) = NULL;
     V_RECORD(pRecHolder) = NULL;
 
-        // Retrieve the ITypeInfo for the value class.
-        MethodTable *pValueClassMT = (*pBoxedValueClass)->GetMethodTable();   
-        IfFailThrow(GetITypeInfoForEEClass(pValueClassMT, &pTypeInfo, TRUE, TRUE, 0));
+    // Retrieve the ITypeInfo for the value class.
+    MethodTable *pValueClassMT = (*pBoxedValueClass)->GetMethodTable();
+    IfFailThrow(GetITypeInfoForEEClass(pValueClassMT, &pTypeInfo, true /* bClassInfo */));
 
-        // Convert the ITypeInfo to an IRecordInfo.
+    // Convert the ITypeInfo to an IRecordInfo.
     hr = GetRecordInfoFromTypeInfo(pTypeInfo, &V_RECORDINFO(pRecHolder));
     if (FAILED(hr))
     {
@@ -5038,14 +5033,18 @@ TypeHandle OleVariant::GetElementTypeForRecordSafeArray(SAFEARRAY* pSafeArray)
     CONTRACTL_END;
 
     HRESULT hr = S_OK;
-    SafeComHolder<IRecordInfo> pRecInfo = NULL;
 
-        GUID guid;
+    GUID guid;
+    {
+        GCX_PREEMP();
+
+        SafeComHolder<IRecordInfo> pRecInfo;
         IfFailThrow(SafeArrayGetRecordInfo(pSafeArray, &pRecInfo));
         IfFailThrow(pRecInfo->GetGuid(&guid));
-        MethodTable *pValueClass = GetValueTypeForGUID(guid);
-        if (!pValueClass)
-            COMPlusThrow(kArgumentException, IDS_EE_CANNOT_MAP_TO_MANAGED_VC);
+    }
+    MethodTable *pValueClass = GetValueTypeForGUID(guid);
+    if (!pValueClass)
+        COMPlusThrow(kArgumentException, IDS_EE_CANNOT_MAP_TO_MANAGED_VC);
 
     return TypeHandle(pValueClass);
 }

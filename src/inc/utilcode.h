@@ -42,10 +42,6 @@
 
 #include "clrnt.h"
 
-// Values for the names of Watson
-const WCHAR kWatsonName1[] = W("drwatson");
-const WCHAR kWatsonName2[] = W("drwtsn32");
-
 #include "random.h"
 
 #define WINDOWS_KERNEL32_DLLNAME_A "kernel32"
@@ -137,17 +133,6 @@ typedef LPSTR   LPUTF8;
 
 #include "stdmacros.h"
 
-/*
-// This is for WinCE
-#ifdef VERIFY
-#undef VERIFY
-#endif
-
-#ifdef _ASSERTE
-#undef _ASSERTE
-#endif
-*/
-
 //********** Macros. **********************************************************
 #ifndef FORCEINLINE
  #if _MSC_VER < 1200
@@ -159,18 +144,9 @@ typedef LPSTR   LPUTF8;
 
 #ifndef DEBUG_NOINLINE
 #if defined(_DEBUG)
-#define DEBUG_NOINLINE __declspec(noinline)
+#define DEBUG_NOINLINE NOINLINE
 #else
 #define DEBUG_NOINLINE
-#endif
-#endif
-
-#ifndef DBG_NOINLINE_X86__RET_INLINE
-#if defined(_DEBUG) && defined(_TARGET_X86_)
-// this exists to make scan work on x86. 
-#define DBG_NOINLINE_X86__RET_INLINE __declspec(noinline)
-#else
-#define DBG_NOINLINE_X86__RET_INLINE FORCEINLINE
 #endif
 #endif
 
@@ -519,6 +495,14 @@ inline void *__cdecl operator new(size_t, void *_P)
 #else
 #define IN_WIN64(x)
 #define IN_WIN32(x)     x
+#endif
+
+#ifdef _TARGET_64BIT_
+#define IN_TARGET_64BIT(x)     x
+#define IN_TARGET_32BIT(x)
+#else
+#define IN_TARGET_64BIT(x)
+#define IN_TARGET_32BIT(x)     x
 #endif
 
 void * __cdecl
@@ -1049,55 +1033,36 @@ inline int CountBits(int iNum)
 
 #include "bitposition.h"
 
-// Used to remove trailing zeros from Decimal types.
-// NOTE: Assumes hi32 bits are empty (used for conversions from Cy->Dec)
-inline HRESULT DecimalCanonicalize(DECIMAL* dec)
+// Convert the currency to a decimal and canonicalize.
+inline void VarDecFromCyCanonicalize(CY cyIn, DECIMAL* dec)
 {
     WRAPPER_NO_CONTRACT;
 
-    // Clear the VARENUM field
-    (*(USHORT*)dec) = 0;
-
-    // Remove trailing zeros:
-    DECIMAL temp;
-    DECIMAL templast;
-    temp = templast = *dec;
-
-    // Ensure the hi 32 bits are empty (should be if we came from a currency)
-    if ((DECIMAL_HI32(temp) != 0) || (DECIMAL_SCALE(temp) > 4))
-        return DISP_E_OVERFLOW;
-
-    // Return immediately if dec represents a zero.
-    if (DECIMAL_LO32(temp) == 0 && DECIMAL_MID32(temp) == 0)
-        return S_OK;
-
-    // Compare to the original to see if we've
-    // lost non-zero digits (and make sure we don't overflow the scale BYTE)
-
-#ifdef _PREFAST_
-#pragma warning(push)
-#pragma warning(disable:6219) // "Suppress PREFast warning about Implicit cast between semantically different integer types" 
-#endif
-    while ((DECIMAL_SCALE(temp) <= 4) && (VARCMP_EQ == VarDecCmp(dec, &temp)))
+    (*(ULONG*)dec) = 0;
+    DECIMAL_HI32(*dec) = 0;
+    if (cyIn.int64 == 0) // For compatibility, a currency of 0 emits the Decimal "0.0000" (scale set to 4).
     {
-
-#ifdef _PREFAST_
-#pragma warning(pop)
-#endif
-        templast = temp;
-
-        // Remove the last digit and normalize.  Ignore temp.Hi32
-        // as Currency values will have a max of 64 bits of data.
-        DECIMAL_SCALE(temp)--;
-        UINT64 temp64 = (((UINT64) DECIMAL_MID32(temp)) << 32) + DECIMAL_LO32(temp);
-        temp64 /= 10;
-
-        DECIMAL_MID32(temp) = (ULONG)(temp64 >> 32);
-        DECIMAL_LO32(temp) = (ULONG)temp64;
+        DECIMAL_SCALE(*dec) = 4;
+        DECIMAL_LO32(*dec) = 0;
+        DECIMAL_MID32(*dec) = 0;
+        return;
     }
-    *dec = templast;
 
-    return S_OK;
+    if (cyIn.int64 < 0) {
+        DECIMAL_SIGN(*dec) = DECIMAL_NEG;
+        cyIn.int64 = -cyIn.int64;
+    }
+
+    BYTE scale = 4;
+    ULONGLONG absoluteCy = (ULONGLONG)cyIn.int64;
+    while (scale != 0 && ((absoluteCy % 10) == 0))
+    {
+        scale--;
+        absoluteCy /= 10;
+    }
+    DECIMAL_SCALE(*dec) = scale;
+    DECIMAL_LO32(*dec) = (ULONG)absoluteCy;
+    DECIMAL_MID32(*dec) = (ULONG)(absoluteCy >> 32);
 }
 
 //*****************************************************************************
@@ -1381,31 +1346,10 @@ public:
     static void InitNumaNodeInfo();
 
 #if !defined(FEATURE_REDHAWK)
-private:	// apis types
-
-    //GetNumaHighestNodeNumber()
-    typedef BOOL
-    (WINAPI *PGNHNN)(PULONG);
-    //VirtualAllocExNuma()
-    typedef LPVOID
-    (WINAPI *PVAExN)(HANDLE,LPVOID,SIZE_T,DWORD,DWORD,DWORD);
-
-    // api pfns and members
-    static PGNHNN   m_pGetNumaHighestNodeNumber;
-    static PVAExN   m_pVirtualAllocExNuma;
-
 public: 	// functions
 
     static LPVOID VirtualAllocExNuma(HANDLE hProc, LPVOID lpAddr, SIZE_T size,
                                      DWORD allocType, DWORD prot, DWORD node);
-
-private:
-    //GetNumaProcessorNodeEx()
-    typedef BOOL
-    (WINAPI *PGNPNEx)(PPROCESSOR_NUMBER, PUSHORT);
-    static PGNPNEx  m_pGetNumaProcessorNodeEx;
-
-public:
     static BOOL GetNumaProcessorNodeEx(PPROCESSOR_NUMBER proc_no, PUSHORT node_no);
 #endif
 };
@@ -1431,8 +1375,8 @@ private:
     static BOOL m_threadUseAllCpuGroups;
     static WORD m_initialGroup;
     static CPU_Group_Info *m_CPUGroupInfoArray;
+    static bool s_hadSingleProcessorAtStartup;
 
-    static BOOL InitCPUGroupInfoAPI();
     static BOOL InitCPUGroupInfoArray();
     static BOOL InitCPUGroupInfoRange();
     static void InitCPUGroupInfo();
@@ -1449,34 +1393,8 @@ public:
     //static void PopulateCPUUsageArray(void * infoBuffer, ULONG infoSize);
 
 #if !defined(FEATURE_REDHAWK)
-private:
-    //GetLogicalProcessorInforomationEx()
-    typedef BOOL
-    (WINAPI *PGLPIEx)(DWORD, SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *, PDWORD);
-    //SetThreadGroupAffinity()
-    typedef BOOL
-    (WINAPI *PSTGA)(HANDLE, GROUP_AFFINITY *, GROUP_AFFINITY *);
-    //GetThreadGroupAffinity()
-    typedef BOOL
-    (WINAPI *PGTGA)(HANDLE, GROUP_AFFINITY *);
-    //GetCurrentProcessorNumberEx()
-    typedef void
-    (WINAPI *PGCPNEx)(PROCESSOR_NUMBER *);
-    //GetSystemTimes()
-    typedef BOOL
-    (WINAPI *PGST)(FILETIME *, FILETIME *, FILETIME *);
-    //NtQuerySystemInformationEx()
-    //typedef int
-    //(WINAPI *PNTQSIEx)(SYSTEM_INFORMATION_CLASS, PULONG, ULONG, PVOID, ULONG, PULONG);
-    static PGLPIEx m_pGetLogicalProcessorInformationEx;
-    static PSTGA   m_pSetThreadGroupAffinity;
-    static PGTGA   m_pGetThreadGroupAffinity;
-    static PGCPNEx m_pGetCurrentProcessorNumberEx;
-    static PGST    m_pGetSystemTimes;
-    //static PNTQSIEx m_pNtQuerySystemInformationEx;
-
 public:
-    static BOOL GetLogicalProcessorInformationEx(DWORD relationship,
+    static BOOL GetLogicalProcessorInformationEx(LOGICAL_PROCESSOR_RELATIONSHIP relationship,
 		   SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *slpiex, PDWORD count); 
     static BOOL SetThreadGroupAffinity(HANDLE h,
 		    GROUP_AFFINITY *groupAffinity, GROUP_AFFINITY *previousGroupAffinity);
@@ -1485,6 +1403,13 @@ public:
     static void ChooseCPUGroupAffinity(GROUP_AFFINITY *gf);
     static void ClearCPUGroupAffinity(GROUP_AFFINITY *gf);
 #endif
+
+public:
+    static bool HadSingleProcessorAtStartup()
+    {
+        LIMITED_METHOD_CONTRACT;
+        return s_hadSingleProcessorAtStartup;
+    }
 };
 
 int GetCurrentProcessCpuCount();
@@ -4208,12 +4133,6 @@ inline HRESULT FakeCoCreateInstance(REFCLSID   rclsid,
     return FakeCoCreateInstanceEx(rclsid, NULL, riid, ppv, NULL);
 };
 
-HRESULT FakeCoCallDllGetClassObject(REFCLSID       rclsid,
-                               LPCWSTR        wszDllPath,
-                               REFIID riid,
-                               void **        ppv,
-                               HMODULE *      phmodDll);
-
 //*****************************************************************************
 // Gets the directory based on the location of the module. This routine
 // is called at COR setup time. Set is called during EEStartup and by the
@@ -4239,7 +4158,6 @@ HRESULT validateTokenSig(
 // metadata contained in the image.
 //*****************************************************************************
 HRESULT GetImageRuntimeVersionString(PVOID pMetaData, LPCSTR* pString);
-void  AdjustImageRuntimeVersion (SString* pVersion);
 
 //*****************************************************************************
 // The registry keys and values that contain the information regarding
@@ -4276,7 +4194,7 @@ void TrimWhiteSpace(__inout_ecount(*pcch)  LPCWSTR *pwsz, __inout LPDWORD pcch);
 HRESULT Utf2Quick(
     LPCUTF8     pStr,                   // The string to convert.
     CQuickArray<WCHAR> &rStr,           // The QuickArray<WCHAR> to convert it into.
-    int         iCurLen);               // Inital characters in the array to leave (default 0).
+    int         iCurLen = 0);           // Initial characters in the array to leave (default 0).
 
 //*****************************************************************************
 //  Extract the movl 64-bit unsigned immediate from an IA64 bundle
@@ -4629,15 +4547,6 @@ inline BOOL IsFinalizerThread ()
     return !!(((size_t)ClrFlsGetValue (TlsIdx_ThreadType)) & ThreadType_Finalizer);
 }
 
-inline BOOL IsADUnloadHelperThread ()
-{
-    STATIC_CONTRACT_NOTHROW;
-    STATIC_CONTRACT_GC_NOTRIGGER;
-    STATIC_CONTRACT_MODE_ANY;
-
-    return !!(((size_t)ClrFlsGetValue (TlsIdx_ThreadType)) & ThreadType_ADUnloadHelper);
-}
-
 inline BOOL IsShutdownHelperThread ()
 {
     STATIC_CONTRACT_NOTHROW;
@@ -4662,7 +4571,6 @@ inline void ClrFlsSetThreadType (TlsThreadTypeFlag flag)
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
     STATIC_CONTRACT_MODE_ANY;
-    STATIC_CONTRACT_SO_TOLERANT;
 
     ClrFlsSetValue (TlsIdx_ThreadType, (LPVOID)(((size_t)ClrFlsGetValue (TlsIdx_ThreadType)) |flag));
 }
@@ -4709,7 +4617,6 @@ inline BOOL IsGCThread ()
     STATIC_CONTRACT_GC_NOTRIGGER;
     STATIC_CONTRACT_MODE_ANY;
     STATIC_CONTRACT_SUPPORTS_DAC;
-    STATIC_CONTRACT_SO_TOLERANT;
 
 #if !defined(DACCESS_COMPILE)
     return IsGCSpecialThread () || IsSuspendEEThread ();
@@ -5007,85 +4914,6 @@ FORCEINLINE void HolderSysFreeString(BSTR str) { CONTRACT_VIOLATION(ThrowsViolat
 
 typedef Wrapper<BSTR, DoNothing, HolderSysFreeString> BSTRHolder;
 
-BOOL FileExists(LPCWSTR filename);
-
-
-// a class for general x.x version info
-class MajorMinorVersionInfo
-{
-protected:
-    WORD version[2];
-    BOOL bInitialized;
-public:
-    //cctors
-    MajorMinorVersionInfo() 
-    {
-        LIMITED_METHOD_CONTRACT;
-        bInitialized = FALSE;
-        ZeroMemory(version,sizeof(version));
-    };
-
-    MajorMinorVersionInfo(WORD wMajor, WORD wMinor) 
-    {
-        WRAPPER_NO_CONTRACT;
-        Init(wMajor,wMinor);
-    };
-
-    // getters
-    BOOL IsInitialized() const 
-    {
-        LIMITED_METHOD_CONTRACT;
-        return bInitialized;
-    };
-
-    WORD Major() const 
-    {
-        LIMITED_METHOD_CONTRACT;
-        return version[0];
-    };
-
-    WORD Minor() const 
-    {
-        LIMITED_METHOD_CONTRACT;
-        return version[1];
-    };
-
-    // setters
-    void Init(WORD wMajor, WORD wMinor) 
-    {
-        LIMITED_METHOD_CONTRACT;
-        version[0]=wMajor;
-        version[1]=wMinor;
-        bInitialized=TRUE;
-    };
-};
-
-// CLR runtime version info in Major/Minor form
-class RUNTIMEVERSIONINFO : public MajorMinorVersionInfo 
-{
-    static RUNTIMEVERSIONINFO notDefined;
-public:
-    // cctors
-    RUNTIMEVERSIONINFO() {};
-
-    RUNTIMEVERSIONINFO(WORD wMajor, WORD wMinor) : 
-      MajorMinorVersionInfo(wMajor,wMinor){};  
-
-    // CLR version specific helpers
-    BOOL IsPreWhidbey() const
-    {
-        WRAPPER_NO_CONTRACT;
-        return (Major() == 1) && (Minor() <= 1); 
-    }
-
-    static const RUNTIMEVERSIONINFO& NotApplicable()
-    {
-        LIMITED_METHOD_CONTRACT;
-        return notDefined;
-    }
-};
-
-
 // HMODULE_TGT represents a handle to a module in the target process.  In non-DAC builds this is identical
 // to HMODULE (HINSTANCE), which is the base address of the module.  In DAC builds this must be a target address,
 // and so is represented by TADDR. 
@@ -5156,9 +4984,6 @@ void OnUninitializedCoreClrCallbacks();
 BOOL IsProcessCorruptedStateException(DWORD dwExceptionCode, BOOL fCheckForSO = TRUE);
 
 #endif // FEATURE_CORRUPTING_EXCEPTIONS
-
-
-BOOL IsV2RuntimeLoaded(void);
 
 namespace UtilCode
 {
@@ -5355,9 +5180,6 @@ HMODULE LoadLocalizedResourceDLLForSDK(_In_z_ LPCWSTR wzResourceDllName, _In_opt
 typedef void* (__cdecl *LocalizedFileHandler)(LPCWSTR);
 void* FindLocalizedFile(_In_z_ LPCWSTR wzResourceDllName, LocalizedFileHandler lfh, _In_opt_z_ LPCWSTR modulePath=NULL);
 
-BOOL IsClrHostedLegacyComObject(REFCLSID rclsid);
-
-
 
 
 // Helper to support termination due to heap corruption
@@ -5384,12 +5206,7 @@ namespace Reg
 #ifdef FEATURE_COMINTEROP
 namespace Com
 {
-    HRESULT FindServerUsingCLSID(REFCLSID rclsid, SString & ssServerName);
-    HRESULT FindServerUsingCLSID(REFCLSID rclsid, __deref_out __deref_out_z LPWSTR* pwszServerName);
     HRESULT FindInprocServer32UsingCLSID(REFCLSID rclsid, SString & ssInprocServer32Name);
-    HRESULT FindInprocServer32UsingCLSID(REFCLSID rclsid, __deref_out __deref_out_z LPWSTR* pwszInprocServer32Name);
-    BOOL IsMscoreeInprocServer32(const SString & ssInprocServer32Name);
-    BOOL CLSIDHasMscoreeAsInprocServer32(REFCLSID rclsid);
 }
 #endif // FEATURE_COMINTEROP
 

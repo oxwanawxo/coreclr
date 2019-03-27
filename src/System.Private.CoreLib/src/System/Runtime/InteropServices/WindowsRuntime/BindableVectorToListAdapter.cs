@@ -58,7 +58,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             _this.Append(value);
 
             uint size = _this.Size;
-            if (((uint)Int32.MaxValue) < size)
+            if (((uint)int.MaxValue) < size)
             {
                 throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingListTooLarge);
             }
@@ -105,7 +105,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (!exists)
                 return -1;
 
-            if (((uint)Int32.MaxValue) < index)
+            if (((uint)int.MaxValue) < index)
             {
                 throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingListTooLarge);
             }
@@ -133,7 +133,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
             if (exists)
             {
-                if (((uint)Int32.MaxValue) < index)
+                if (((uint)int.MaxValue) < index)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingListTooLarge);
                 }
@@ -165,7 +165,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     throw new ArgumentOutOfRangeException(nameof(index));
 
                 throw;
@@ -183,7 +183,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     throw new ArgumentOutOfRangeException(nameof(index));
 
                 throw;
@@ -201,7 +201,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     throw new ArgumentOutOfRangeException(nameof(index));
 
                 throw;
@@ -219,7 +219,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             }
             catch (Exception ex)
             {
-                if (HResults.E_BOUNDS == ex._HResult)
+                if (HResults.E_BOUNDS == ex.HResult)
                     throw new ArgumentOutOfRangeException(nameof(index));
 
                 throw;

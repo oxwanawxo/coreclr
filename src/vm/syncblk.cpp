@@ -22,7 +22,6 @@
 #include "syncblk.h"
 #include "interoputil.h"
 #include "encee.h"
-#include "perfcounters.h"
 #include "eventtrace.h"
 #include "dllimportcallback.h"
 #include "comcallablewrapper.h"
@@ -56,18 +55,6 @@ SPTR_IMPL (SyncBlockCache, SyncBlockCache, s_pSyncBlockCache);
 #ifndef DACCESS_COMPILE
 
 
-
-void SyncBlock::OnADUnload()
-{
-    WRAPPER_NO_CONTRACT;
-#ifdef EnC_SUPPORTED
-    if (m_pEnCInfo)
-    {
-        m_pEnCInfo->Cleanup();
-        m_pEnCInfo = NULL;
-    }
-#endif
-}
 
 #ifndef FEATURE_PAL
 // static
@@ -135,11 +122,9 @@ void InteropSyncBlockInfo::FreeUMEntryThunkOrInterceptStub()
         {
 #if defined(_TARGET_X86_)
             Stub *pInterceptStub = GetInterceptStub();
-
             if (pInterceptStub != NULL)
             {
-                // There may be multiple chained stubs, i.e. host hook stub calling MDA stack
-                // imbalance stub, and the following DecRef will free all of them.
+                // There may be multiple chained stubs
                 pInterceptStub->DecRef();
             }
 #else // _TARGET_X86_
@@ -231,12 +216,6 @@ void InteropSyncBlockInfo::SetRawRCW(RCW* pRCW)
 }
 #endif // FEATURE_COMINTEROP
 
-void UMEntryThunk::OnADUnload()
-{
-    LIMITED_METHOD_CONTRACT;
-    m_pObjectHandle = NULL;
-}
-
 #endif // !DACCESS_COMPILE
 
 PTR_SyncTableEntry SyncTableEntry::GetSyncTableEntry()
@@ -311,7 +290,6 @@ inline WaitEventLink *ThreadQueue::DequeueThread(SyncBlock *psb)
 #endif
         ret = WaitEventLinkForLink(pLink);
         _ASSERTE(ret->m_WaitSB == psb);
-        COUNTER_ONLY(GetPerfCounters().m_LocksAndThreads.cQueueLength--);
     }
     return ret;
 }
@@ -335,8 +313,6 @@ inline void ThreadQueue::EnqueueThread(WaitEventLink *pWaitEventLink, SyncBlock 
     // Be careful, the debugger inspects the queue from out of process and just looks at the memory...
     // it must be valid even if the lock is held. Be careful if you change the way the queue is updated.
     SyncBlockCache::LockHolder lh(SyncBlockCache::GetSyncBlockCache());
-
-    COUNTER_ONLY(GetPerfCounters().m_LocksAndThreads.cQueueLength++);
 
     SLink       *pPrior = &psb->m_Link;
 
@@ -384,7 +360,6 @@ BOOL ThreadQueue::RemoveThread (Thread *pThread, SyncBlock *psb)
             pLink->m_pNext = (SLink *)POISONC;
 #endif
             _ASSERTE(pWaitEventLink->m_WaitSB == psb);
-            COUNTER_ONLY(GetPerfCounters().m_LocksAndThreads.cQueueLength--);
             res = TRUE;
             break;
         }
@@ -736,12 +711,6 @@ VOID SyncBlockCache::CleanupSyncBlocksInAppDomain(AppDomain *pDomain)
 
             UMEntryThunk* umThunk=(UMEntryThunk*)pInteropInfo->GetUMEntryThunk();
                 
-            if (umThunk && umThunk->GetDomainId()==id)
-            {
-                umThunk->OnADUnload();
-                STRESS_LOG1(LF_APPDOMAIN, LL_INFO100, "Thunk %x unloaded", umThunk);
-            }       
-
 #ifdef FEATURE_COMINTEROP
             {
                 // we need to take RCWCache lock to avoid the race with another thread which is 
@@ -764,13 +733,6 @@ VOID SyncBlockCache::CleanupSyncBlocksInAppDomain(AppDomain *pDomain)
                 }
             }                         
 #endif // FEATURE_COMINTEROP
-        }
-
-        // NOTE: this will only notify the sync block if it is non-agile and living in the unloading domain.
-        //  Agile objects that are still alive will not get notification!
-        if (pSyncBlock->GetAppDomainIndex() == index)
-        {
-            pSyncBlock->OnADUnload();
         }
     }
     STRESS_LOG1(LF_APPDOMAIN, LL_INFO100, "AD cleanup - %d sync blocks done", nb);
@@ -1864,7 +1826,6 @@ BOOL ObjHeader::TryEnterObjMonitor(INT32 timeOut)
 AwareLock::EnterHelperResult ObjHeader::EnterObjMonitorHelperSpin(Thread* pCurThread)
 {
     CONTRACTL{
-        SO_TOLERANT;
         NOTHROW;
         GC_NOTRIGGER;
         MODE_COOPERATIVE;
@@ -2006,7 +1967,7 @@ BOOL ObjHeader::LeaveObjMonitor()
             }
             return TRUE;
         case AwareLock::LeaveHelperAction_Yield:
-            YieldProcessor();
+            YieldProcessorNormalized();
             continue;
         case AwareLock::LeaveHelperAction_Contention:
             // Some thread is updating the syncblock value.
@@ -2058,7 +2019,7 @@ BOOL ObjHeader::LeaveObjMonitorAtException()
             }
             return TRUE;
         case AwareLock::LeaveHelperAction_Yield:
-            YieldProcessor();
+            YieldProcessorNormalized();
             continue;
         case AwareLock::LeaveHelperAction_Contention:
             // Some thread is updating the syncblock value.
@@ -2091,7 +2052,6 @@ BOOL ObjHeader::GetThreadOwningMonitorLock(DWORD *pThreadId, DWORD *pAcquisition
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
 #ifndef DACCESS_COMPILE
         if (!IsGCSpecialThread ()) {MODE_COOPERATIVE;} else {MODE_ANY;}
 #endif
@@ -2213,7 +2173,7 @@ DEBUG_NOINLINE void ObjHeader::EnterSpinLock()
             {
                 if  (! (m_SyncBlockValue & BIT_SBLK_SPIN_LOCK))
                     break;
-                YieldProcessor();               // indicate to the processor that we are spining
+                YieldProcessorNormalized(); // indicate to the processor that we are spinning
             }
             if  (m_SyncBlockValue & BIT_SBLK_SPIN_LOCK)
                 __SwitchToThread(0, ++dwSwitchCount);
@@ -2292,7 +2252,6 @@ ADIndex ObjHeader::GetAppDomainIndex()
 {
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_SUPPORTS_DAC;
 
     ADIndex indx = GetRawAppDomainIndex();
@@ -2515,9 +2474,8 @@ BOOL ObjHeader::Validate (BOOL bVerifySyncBlkIndex)
 {
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_NOTRIGGER;
-    STATIC_CONTRACT_SO_TOLERANT;
     STATIC_CONTRACT_MODE_COOPERATIVE;
-    
+
     DWORD bits = GetBits ();
     Object * obj = GetBaseObject ();
     BOOL bVerifyMore = g_pConfig->GetHeapVerifyLevel() & EEConfig::HEAPVERIFY_SYNCBLK;
@@ -2593,18 +2551,11 @@ BOOL ObjHeader::Validate (BOOL bVerifySyncBlkIndex)
         //but thread ID doesn't have to be valid because the lock could be orphanend
         ASSERT_AND_CHECK (lockThreadId != 0 || recursionLevel == 0 );     
 
+#ifndef _DEBUG
         DWORD adIndex  = (bits >> SBLK_APPDOMAIN_SHIFT) & SBLK_MASK_APPDOMAININDEX;
-        if (adIndex!= 0)
-        {
-#ifndef _DEBUG            
-            //in non debug build, only objects of domain neutral type have appdomain index in header
-            ASSERT_AND_CHECK (obj->GetGCSafeMethodTable()->IsDomainNeutral());
+        //in non debug build, objects do not have appdomain index in header
+        ASSERT_AND_CHECK (adIndex == 0);
 #endif //!_DEBUG
-            //todo: validate the AD index. 
-            //The trick here is agile objects could have a invalid AD index. Ideally we should call 
-            //Object::GetAppDomain to do all the agile validation but it has side effects like mark the object to 
-            //be agile and it only does the check if g_pConfig->AppDomainLeaks() is on
-        }
     }
     
     return TRUE;
@@ -3056,8 +3007,6 @@ BOOL AwareLock::EnterEpilogHelper(Thread* pCurThread, INT32 timeOut)
     // the object associated with this lock.
     _ASSERTE(pCurThread->PreemptiveGCDisabled());
 
-    COUNTER_ONLY(GetPerfCounters().m_LocksAndThreads.cContention++);
-
     // Fire a contention start event for a managed contention
     FireEtwContentionStart_V1(ETW::ContentionLog::ContentionStructs::ManagedContention, GetClrInstanceId());
 
@@ -3365,16 +3314,7 @@ BOOL SyncBlock::Wait(INT32 timeOut, BOOL exitContext)
         syncState.m_EnterCount = LeaveMonitorCompletely();
         _ASSERTE(syncState.m_EnterCount > 0);
 
-        Context* targetContext;
-        targetContext = pCurThread->GetContext();
-        _ASSERTE(targetContext);
-        Context* defaultContext;
-        defaultContext = pCurThread->GetDomain()->GetDefaultContext();
-        _ASSERTE(defaultContext);
-        _ASSERTE( exitContext==NULL || targetContext == defaultContext);
-        {
-            isTimedOut = pCurThread->Block(timeOut, &syncState);
-        }
+        isTimedOut = pCurThread->Block(timeOut, &syncState);
     }
     GCPROTECT_END();
     m_Monitor.DecrementTransientPrecious();

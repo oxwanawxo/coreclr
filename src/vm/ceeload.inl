@@ -269,10 +269,12 @@ void LookupMap<TYPE>::EnsureElementCanBeStored(Module * pModule, DWORD rid)
     }
     CONTRACTL_END;
 
+#ifdef FEATURE_PREJIT
     // don't attempt to call GetElementPtr for rids inside the compressed portion of
     // a multi-node map
     if (MapIsCompressed() && rid < dwCount)
         return;
+#endif
     PTR_TADDR pElement = GetElementPtr(rid);
     if (pElement == NULL)
         GrowMap(pModule, rid);
@@ -398,7 +400,6 @@ inline MethodDesc *Module::LookupMethodDef(mdMethodDef token)
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
         SUPPORTS_DAC;
     }
@@ -467,7 +468,7 @@ inline BOOL Module::IsEditAndContinueCapable()
     
     // for now, Module::IsReflection is equivalent to m_file->IsDynamic,
     // which is checked by IsEditAndContinueCapable(m_pAssembly, m_file)
-    _ASSERTE(!isEnCCapable || (!this->IsReflection() && !GetAssembly()->IsDomainNeutral()));
+    _ASSERTE(!isEnCCapable || (!this->IsReflection()));
 
     return isEnCCapable;
 }
@@ -495,19 +496,6 @@ FORCEINLINE PTR_DomainLocalModule Module::GetDomainLocalModule(AppDomain *pDomai
 
     return pDomain->GetDomainLocalBlock()->GetModuleSlot(GetModuleIndex());
 }
-
-FORCEINLINE ULONG Module::GetNumberOfActivations()
-{
-    _ASSERTE(m_Crst.OwnedByCurrentThread());
-    return m_dwNumberOfActivations;
-}
-
-FORCEINLINE ULONG Module::IncrementNumberOfActivations()
-{
-    CrstHolder lock(&m_Crst);
-    return ++m_dwNumberOfActivations;
-}
-
 
 #ifdef FEATURE_PREJIT
 
@@ -663,13 +651,5 @@ inline CodeVersionManager * Module::GetCodeVersionManager()
     return GetDomain()->GetCodeVersionManager();
 }
 #endif // FEATURE_CODE_VERSIONING
-
-#ifdef FEATURE_TIERED_COMPILATION
-inline CallCounter * Module::GetCallCounter()
-{
-    LIMITED_METHOD_CONTRACT;
-    return GetDomain()->GetCallCounter();
-}
-#endif // FEATURE_TIERED_COMPILATION
 
 #endif  // CEELOAD_INL_

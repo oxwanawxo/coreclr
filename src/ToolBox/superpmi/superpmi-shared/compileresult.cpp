@@ -672,6 +672,8 @@ void CompileResult::repRecordRelocation(void* location, void* target, WORD fRelo
     value.slotNum    = (DWORD)slotNum;
     value.addlDelta  = (DWORD)addlDelta;
 
+    Assert(value.slotNum == 0);
+
     RecordRelocation->Append(value);
 }
 
@@ -731,10 +733,6 @@ void CompileResult::applyRelocs(unsigned char* block1, ULONG blocksize1, void* o
                              (DWORD)tmp.target);
                     *(DWORD*)address = (DWORD)tmp.target;
                 }
-                if (tmp.addlDelta != 0)
-                    __debugbreak();
-                if (tmp.slotNum != 0)
-                    __debugbreak();
             }
             break;
 #endif // _TARGET_X86_
@@ -1045,7 +1043,7 @@ bool CompileResult::fndRecordCallSiteSigInfo(ULONG instrOffset, CORINFO_SIG_INFO
 
     Agnostic_RecordCallSite value = RecordCallSite->Get(instrOffset);
 
-    if (value.callSig.callConv == -1)
+    if (value.callSig.callConv == (DWORD)-1)
         return false;
 
     pCallSig->callConv               = (CorInfoCallConv)value.callSig.callConv;

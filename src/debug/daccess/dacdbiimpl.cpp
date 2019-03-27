@@ -185,6 +185,7 @@ template<class T> void DeleteDbiMemory(T *p)
 //
 //---------------------------------------------------------------------------------------
 STDAPI
+DLLEXPORT
 DacDbiInterfaceInstance(
     ICorDebugDataTarget * pTarget,
     CORDB_ADDRESS baseAddress,
@@ -1310,7 +1311,6 @@ void DacDbiInterfaceImpl::GetMethodRegionInfo(MethodDesc *             pMethodDe
 {
     CONTRACTL
     {
-        SO_INTOLERANT;
         GC_NOTRIGGER;
         PRECONDITION(CheckPointer(pCodeInfo));
     }
@@ -1625,7 +1625,6 @@ void DacDbiInterfaceImpl::ComputeFieldData(PTR_FieldDesc pFD,
         pCurrentFieldData->m_vmFieldDesc.SetHostPtr(pFD);
         pCurrentFieldData->m_fFldStorageAvailable = FALSE;
         pCurrentFieldData->m_fFldIsTLS = FALSE;
-        pCurrentFieldData->m_fFldIsContextStatic = FALSE;
         pCurrentFieldData->m_fFldIsRVA = FALSE;
         pCurrentFieldData->m_fFldIsCollectibleStatic = FALSE;
     }
@@ -1638,7 +1637,6 @@ void DacDbiInterfaceImpl::ComputeFieldData(PTR_FieldDesc pFD,
         // completely DACized
         pCurrentFieldData->m_vmFieldDesc.SetHostPtr(pFD);
         pCurrentFieldData->m_fFldIsTLS = (pFD->IsThreadStatic() == TRUE);
-        pCurrentFieldData->m_fFldIsContextStatic = (pFD->IsContextStatic() == TRUE);
         pCurrentFieldData->m_fFldIsRVA = (pFD->IsRVA() == TRUE);
         pCurrentFieldData->m_fFldIsCollectibleStatic = (pFD->IsStatic() == TRUE &&
             pFD->GetEnclosingMethodTable()->Collectible());
@@ -1657,7 +1655,7 @@ void DacDbiInterfaceImpl::ComputeFieldData(PTR_FieldDesc pFD,
                     pCurrentFieldData->SetStaticAddress(PTR_TO_TADDR(addr));
                 }
             }
-            else if (pFD->IsThreadStatic() || pFD->IsContextStatic() || 
+            else if (pFD->IsThreadStatic() || 
                 pCurrentFieldData->m_fFldIsCollectibleStatic)
             {
                 // this is a special type of static that must be queried using DB_IPCE_GET_SPECIAL_STATIC
@@ -1736,7 +1734,7 @@ void DacDbiInterfaceImpl::CollectFields(TypeHandle                   thExact,
                                           FALSE);  // don't fixup EnC (we can't, we're stopped)
 
     PTR_FieldDesc pCurrentFD;
-    int index = 0;
+    unsigned int index = 0;
     while (((pCurrentFD = fdIterator.Next()) != NULL) && (index < pFieldList->Count()))
     {
         // fill in the pCurrentEntry structure
@@ -3099,7 +3097,7 @@ TypeHandle DacDbiInterfaceImpl::GetExactFnPtrTypeHandle(ArgInfoList * pArgInfo)
 
     // convert the type information for each parameter to its corresponding type handle
     // and store it in the list
-    for (int i = 0; i < pArgInfo->Count(); i++)
+    for (unsigned int i = 0; i < pArgInfo->Count(); i++)
     {
         pInst[i] = BasicTypeInfoToTypeHandle(&((*pArgInfo)[i]));
     }
@@ -3219,21 +3217,16 @@ TypeHandle DacDbiInterfaceImpl::ExpandedTypeInfoToTypeHandle(DebuggerIPCE_Expand
 } // DacDbiInterfaceImpl::ExpandedTypeInfoToTypeHandle
 
 // ----------------------------------------------------------------------------
-// DacDbi API: GetThreadOrContextStaticAddress
-// Get the target field address of a context or thread local static. 
+// DacDbi API: GetThreadStaticAddress
+// Get the target field address of a thread local static.
 // 
 // Notes: 
-// The address is  constant and could be cached.
-// 
-// If this is a context-static, the function uses the thread's current context.  
-// [This is important because it means that you can't lookup a context static 
-// unless you have a thread in that context. If anybody actually cared about contexts, 
-// we might have to revise this in the future] 
+// The address is constant and could be cached.
 // 
 // This can commonly fail, in which case, it will return NULL.
 // ----------------------------------------------------------------------------
-CORDB_ADDRESS DacDbiInterfaceImpl::GetThreadOrContextStaticAddress(VMPTR_FieldDesc vmField,
-                                                                    VMPTR_Thread    vmRuntimeThread)
+CORDB_ADDRESS DacDbiInterfaceImpl::GetThreadStaticAddress(VMPTR_FieldDesc vmField,
+                                                          VMPTR_Thread    vmRuntimeThread)
 {
     DD_ENTER_MAY_THROW;
 
@@ -3243,11 +3236,10 @@ CORDB_ADDRESS DacDbiInterfaceImpl::GetThreadOrContextStaticAddress(VMPTR_FieldDe
 
     _ASSERTE(pRuntimeThread != NULL);
 
-    // Find out whether the field is thread local or context local and get its
-    // address. 
+    // Find out whether the field is thread local and get its address.
     if (pFieldDesc->IsThreadStatic())
     {
-        fieldAddress = pRuntimeThread->GetStaticFieldAddrNoCreate(pFieldDesc, NULL);
+        fieldAddress = pRuntimeThread->GetStaticFieldAddrNoCreate(pFieldDesc);
     }
     else
     {
@@ -3257,7 +3249,7 @@ CORDB_ADDRESS DacDbiInterfaceImpl::GetThreadOrContextStaticAddress(VMPTR_FieldDe
     }
     return fieldAddress;
 
-} // DacDbiInterfaceImpl::GetThreadOrContextStaticAddress
+} // DacDbiInterfaceImpl::GetThreadStaticAddress
 
     // Get the target field address of a collectible types static. 
 CORDB_ADDRESS DacDbiInterfaceImpl::GetCollectibleTypeStaticAddress(VMPTR_FieldDesc vmField,
@@ -3324,7 +3316,7 @@ void DacDbiInterfaceImpl::GetTypeHandleParams(VMPTR_AppDomain  vmAppDomain,
     pParams->Alloc(typeHandle.GetNumGenericArgs());
     
     // collect type information for each type parameter
-    for (int i = 0; i < pParams->Count(); ++i)
+    for (unsigned int i = 0; i < pParams->Count(); ++i)
     {
         VMPTR_TypeHandle thInst = VMPTR_TypeHandle::NullPtr();
         thInst.SetDacTargetPtr(typeHandle.GetInstantiation()[i].AsTAddr());
@@ -3453,10 +3445,7 @@ void DacDbiInterfaceImpl::GetStackFramesFromException(VMPTR_Object vmObject, Dac
             AppDomain* pDomain = NULL;
             DomainFile* pDomainFile = NULL;
 
-            if (pBaseDomain->IsSharedDomain())
-                pDomain = SystemDomain::System()->DefaultDomain();
-            else
-                pDomain = pBaseDomain->AsAppDomain();
+            pDomain = pBaseDomain->AsAppDomain();
 
             _ASSERTE(pDomain != NULL);
 
@@ -3604,15 +3593,11 @@ void DacDbiInterfaceImpl::GetCachedWinRTTypesForIIDs(
     DD_ENTER_MAY_THROW;
 
     AppDomain * pAppDomain = vmAppDomain.GetDacPtr();
-    if (pAppDomain->IsUnloading())
-    {
-        return;
-    }
 
     {
         pTypes->Alloc(iids.Count());
 
-        for (int i = 0; i < iids.Count(); ++i)
+        for (unsigned int i = 0; i < iids.Count(); ++i)
         {
             // There is the possiblity that we'll get this far with a dump and not fail, but still
             // not be able to get full info for a particular param.
@@ -3654,10 +3639,6 @@ void DacDbiInterfaceImpl::GetCachedWinRTTypes(
     DD_ENTER_MAY_THROW;
 
     AppDomain * pAppDomain = vmAppDomain.GetDacPtr();
-    if (pAppDomain->IsUnloading())
-    {
-        return;
-    }
 
     InlineSArray<PTR_MethodTable, 32> rgMT;
     InlineSArray<GUID, 32> rgGuid;
@@ -3839,14 +3820,12 @@ void DacDbiInterfaceImpl::InitFieldData(const FieldDesc *           pFD,
     pFieldData->m_fFldIsTLS = (pFD->IsThreadStatic() == TRUE);
     pFieldData->m_fldMetadataToken = pFD->GetMemberDef();
     pFieldData->m_fFldIsRVA = (pFD->IsRVA() == TRUE);
-    pFieldData->m_fFldIsContextStatic = (pFD->IsContextStatic() == TRUE);
     pFieldData->m_fFldIsCollectibleStatic = FALSE;
     pFieldData->m_fFldStorageAvailable = true;
 
     if (pFieldData->m_fFldIsStatic)
     {
         //EnC is only supported on regular static fields
-        _ASSERTE(!pFieldData->m_fFldIsContextStatic);
         _ASSERTE(!pFieldData->m_fFldIsTLS);
         _ASSERTE(!pFieldData->m_fFldIsRVA);
 
@@ -4056,9 +4035,9 @@ BOOL DacDbiInterfaceImpl::GetModuleNGenPath(VMPTR_Module vmModule,
             return TRUE;
         }
     }
+NoFileName:
 #endif // FEATURE_PREJIT
 
-NoFileName:
     // no ngen filename
     IfFailThrow(pStrFilename->AssignCopy(W("")));
     return FALSE;
@@ -4308,10 +4287,6 @@ void DacDbiInterfaceImpl::EnumerateAppDomains(
         // It's critical that we don't yield appdomains after the unload event has been sent.
         // See code:IDacDbiInterface#Enumeration for details.
         AppDomain * pAppDomain = iterator.GetDomain(); 
-        if (pAppDomain->IsUnloading())
-        {
-            continue;
-        }
         
         VMPTR_AppDomain vmAppDomain = VMPTR_AppDomain::NullPtr();
         vmAppDomain.SetHostPtr(pAppDomain);
@@ -4338,10 +4313,6 @@ void  DacDbiInterfaceImpl::EnumerateAssembliesInAppDomain(
     // in the domain. This is to enforce rules at code:IDacDbiInterface#Enumeration.
     // See comment in code:DacDbiInterfaceImpl::EnumerateModulesInAssembly code for details.
     AppDomain * pAppDomain = vmAppDomain.GetDacPtr();
-    if (pAppDomain->IsUnloading())
-    {
-        return;
-    }
 
     // Pass the magical flags to the loader enumerator to get all Execution-only assemblies.
     iterator = pAppDomain->IterateAssembliesEx((AssemblyIterationFlags)(kIncludeLoading | kIncludeLoaded | kIncludeExecution));
@@ -4373,18 +4344,6 @@ void DacDbiInterfaceImpl::EnumerateModulesInAssembly(
     _ASSERTE(fpCallback != NULL);
 
     DomainAssembly * pDomainAssembly = vmAssembly.GetDacPtr();
-
-    // If the appdomain or assembly containing this module is unloading, then don't enumerate any modules.
-    // in the domain. This is to enforce rules at code:IDacDbiInterface#Enumeration, specifically
-    // that new objects are not available after the unload event is sent. 
-    // This is a very large hammer, but since modules only unload with appdomains or assemblies, we're 
-    // erring on the side of safety. If the debugger happens to have VMPTR_DomainFiles (CordbModules) already
-    // cached, it can still use those until the unload event. 
-    if (pDomainAssembly->IsUnloading())
-    {
-        return;
-    }
-    
 
     // If the domain is not yet fully-loaded, don't advertise it yet.
     // It's not ready to be inspected. 
@@ -4485,7 +4444,7 @@ void DacDbiInterfaceImpl::MarkDebuggerAttachPending()
     }
     else
     {
-        // Caller should have gauranteed that the LS is loaded.
+        // Caller should have guaranteed that the LS is loaded.
         // If we're detaching, then don't throw because we don't care.
         ThrowHR(CORDBG_E_NOTREADY);
     }
@@ -4521,7 +4480,7 @@ void DacDbiInterfaceImpl::MarkDebuggerAttached(BOOL fAttached)
     }
     else if (fAttached)
     {
-        // Caller should have gauranteed that the LS is loaded.
+        // Caller should have guaranteed that the LS is loaded.
         // If we're detaching, then don't throw because we don't care.
         ThrowHR(CORDBG_E_NOTREADY);
     }
@@ -4705,8 +4664,7 @@ CONNID DacDbiInterfaceImpl::GetConnectionID(VMPTR_Thread vmThread)
 {
     DD_ENTER_MAY_THROW;
 
-    Thread * pThread = vmThread.GetDacPtr();
-    return pThread->GetConnectionId();
+    return INVALID_CONNECTION_ID;
 }
 
 // Return the task ID of the specified thread.
@@ -4714,8 +4672,7 @@ TASKID DacDbiInterfaceImpl::GetTaskID(VMPTR_Thread vmThread)
 {
     DD_ENTER_MAY_THROW;
 
-    Thread * pThread = vmThread.GetDacPtr();
-    return pThread->GetTaskId();
+    return INVALID_TASK_ID;
 }
 
 // Return the OS thread ID of the specified thread
@@ -5801,7 +5758,6 @@ HRESULT DacDbiInterfaceImpl::FastSanityCheckObject(PTR_Object objPtr)
 {
     CONTRACTL
     {
-        SO_NOT_MAINLINE;
         NOTHROW;
         GC_NOTRIGGER;
     }
@@ -6804,24 +6760,28 @@ bool DacDbiInterfaceImpl::IsValidObject(CORDB_ADDRESS addr)
     DD_ENTER_MAY_THROW;
     
     bool isValid = false;
-    EX_TRY
+
+    if (addr != 0 && addr != (CORDB_ADDRESS)-1)
     {
-        PTR_Object obj(TO_TADDR(addr));
-        
-        PTR_MethodTable mt = obj->GetMethodTable();
-        PTR_EEClass cls = mt->GetClass();
-        
-        if (mt == cls->GetMethodTable())
-            isValid = true;
-        else if (!mt->IsCanonicalMethodTable())
-            isValid = cls->GetMethodTable()->GetClass() == cls;
+        EX_TRY
+        {
+            PTR_Object obj(TO_TADDR(addr));
+
+            PTR_MethodTable mt = obj->GetMethodTable();
+            PTR_EEClass cls = mt->GetClass();
+
+            if (mt == cls->GetMethodTable())
+                isValid = true;
+            else if (!mt->IsCanonicalMethodTable())
+                isValid = cls->GetMethodTable()->GetClass() == cls;
+        }
+        EX_CATCH
+        {
+            isValid = false;
+        }
+        EX_END_CATCH(SwallowAllExceptions)
     }
-    EX_CATCH
-    {
-        isValid = false;
-    }
-    EX_END_CATCH(SwallowAllExceptions)
-    
+
     return isValid;
 }
 
@@ -6830,20 +6790,19 @@ bool DacDbiInterfaceImpl::GetAppDomainForObject(CORDB_ADDRESS addr, OUT VMPTR_Ap
 {
     DD_ENTER_MAY_THROW;
     
+    if (addr == 0 || addr == (CORDB_ADDRESS)-1)
+    {
+        return false;
+    }
+
     PTR_Object obj(TO_TADDR(addr));
     MethodTable *mt = obj->GetMethodTable();
 
     PTR_Module module = mt->GetModule();
     PTR_Assembly assembly = module->GetAssembly();
     BaseDomain *baseDomain = assembly->GetDomain();
-    
-    if (baseDomain->IsSharedDomain())
-    {
-        pModule->SetDacTargetPtr(PTR_HOST_TO_TADDR(module));
-        *pAppDomain = VMPTR_AppDomain::NullPtr();
-        *pDomainFile = VMPTR_DomainFile::NullPtr();
-    }
-    else if (baseDomain->IsAppDomain())
+
+    if (baseDomain->IsAppDomain())
     {
         pAppDomain->SetDacTargetPtr(PTR_HOST_TO_TADDR(baseDomain->AsAppDomain()));
         pModule->SetDacTargetPtr(PTR_HOST_TO_TADDR(module));
@@ -7169,7 +7128,7 @@ HRESULT DacDbiInterfaceImpl::GetActiveRejitILCodeVersionNode(VMPTR_Module vmModu
     // manager's active IL version hasn't yet asked the profiler for the IL body to use, in which case we want to filter it
     //  out from the return in this method.
     ILCodeVersion activeILVersion = pCodeVersionManager->GetActiveILCodeVersion(pModule, methodTk);
-    if (activeILVersion.IsNull() || activeILVersion.GetRejitState() != ILCodeVersion::kStateActive)
+    if (activeILVersion.IsNull() || activeILVersion.IsDefaultVersion() || activeILVersion.GetRejitState() != ILCodeVersion::kStateActive)
     {
         pVmILCodeVersionNode->SetDacTargetPtr(0);
     }
@@ -7249,11 +7208,11 @@ HRESULT DacDbiInterfaceImpl::GetILCodeVersionNodeData(VMPTR_ILCodeVersionNode vm
 {
     DD_ENTER_MAY_THROW;
 #ifdef FEATURE_REJIT
-    ILCodeVersionNode* pILCodeVersionNode = vmILCodeVersionNode.GetDacPtr();
-    pData->m_state = pILCodeVersionNode->GetRejitState();
-    pData->m_pbIL = PTR_TO_CORDB_ADDRESS(dac_cast<ULONG_PTR>(pILCodeVersionNode->GetIL()));
-    pData->m_dwCodegenFlags = pILCodeVersionNode->GetJitFlags();
-    const InstrumentedILOffsetMapping* pMapping = pILCodeVersionNode->GetInstrumentedILMap();
+    ILCodeVersion ilCode(vmILCodeVersionNode.GetDacPtr());
+    pData->m_state = ilCode.GetRejitState();
+    pData->m_pbIL = PTR_TO_CORDB_ADDRESS(dac_cast<ULONG_PTR>(ilCode.GetIL()));
+    pData->m_dwCodegenFlags = ilCode.GetJitFlags();
+    const InstrumentedILOffsetMapping* pMapping = ilCode.GetInstrumentedILMap();
     if (pMapping)
     {
         pData->m_cInstrumentedMapEntries = (ULONG)pMapping->GetCount();
@@ -7288,6 +7247,22 @@ HRESULT DacDbiInterfaceImpl::GetMDStructuresVersion(ULONG32* pMDStructuresVersio
     return S_OK;
 }
 
+HRESULT DacDbiInterfaceImpl::EnableGCNotificationEvents(BOOL fEnable)
+{
+    DD_ENTER_MAY_THROW
+
+    HRESULT hr = S_OK;
+    EX_TRY
+    {
+        if (g_pDebugger != NULL)
+        {
+            TADDR addr = PTR_HOST_MEMBER_TADDR(Debugger, g_pDebugger, m_isGarbageCollectionEventsEnabled);
+            SafeWriteStructOrThrow<BOOL>(addr, &fEnable);
+        }
+    }
+    EX_CATCH_HRESULT(hr);
+    return hr;
+}
 
 DacRefWalker::DacRefWalker(ClrDataAccess *dac, BOOL walkStacks, BOOL walkFQ, UINT32 handleMask)
     : mDac(dac), mWalkStacks(walkStacks), mWalkFQ(walkFQ), mHandleMask(handleMask), mStackWalker(NULL),

@@ -15,12 +15,12 @@
 enum instruction : unsigned
 {
 #if defined(_TARGET_XARCH_)
-    #define INST0(id, nm, fp, um, rf, wf, mr                ) INS_##id,
-    #define INST1(id, nm, fp, um, rf, wf, mr                ) INS_##id,
-    #define INST2(id, nm, fp, um, rf, wf, mr, mi            ) INS_##id,
-    #define INST3(id, nm, fp, um, rf, wf, mr, mi, rm        ) INS_##id,
-    #define INST4(id, nm, fp, um, rf, wf, mr, mi, rm, a4    ) INS_##id,
-    #define INST5(id, nm, fp, um, rf, wf, mr, mi, rm, a4, rr) INS_##id,
+    #define INST0(id, nm, um, mr,                 flags) INS_##id,
+    #define INST1(id, nm, um, mr,                 flags) INS_##id,
+    #define INST2(id, nm, um, mr, mi,             flags) INS_##id,
+    #define INST3(id, nm, um, mr, mi, rm,         flags) INS_##id,
+    #define INST4(id, nm, um, mr, mi, rm, a4,     flags) INS_##id,
+    #define INST5(id, nm, um, mr, mi, rm, a4, rr, flags) INS_##id,
     #include "instrs.h"
 
 #elif defined(_TARGET_ARM_)
@@ -33,7 +33,8 @@ enum instruction : unsigned
     #define INST8(id, nm, fp, ldst, fmt, e1, e2, e3, e4, e5, e6, e7, e8    ) INS_##id,
     #define INST9(id, nm, fp, ldst, fmt, e1, e2, e3, e4, e5, e6, e7, e8, e9) INS_##id,
     #include "instrs.h"
-    #include "x86_instrs.h"
+
+    INS_lea,   // Not a real instruction. It is used for load the address of stack locals
 
 #elif defined(_TARGET_ARM64_)
     #define INST1(id, nm, fp, ldst, fmt, e1                                ) INS_##id,
@@ -85,13 +86,30 @@ enum GCtype : unsigned
     GCT_BYREF
 };
 
-// TODO-Cleanup:  Move 'insFlags' under _TARGET_ARM_
+#if defined(_TARGET_XARCH_)
+enum insFlags: uint8_t
+{
+    INS_FLAGS_None = 0x00,
+    INS_FLAGS_ReadsFlags = 0x01,
+    INS_FLAGS_WritesFlags = 0x02,
+    INS_FLAGS_x87Instr = 0x04,
+    INS_Flags_IsDstDstSrcAVXInstruction = 0x08,
+    INS_Flags_IsDstSrcSrcAVXInstruction = 0x10,
+
+    //  TODO-Cleanup:  Remove this flag and its usage from _TARGET_XARCH_
+    INS_FLAGS_DONT_CARE = 0x00,
+};
+#elif defined(_TARGET_ARM_) || defined(_TARGET_ARM64_)
+// TODO-Cleanup: Move 'insFlags' under _TARGET_ARM_
 enum insFlags: unsigned
 {
-    INS_FLAGS_NOT_SET,
-    INS_FLAGS_SET,
-    INS_FLAGS_DONT_CARE
+    INS_FLAGS_NOT_SET = 0x00,
+    INS_FLAGS_SET = 0x01,
+    INS_FLAGS_DONT_CARE = 0x02,
 };
+#else
+#error Unsupported target architecture
+#endif
 
 #if defined(_TARGET_ARM_)
 enum insOpts: unsigned
@@ -278,26 +296,33 @@ enum InstructionSet
 {
     InstructionSet_ILLEGAL = 0,
 #ifdef _TARGET_XARCH_
+    InstructionSet_Base,
     // Start linear order SIMD instruction sets
     // These ISAs have strictly generation to generation order.
-    InstructionSet_SSE     = 1,
-    InstructionSet_SSE2    = 2,
-    InstructionSet_SSE3    = 3,
-    InstructionSet_SSSE3   = 4,
-    InstructionSet_SSE41   = 5,
-    InstructionSet_SSE42   = 6,
-    InstructionSet_AVX     = 7,
-    InstructionSet_AVX2    = 8,
-    // Reserve values <32 for future SIMD instruction sets (i.e., AVX512),
+    InstructionSet_SSE,
+    InstructionSet_SSE2,
+    InstructionSet_SSE3,
+    InstructionSet_SSSE3,
+    InstructionSet_SSE41,
+    InstructionSet_SSE42,
+    InstructionSet_AVX,
+    InstructionSet_AVX2,
     // End linear order SIMD instruction sets.
-
-    InstructionSet_AES     = 32,
-    InstructionSet_BMI1    = 33,
-    InstructionSet_BMI2    = 34,
-    InstructionSet_FMA     = 35,
-    InstructionSet_LZCNT   = 36,
-    InstructionSet_PCLMULQDQ  = 37,
-    InstructionSet_POPCNT  = 38,
+    InstructionSet_AES,
+    InstructionSet_BMI1,
+    InstructionSet_BMI2,
+    InstructionSet_FMA,
+    InstructionSet_LZCNT,
+    InstructionSet_PCLMULQDQ,
+    InstructionSet_POPCNT,
+    InstructionSet_BMI1_X64,
+    InstructionSet_BMI2_X64,
+    InstructionSet_LZCNT_X64,
+    InstructionSet_POPCNT_X64,
+    InstructionSet_SSE_X64,
+    InstructionSet_SSE2_X64,
+    InstructionSet_SSE41_X64,
+    InstructionSet_SSE42_X64,
 #elif defined(_TARGET_ARM_)
     InstructionSet_NEON,
 #elif defined(_TARGET_ARM64_)

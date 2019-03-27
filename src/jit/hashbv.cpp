@@ -358,7 +358,7 @@ bool hashBvNode::sameAs(hashBvNode* other)
 hashBv::hashBv(Compiler* comp)
 {
     this->compiler      = comp;
-    this->log2_hashSize = globalData()->hbvHashSizeLog2;
+    this->log2_hashSize = 0;
 
     int hts = hashtable_size();
     nodeArr = getNewVector(hts);
@@ -424,24 +424,8 @@ hashBv*& hashBv::hbvFreeList(hashBvGlobalData* data)
     return data->hbvFreeList;
 }
 
-void hashBv::freeVector(hashBvNode* vect, int vectorLength)
-{
-    // not enough space to do anything with it
-    if (vectorLength < 2)
-    {
-        return;
-    }
-
-    hbvFreeListNode* f              = (hbvFreeListNode*)vect;
-    f->next                         = globalData()->hbvFreeVectorList;
-    globalData()->hbvFreeVectorList = f;
-    f->size                         = vectorLength;
-}
-
 void hashBv::hbvFree()
 {
-    Compiler* comp = this->compiler;
-
     int hts = hashtable_size();
     for (int i = 0; i < hts; i++)
     {
@@ -547,7 +531,6 @@ void hashBv::Resize(int newSize)
         return;
     }
 
-    int oldSizeLog2  = log2_hashSize;
     int log2_newSize = genLog2((unsigned)newSize);
 
     hashBvNode** newNodes = this->getNewVector(newSize);
@@ -586,8 +569,6 @@ void hashBv::Resize(int newSize)
     }
     else if (oldSize > newSize)
     {
-        int shrinkFactor = oldSize / newSize;
-
         // shrink multiple lists into one list
         // more efficient ways to do this but...
         // if the lists are long, you shouldn't be shrinking.
@@ -937,8 +918,6 @@ int hashBv::countBits()
 
 bool hashBv::anySet()
 {
-    int result = 0;
-
     int hts = this->hashtable_size();
     for (int hashNum = 0; hashNum < hts; hashNum++)
     {
@@ -1297,7 +1276,6 @@ bool hashBv::MultiTraverseLHSBigger(hashBv* other)
 
     // this is larger
     hashBvNode*** cursors;
-    int           shiftFactor     = this->log2_hashSize - other->log2_hashSize;
     int           expansionFactor = hts / ots;
     cursors                       = (hashBvNode***)alloca(expansionFactor * sizeof(void*));
 
@@ -1315,7 +1293,6 @@ bool hashBv::MultiTraverseLHSBigger(hashBv* other)
         hashBvNode* o = other->nodeArr[h];
         while (o)
         {
-            hashBvNode* next = o->next;
             // figure out what dst list this goes to
             int          hash     = getHashForIndex(o->baseIndex, hts);
             int          dstIndex = (hash - h) >> other->log2_hashSize;
@@ -1375,7 +1352,6 @@ bool hashBv::MultiTraverseLHSBigger(hashBv* other)
 template <typename Action>
 bool hashBv::MultiTraverseRHSBigger(hashBv* other)
 {
-    int hts = this->hashtable_size();
     int ots = other->hashtable_size();
 
     bool result    = Action::DefaultResult();
@@ -1475,8 +1451,6 @@ bool hashBv::MultiTraverseEqual(hashBv* other)
 
     for (int hashNum = 0; hashNum < hts; hashNum++)
     {
-        int destination = getHashForIndex(BITS_PER_NODE * hashNum, this->hashtable_size());
-
         hashBvNode** pa = &this->nodeArr[hashNum];
         hashBvNode** pb = &other->nodeArr[hashNum];
         hashBvNode*  b  = *pb;
@@ -1536,8 +1510,6 @@ bool hashBv::MultiTraverseEqual(hashBv* other)
 template <class Action>
 bool hashBv::MultiTraverse(hashBv* other)
 {
-    bool result = false;
-
     assert(this->numNodes == this->getNodeCount());
 
     Action::PreAction(this, other);
@@ -1662,8 +1634,6 @@ void hashBv::copyFrom(hashBv* other, Compiler* comp)
         while (otherNode)
         {
             // printf("otherNode is True...\n");
-            hashBvNode* next = *splicePoint;
-
             this->numNodes++;
 
             if (freeList)
@@ -2015,13 +1985,4 @@ more_data:
         }
         goto more_data;
     }
-}
-
-indexType HbvNext(hashBv* bv, Compiler* comp)
-{
-    if (bv)
-    {
-        bv->globalData()->hashBvNextIterator.initFrom(bv);
-    }
-    return bv->globalData()->hashBvNextIterator.nextBit();
 }

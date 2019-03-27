@@ -38,12 +38,11 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         {
             object _this = Unsafe.As<object>(this);
 
-            IMap<K, V> _this_map = _this as IMap<K, V>;
-            if (_this_map != null)
+            if (_this is IMap<K, V> _this_map)
             {
                 uint size = _this_map.Size;
 
-                if (((uint)Int32.MaxValue) < size)
+                if (((uint)int.MaxValue) < size)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingDictionaryTooLarge);
                 }
@@ -55,7 +54,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
                 IVector<KeyValuePair<K, V>> _this_vector = Unsafe.As<IVector<KeyValuePair<K, V>>>(this);
                 uint size = _this_vector.Size;
 
-                if (((uint)Int32.MaxValue) < size)
+                if (((uint)int.MaxValue) < size)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingListTooLarge);
                 }
@@ -75,8 +74,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         {
             object _this = Unsafe.As<object>(this);
 
-            IDictionary<K, V> _this_dictionary = _this as IDictionary<K, V>;
-            if (_this_dictionary != null)
+            if (_this is IDictionary<K, V> _this_dictionary)
             {
                 _this_dictionary.Add(item.Key, item.Value);
             }
@@ -92,8 +90,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         {
             object _this = Unsafe.As<object>(this);
 
-            IMap<K, V> _this_map = _this as IMap<K, V>;
-            if (_this_map != null)
+            if (_this is IMap<K, V> _this_map)
             {
                 _this_map.Clear();
             }
@@ -109,8 +106,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         {
             object _this = Unsafe.As<object>(this);
 
-            IDictionary<K, V> _this_dictionary = _this as IDictionary<K, V>;
-            if (_this_dictionary != null)
+            if (_this is IDictionary<K, V> _this_dictionary)
             {
                 V value;
                 bool hasKey = _this_dictionary.TryGetValue(item.Key, out value);
@@ -157,8 +153,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
         {
             object _this = Unsafe.As<object>(this);
 
-            IDictionary<K, V> _this_dictionary = _this as IDictionary<K, V>;
-            if (_this_dictionary != null)
+            if (_this is IDictionary<K, V> _this_dictionary)
             {
                 return _this_dictionary.Remove(item.Key);
             }
@@ -171,7 +166,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
                 if (!exists)
                     return false;
 
-                if (((uint)Int32.MaxValue) < index)
+                if (((uint)int.MaxValue) < index)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_CollectionBackingListTooLarge);
                 }

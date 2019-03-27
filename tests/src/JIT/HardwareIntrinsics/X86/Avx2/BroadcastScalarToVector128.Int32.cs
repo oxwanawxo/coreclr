@@ -64,11 +64,17 @@ namespace JIT.HardwareIntrinsics.X86
                     test.RunLclVarScenario_LoadAligned();
                 }
 
-                // Validates passing the field of a local works
-                test.RunLclFldScenario();
+                // Validates passing the field of a local class works
+                test.RunClassLclFldScenario();
 
-                // Validates passing an instance member works
-                test.RunFldScenario();
+                // Validates passing an instance member of a class works
+                test.RunClassFldScenario();
+
+                // Validates passing the field of a local struct works
+                test.RunStructLclFldScenario();
+
+                // Validates passing an instance member of a struct works
+                test.RunStructFldScenario();
             }
             else
             {
@@ -85,6 +91,29 @@ namespace JIT.HardwareIntrinsics.X86
 
     public sealed unsafe class SimpleUnaryOpTest__BroadcastScalarToVector128Int32
     {
+        private struct TestStruct
+        {
+            public Vector128<Int32> _fld;
+
+            public static TestStruct Create()
+            {
+                var testStruct = new TestStruct();
+
+                for (var i = 0; i < Op1ElementCount; i++) { _data[i] = TestLibrary.Generator.GetInt32(); }
+                Unsafe.CopyBlockUnaligned(ref Unsafe.As<Vector128<Int32>, byte>(ref testStruct._fld), ref Unsafe.As<Int32, byte>(ref _data[0]), (uint)Unsafe.SizeOf<Vector128<Int32>>());
+
+                return testStruct;
+            }
+
+            public void RunStructFldScenario(SimpleUnaryOpTest__BroadcastScalarToVector128Int32 testClass)
+            {
+                var result = Avx2.BroadcastScalarToVector128(_fld);
+
+                Unsafe.Write(testClass._dataTable.outArrayPtr, result);
+                testClass.ValidateResult(_fld, testClass._dataTable.outArrayPtr);
+            }
+        }
+
         private static readonly int LargestVectorSize = 16;
 
         private static readonly int Op1ElementCount = Unsafe.SizeOf<Vector128<Int32>>() / sizeof(Int32);
@@ -100,9 +129,7 @@ namespace JIT.HardwareIntrinsics.X86
 
         static SimpleUnaryOpTest__BroadcastScalarToVector128Int32()
         {
-            var random = new Random();
-
-            for (var i = 0; i < Op1ElementCount; i++) { _data[i] = (int)(random.Next(0, int.MaxValue)); }
+            for (var i = 0; i < Op1ElementCount; i++) { _data[i] = TestLibrary.Generator.GetInt32(); }
             Unsafe.CopyBlockUnaligned(ref Unsafe.As<Vector128<Int32>, byte>(ref _clsVar), ref Unsafe.As<Int32, byte>(ref _data[0]), (uint)Unsafe.SizeOf<Vector128<Int32>>());
         }
 
@@ -110,12 +137,10 @@ namespace JIT.HardwareIntrinsics.X86
         {
             Succeeded = true;
 
-            var random = new Random();
-
-            for (var i = 0; i < Op1ElementCount; i++) { _data[i] = (int)(random.Next(0, int.MaxValue)); }
+            for (var i = 0; i < Op1ElementCount; i++) { _data[i] = TestLibrary.Generator.GetInt32(); }
             Unsafe.CopyBlockUnaligned(ref Unsafe.As<Vector128<Int32>, byte>(ref _fld), ref Unsafe.As<Int32, byte>(ref _data[0]), (uint)Unsafe.SizeOf<Vector128<Int32>>());
 
-            for (var i = 0; i < Op1ElementCount; i++) { _data[i] = (int)(random.Next(0, int.MaxValue)); }
+            for (var i = 0; i < Op1ElementCount; i++) { _data[i] = TestLibrary.Generator.GetInt32(); }
             _dataTable = new SimpleUnaryOpTest__DataTable<Int32, Int32>(_data, new Int32[RetElementCount], LargestVectorSize);
         }
 
@@ -125,7 +150,9 @@ namespace JIT.HardwareIntrinsics.X86
 
         public void RunBasicScenario_UnsafeRead()
         {
-            var result = Avx2.BroadcastScalarToVector128<Int32>(
+            TestLibrary.TestFramework.BeginScenario(nameof(RunBasicScenario_UnsafeRead));
+
+            var result = Avx2.BroadcastScalarToVector128(
                 Unsafe.Read<Vector128<Int32>>(_dataTable.inArrayPtr)
             );
 
@@ -135,7 +162,9 @@ namespace JIT.HardwareIntrinsics.X86
 
         public void RunBasicScenario_Load()
         {
-            var result = Avx2.BroadcastScalarToVector128<Int32>(
+            TestLibrary.TestFramework.BeginScenario(nameof(RunBasicScenario_Load));
+
+            var result = Avx2.BroadcastScalarToVector128(
                 Sse2.LoadVector128((Int32*)(_dataTable.inArrayPtr))
             );
 
@@ -145,7 +174,9 @@ namespace JIT.HardwareIntrinsics.X86
 
         public void RunBasicScenario_LoadAligned()
         {
-            var result = Avx2.BroadcastScalarToVector128<Int32>(
+            TestLibrary.TestFramework.BeginScenario(nameof(RunBasicScenario_LoadAligned));
+
+            var result = Avx2.BroadcastScalarToVector128(
                 Sse2.LoadAlignedVector128((Int32*)(_dataTable.inArrayPtr))
             );
 
@@ -155,8 +186,9 @@ namespace JIT.HardwareIntrinsics.X86
 
         public void RunReflectionScenario_UnsafeRead()
         {
-            var result = typeof(Avx2).GetMethod(nameof(Avx2.BroadcastScalarToVector128))
-                                     .MakeGenericMethod( new Type[] { typeof(Int32) })
+            TestLibrary.TestFramework.BeginScenario(nameof(RunReflectionScenario_UnsafeRead));
+
+            var result = typeof(Avx2).GetMethod(nameof(Avx2.BroadcastScalarToVector128), new Type[] { typeof(Vector128<Int32>) })
                                      .Invoke(null, new object[] {
                                         Unsafe.Read<Vector128<Int32>>(_dataTable.inArrayPtr)
                                      });
@@ -167,8 +199,9 @@ namespace JIT.HardwareIntrinsics.X86
 
         public void RunReflectionScenario_Load()
         {
-            var result = typeof(Avx2).GetMethod(nameof(Avx2.BroadcastScalarToVector128))
-                                     .MakeGenericMethod( new Type[] { typeof(Int32) })
+            TestLibrary.TestFramework.BeginScenario(nameof(RunReflectionScenario_Load));
+
+            var result = typeof(Avx2).GetMethod(nameof(Avx2.BroadcastScalarToVector128), new Type[] { typeof(Vector128<Int32>) })
                                      .Invoke(null, new object[] {
                                         Sse2.LoadVector128((Int32*)(_dataTable.inArrayPtr))
                                      });
@@ -179,8 +212,9 @@ namespace JIT.HardwareIntrinsics.X86
 
         public void RunReflectionScenario_LoadAligned()
         {
-            var result = typeof(Avx2).GetMethod(nameof(Avx2.BroadcastScalarToVector128))
-                                     .MakeGenericMethod( new Type[] { typeof(Int32) })
+            TestLibrary.TestFramework.BeginScenario(nameof(RunReflectionScenario_LoadAligned));
+
+            var result = typeof(Avx2).GetMethod(nameof(Avx2.BroadcastScalarToVector128), new Type[] { typeof(Vector128<Int32>) })
                                      .Invoke(null, new object[] {
                                         Sse2.LoadAlignedVector128((Int32*)(_dataTable.inArrayPtr))
                                      });
@@ -191,7 +225,9 @@ namespace JIT.HardwareIntrinsics.X86
 
         public void RunClsVarScenario()
         {
-            var result = Avx2.BroadcastScalarToVector128<Int32>(
+            TestLibrary.TestFramework.BeginScenario(nameof(RunClsVarScenario));
+
+            var result = Avx2.BroadcastScalarToVector128(
                 _clsVar
             );
 
@@ -201,8 +237,10 @@ namespace JIT.HardwareIntrinsics.X86
 
         public void RunLclVarScenario_UnsafeRead()
         {
+            TestLibrary.TestFramework.BeginScenario(nameof(RunLclVarScenario_UnsafeRead));
+
             var firstOp = Unsafe.Read<Vector128<Int32>>(_dataTable.inArrayPtr);
-            var result = Avx2.BroadcastScalarToVector128<Int32>(firstOp);
+            var result = Avx2.BroadcastScalarToVector128(firstOp);
 
             Unsafe.Write(_dataTable.outArrayPtr, result);
             ValidateResult(firstOp, _dataTable.outArrayPtr);
@@ -210,8 +248,10 @@ namespace JIT.HardwareIntrinsics.X86
 
         public void RunLclVarScenario_Load()
         {
+            TestLibrary.TestFramework.BeginScenario(nameof(RunLclVarScenario_Load));
+
             var firstOp = Sse2.LoadVector128((Int32*)(_dataTable.inArrayPtr));
-            var result = Avx2.BroadcastScalarToVector128<Int32>(firstOp);
+            var result = Avx2.BroadcastScalarToVector128(firstOp);
 
             Unsafe.Write(_dataTable.outArrayPtr, result);
             ValidateResult(firstOp, _dataTable.outArrayPtr);
@@ -219,33 +259,60 @@ namespace JIT.HardwareIntrinsics.X86
 
         public void RunLclVarScenario_LoadAligned()
         {
+            TestLibrary.TestFramework.BeginScenario(nameof(RunLclVarScenario_LoadAligned));
+
             var firstOp = Sse2.LoadAlignedVector128((Int32*)(_dataTable.inArrayPtr));
-            var result = Avx2.BroadcastScalarToVector128<Int32>(firstOp);
+            var result = Avx2.BroadcastScalarToVector128(firstOp);
 
             Unsafe.Write(_dataTable.outArrayPtr, result);
             ValidateResult(firstOp, _dataTable.outArrayPtr);
         }
 
-        public void RunLclFldScenario()
+        public void RunClassLclFldScenario()
         {
+            TestLibrary.TestFramework.BeginScenario(nameof(RunClassLclFldScenario));
+
             var test = new SimpleUnaryOpTest__BroadcastScalarToVector128Int32();
-            var result = Avx2.BroadcastScalarToVector128<Int32>(test._fld);
+            var result = Avx2.BroadcastScalarToVector128(test._fld);
 
             Unsafe.Write(_dataTable.outArrayPtr, result);
             ValidateResult(test._fld, _dataTable.outArrayPtr);
         }
 
-        public void RunFldScenario()
+        public void RunClassFldScenario()
         {
-            var result = Avx2.BroadcastScalarToVector128<Int32>(_fld);
+            TestLibrary.TestFramework.BeginScenario(nameof(RunClassFldScenario));
+
+            var result = Avx2.BroadcastScalarToVector128(_fld);
 
             Unsafe.Write(_dataTable.outArrayPtr, result);
             ValidateResult(_fld, _dataTable.outArrayPtr);
         }
 
+        public void RunStructLclFldScenario()
+        {
+            TestLibrary.TestFramework.BeginScenario(nameof(RunStructLclFldScenario));
+
+            var test = TestStruct.Create();
+            var result = Avx2.BroadcastScalarToVector128(test._fld);
+
+            Unsafe.Write(_dataTable.outArrayPtr, result);
+            ValidateResult(test._fld, _dataTable.outArrayPtr);
+        }
+
+        public void RunStructFldScenario()
+        {
+            TestLibrary.TestFramework.BeginScenario(nameof(RunStructFldScenario));
+
+            var test = TestStruct.Create();
+            test.RunStructFldScenario(this);
+        }
+
         public void RunUnsupportedScenario()
         {
-            Succeeded = false;
+            TestLibrary.TestFramework.BeginScenario(nameof(RunUnsupportedScenario));
+
+            bool succeeded = false;
 
             try
             {
@@ -253,7 +320,12 @@ namespace JIT.HardwareIntrinsics.X86
             }
             catch (PlatformNotSupportedException)
             {
-                Succeeded = true;
+                succeeded = true;
+            }
+
+            if (!succeeded)
+            {
+                Succeeded = false;
             }
         }
 
@@ -281,9 +353,11 @@ namespace JIT.HardwareIntrinsics.X86
 
         private void ValidateResult(Int32[] firstOp, Int32[] result, [CallerMemberName] string method = "")
         {
+            bool succeeded = true;
+
             if (firstOp[0] != result[0])
             {
-                Succeeded = false;
+                succeeded = false;
             }
             else
             {
@@ -291,18 +365,20 @@ namespace JIT.HardwareIntrinsics.X86
                 {
                     if ((firstOp[0] != result[i]))
                     {
-                        Succeeded = false;
+                        succeeded = false;
                         break;
                     }
                 }
             }
 
-            if (!Succeeded)
+            if (!succeeded)
             {
-                Console.WriteLine($"{nameof(Avx2)}.{nameof(Avx2.BroadcastScalarToVector128)}<Int32>(Vector128<Int32>): {method} failed:");
-                Console.WriteLine($"  firstOp: ({string.Join(", ", firstOp)})");
-                Console.WriteLine($"   result: ({string.Join(", ", result)})");
-                Console.WriteLine();
+                TestLibrary.TestFramework.LogInformation($"{nameof(Avx2)}.{nameof(Avx2.BroadcastScalarToVector128)}<Int32>(Vector128<Int32>): {method} failed:");
+                TestLibrary.TestFramework.LogInformation($"  firstOp: ({string.Join(", ", firstOp)})");
+                TestLibrary.TestFramework.LogInformation($"   result: ({string.Join(", ", result)})");
+                TestLibrary.TestFramework.LogInformation(string.Empty);
+
+                Succeeded = false;
             }
         }
     }

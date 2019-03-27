@@ -13,16 +13,6 @@
 
 class EventPipeEvent;
 
-// Define the event pipe callback to match the ETW callback signature.
-typedef void (*EventPipeCallback)(
-    LPCGUID SourceID,
-    ULONG IsEnabled,
-    UCHAR Level,
-    ULONGLONG MatchAnyKeywords,
-    ULONGLONG MatchAllKeywords,
-    void *FilterData,
-    void *CallbackContext);
-
 class EventPipeProvider
 {
     // Declare friends.
@@ -80,29 +70,22 @@ public:
     bool EventEnabled(INT64 keywords, EventPipeEventLevel eventLevel) const;
 
     // Create a new event.
-    EventPipeEvent* AddEvent(unsigned int eventID, INT64 keywords, unsigned int eventVersion, EventPipeEventLevel level, BYTE *pMetadata = NULL, unsigned int metadataLength = 0);
-
-  private:
-
-    // Create a new event, but allow needStack to be specified.
-    // In general, we want stack walking to be controlled by the consumer and not the producer of events.
-    // However, there are a couple of cases that we know we don't want to do a stackwalk that would affect performance significantly:
-    // 1. Sample profiler events: The sample profiler already does a stack walk of the target thread.  Doing one of the sampler thread is a waste.
-    // 2. Metadata events: These aren't as painful but because we have to keep this functionality around, might as well use it.
     EventPipeEvent* AddEvent(unsigned int eventID, INT64 keywords, unsigned int eventVersion, EventPipeEventLevel level, bool needStack, BYTE *pMetadata = NULL, unsigned int metadataLength = 0);
+
+private:
 
     // Add an event to the provider.
     void AddEvent(EventPipeEvent &event);
 
     // Set the provider configuration (enable and disable sets of events).
     // This is called by EventPipeConfiguration.
-    void SetConfiguration(bool providerEnabled, INT64 keywords, EventPipeEventLevel providerLevel);
+    void SetConfiguration(bool providerEnabled, INT64 keywords, EventPipeEventLevel providerLevel, LPCWSTR pFilterData);
 
     // Refresh the runtime state of all events.
     void RefreshAllEvents();
 
     // Invoke the provider callback.
-    void InvokeCallback();
+    void InvokeCallback(LPCWSTR pFilterData);
 
     // Specifies whether or not the provider was deleted, but that deletion
     // was deferred until after tracing is stopped.

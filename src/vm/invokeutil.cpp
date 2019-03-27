@@ -745,7 +745,7 @@ OBJECTREF InvokeUtil::CreateClassLoadExcept(OBJECTREF* classes, OBJECTREF* excep
     // Retrieve the resource string.
     ResMgrGetString(W("ReflectionTypeLoad_LoadFailed"), &gc.str);
 
-    MethodDesc* pMD = MemberLoader::FindMethod(gc.o->GetTrueMethodTable(),
+    MethodDesc* pMD = MemberLoader::FindMethod(gc.o->GetMethodTable(),
                             COR_CTOR_METHOD_NAME, &gsig_IM_ArrType_ArrException_Str_RetVoid);
 
     if (!pMD)
@@ -792,7 +792,7 @@ OBJECTREF InvokeUtil::CreateTargetExcept(OBJECTREF* except) {
     GCPROTECT_BEGIN(o);
     ARG_SLOT args[2];
 
-    MethodDesc* pMD = MemberLoader::FindMethod(o->GetTrueMethodTable(),
+    MethodDesc* pMD = MemberLoader::FindMethod(o->GetMethodTable(),
                             COR_CTOR_METHOD_NAME, &gsig_IM_Exception_RetVoid);
     
     if (!pMD)
@@ -970,10 +970,9 @@ void InvokeUtil::SetValidField(CorElementType fldType,
         else
         {
             pDeclMT->EnsureInstanceActive();
-            pDeclMT->CheckRunClassInitThrowing();   
+            pDeclMT->CheckRunClassInitThrowing();
 
-            if (declaringType.IsDomainNeutral() == FALSE)
-                *pDomainInitialized = TRUE;
+            *pDomainInitialized = TRUE;
         }
         }
         EX_CATCH_THROWABLE(&Throwable);
@@ -1181,8 +1180,7 @@ OBJECTREF InvokeUtil::GetFieldValue(FieldDesc* pField, TypeHandle fieldType, OBJ
             pDeclMT->EnsureInstanceActive();
             pDeclMT->CheckRunClassInitThrowing();   
 
-            if (!declaringType.IsDomainNeutral())
-                *pDomainInitialized = TRUE;
+            *pDomainInitialized = TRUE;
         }
         }
         EX_CATCH_THROWABLE(&Throwable);
@@ -1461,7 +1459,7 @@ void InvokeUtil::CanAccessField(RefSecContext*  pCtx,
 }
 
 //
-// Ensure that a type is accessable, throwing a TypeLoadException if not
+// Ensure that a type is accessible, throwing a TypeLoadException if not
 //
 // Arguments:
 //    pCtx                  - current reflection context
@@ -1513,7 +1511,7 @@ void InvokeUtil::CheckAccessClass(RefSecContext *pCtx,
 }
 
 //
-// Ensure that a method is accessable, throwing a MethodAccessException if not
+// Ensure that a method is accessible, throwing a MethodAccessException if not
 //
 // Arguments:
 //    pCtx                  - current reflection context
@@ -1554,7 +1552,7 @@ void InvokeUtil::CheckAccessMethod(RefSecContext       *pCtx,
 }
 
 //
-// Ensure that a field is accessable, throwing a FieldAccessException if not
+// Ensure that a field is accessible, throwing a FieldAccessException if not
 //
 // Arguments:
 //    pCtx                  - current reflection context
@@ -1597,7 +1595,7 @@ void InvokeUtil::CheckAccessField(RefSecContext       *pCtx,
 
 
 //
-// Check accessability of a field or method.
+// Check accessibility of a field or method.
 //
 // Arguments:
 //    pCtx                  - current reflection context

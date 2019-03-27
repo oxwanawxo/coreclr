@@ -40,7 +40,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
             try
             {
-                return _this[(Int32)index];
+                return _this[(int)index];
             }
             catch (ArgumentOutOfRangeException ex)
             {
@@ -63,8 +63,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
             // Note: This list is not really read-only - you could QI for a modifiable
             // list.  We gain some perf by doing this.  We believe this is acceptable.
-            IReadOnlyList<T> roList = _this as IReadOnlyList<T>;
-            if (roList == null)
+            if (!(_this is IReadOnlyList<T> roList))
             {
                 roList = new ReadOnlyCollection<T>(_this);
             }
@@ -119,7 +118,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             catch (ArgumentOutOfRangeException ex)
             {
                 // Change error code to match what WinRT expects
-                ex.SetErrorCode(HResults.E_BOUNDS);
+                ex.HResult = HResults.E_BOUNDS;
                 throw;
             }
         }
@@ -132,12 +131,12 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
             try
             {
-                _this.RemoveAt((Int32)index);
+                _this.RemoveAt((int)index);
             }
             catch (ArgumentOutOfRangeException ex)
             {
                 // Change error code to match what WinRT expects
-                ex.SetErrorCode(HResults.E_BOUNDS);
+                ex.HResult = HResults.E_BOUNDS;
                 throw;
             }
         }
@@ -156,7 +155,7 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             if (_this.Count == 0)
             {
                 Exception e = new InvalidOperationException(SR.InvalidOperation_CannotRemoveLastFromEmptyCollection);
-                e.SetErrorCode(HResults.E_BOUNDS);
+                e.HResult = HResults.E_BOUNDS;
                 throw e;
             }
 
@@ -197,12 +196,12 @@ namespace System.Runtime.InteropServices.WindowsRuntime
 
         private static void EnsureIndexInt32(uint index, int listCapacity)
         {
-            // We use '<=' and not '<' becasue Int32.MaxValue == index would imply
-            // that Size > Int32.MaxValue:
-            if (((uint)Int32.MaxValue) <= index || index >= (uint)listCapacity)
+            // We use '<=' and not '<' becasue int.MaxValue == index would imply
+            // that Size > int.MaxValue:
+            if (((uint)int.MaxValue) <= index || index >= (uint)listCapacity)
             {
                 Exception e = new ArgumentOutOfRangeException(nameof(index), SR.ArgumentOutOfRange_IndexLargerThanMaxValue);
-                e.SetErrorCode(HResults.E_BOUNDS);
+                e.HResult = HResults.E_BOUNDS;
                 throw e;
             }
         }
@@ -233,9 +232,9 @@ namespace System.Runtime.InteropServices.WindowsRuntime
             {
                 string[] stringItems = items as string[];
 
-                // Fill in rest of the array with String.Empty to avoid marshaling failure
+                // Fill in rest of the array with string.Empty to avoid marshaling failure
                 for (uint i = itemCount; i < items.Length; ++i)
-                    stringItems[i] = String.Empty;
+                    stringItems[i] = string.Empty;
             }
 
             return itemCount;

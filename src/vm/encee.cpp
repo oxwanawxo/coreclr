@@ -17,6 +17,10 @@
 #include "excep.h"
 #include "stackwalk.h"
 
+#ifdef DACCESS_COMPILE
+#include "../debug/daccess/gcinterface.dac.h"
+#endif // DACCESS_COMPILE
+
 #ifdef EnC_SUPPORTED
 
 // can't get this on the helper thread at runtime in ResolveField, so make it static and get when add a field.
@@ -679,6 +683,7 @@ HRESULT EditAndContinueModule::ResumeInUpdatedFunction(
     // If we fail for any reason we have already potentially trashed with new locals and we have also unwound any
     // Win32 handlers on the stack so cannot ever return from this function. 
     EEPOLICY_HANDLE_FATAL_ERROR(CORDBG_E_ENC_INTERNAL_ERROR);
+    return hr;
 }
 
 //---------------------------------------------------------------------------------------
@@ -1084,14 +1089,13 @@ EnCAddedField *EnCAddedField::Allocate(OBJECTREF thisPointer, EnCFieldDesc *pFD)
     EnCAddedField *pEntry = new EnCAddedField;
     pEntry->m_pFieldDesc = pFD;
 
-    _ASSERTE(!pFD->GetApproxEnclosingMethodTable()->IsDomainNeutral());
     AppDomain *pDomain = (AppDomain*) pFD->GetApproxEnclosingMethodTable()->GetDomain();
 
     // We need to associate the contents of the new field with the object it is attached to 
     // in a way that mimics the lifetime behavior of a normal field reference.  Specifically,
     // when the object is collected, the field should also be collected (assuming there are no
     // other references), but references to the field shouldn't keep the object alive.
-    // To acheive this, we have introduced the concept of a "dependent handle" which provides
+    // To achieve this, we have introduced the concept of a "dependent handle" which provides
     // the appropriate semantics.  The dependent handle has a weak reference to a "primary object"
     // (the object getting a new field in this case), and a strong reference to a secondary object.
     // When the primary object is collected, the reference to the secondary object is released.
@@ -1245,8 +1249,12 @@ PTR_CBYTE EnCSyncBlockInfo::ResolveField(OBJECTREF thisPointer, EnCFieldDesc *pF
 
     // we found a matching entry in the list of EnCAddedFields
     // Get the EnC helper object (see the detailed description in Allocate above)
+#ifdef DACCESS_COMPILE
+    OBJECTREF pHelper = GetDependentHandleSecondary(pEntry->m_FieldData);
+#else // DACCESS_COMPILE
     IGCHandleManager *mgr = GCHandleUtilities::GetGCHandleManager();
     OBJECTREF pHelper = ObjectToOBJECTREF(mgr->GetDependentHandleSecondary(pEntry->m_FieldData));
+#endif // DACCESS_COMPILE
     _ASSERTE(pHelper != NULL);
 
     FieldDesc *pHelperFieldDesc = NULL;
@@ -1359,7 +1367,6 @@ void EnCSyncBlockInfo::Cleanup()
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -1390,7 +1397,6 @@ EnCAddedStaticField *EnCAddedStaticField::Allocate(EnCFieldDesc *pFD)
     }
     CONTRACTL_END;
 
-    _ASSERTE(!pFD->GetEnclosingMethodTable()->IsDomainNeutral());
     AppDomain *pDomain = (AppDomain*) pFD->GetApproxEnclosingMethodTable()->GetDomain();
 
     // Compute the size of the fieldData entry

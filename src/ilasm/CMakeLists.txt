@@ -24,7 +24,24 @@ set(ILASM_SOURCES
   assembler.cpp
   prebuilt/asmparse.cpp
 )
+
+set(ILASM_HEADERS
+  asmenum.h
+  asmman.hpp
+  asmparse.h
+  asmtemplates.h
+  assembler.h
+  binstr.h
+  class.hpp
+  ilasmpch.h
+  method.hpp
+  nvpair.h
+  typar.hpp
+)
+
 if(WIN32)
+  list(APPEND ILASM_SOURCES ${ILASM_HEADERS})
+
   set(ILASM_RESOURCES Native.rc)
   add_definitions(-DFX_VER_INTERNALNAME_STR=ilasm.exe)
 endif(WIN32)
@@ -34,8 +51,8 @@ if(CLR_CMAKE_PLATFORM_UNIX)
   # Need generate a right form of asmparse.cpp to avoid the following options.
   # Clang also produces a bad-codegen on this prebuilt file with optimization.
   # https://github.com/dotnet/coreclr/issues/2305
-  add_compile_options(-Wno-delete-non-virtual-dtor)
-  add_compile_options(-Wno-deprecated-register)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-delete-non-virtual-dtor")
+  add_compile_options(-Wno-register)
   add_compile_options(-Wno-array-bounds)
   add_compile_options(-Wno-unused-label)
   set_source_files_properties( prebuilt/asmparse.cpp PROPERTIES COMPILE_FLAGS "-O0" )
@@ -81,4 +98,3 @@ else()
 endif(CLR_CMAKE_PLATFORM_UNIX)
 
 install_clr(ilasm)
-

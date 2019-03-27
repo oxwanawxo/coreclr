@@ -259,14 +259,18 @@ GCInfo::WriteBarrierForm GCInfo::gcIsWriteBarrierCandidate(GenTree* tgt, GenTree
     switch (tgt->gtOper)
     {
 
-#ifndef LEGACY_BACKEND
         case GT_STOREIND:
-#endif               // !LEGACY_BACKEND
         case GT_IND: /* Could be the managed heap */
             if (tgt->TypeGet() == TYP_BYREF)
             {
                 // Byref values cannot be in managed heap.
                 // This case occurs for Span<T>.
+                return WBF_NoBarrier;
+            }
+            if (tgt->gtFlags & GTF_IND_TGT_NOT_HEAP)
+            {
+                // This indirection is not from to the heap.
+                // This case occurs for stack-allocated objects.
                 return WBF_NoBarrier;
             }
             return gcWriteBarrierFormFromTargetAddress(tgt->gtOp.gtOp1);
@@ -278,8 +282,7 @@ GCInfo::WriteBarrierForm GCInfo::gcIsWriteBarrierCandidate(GenTree* tgt, GenTree
         case GT_CLS_VAR:
             return WBF_BarrierUnchecked;
 
-        case GT_REG_VAR: /* Definitely not in the managed heap  */
-        case GT_LCL_VAR:
+        case GT_LCL_VAR: /* Definitely not in the managed heap  */
         case GT_LCL_FLD:
         case GT_STORE_LCL_VAR:
         case GT_STORE_LCL_FLD:
@@ -294,44 +297,12 @@ GCInfo::WriteBarrierForm GCInfo::gcIsWriteBarrierCandidate(GenTree* tgt, GenTree
     return WBF_NoBarrier;
 }
 
-bool GCInfo::gcIsWriteBarrierAsgNode(GenTree* op)
+bool GCInfo::gcIsWriteBarrierStoreIndNode(GenTree* op)
 {
-    if (op->gtOper == GT_ASG)
-    {
-        return gcIsWriteBarrierCandidate(op->gtOp.gtOp1, op->gtOp.gtOp2) != WBF_NoBarrier;
-    }
-#ifndef LEGACY_BACKEND
-    else if (op->gtOper == GT_STOREIND)
-    {
-        return gcIsWriteBarrierCandidate(op, op->gtOp.gtOp2) != WBF_NoBarrier;
-    }
-#endif // !LEGACY_BACKEND
-    else
-    {
-        return false;
-    }
-}
+    assert(op->OperIs(GT_STOREIND));
 
-/*****************************************************************************/
-/*****************************************************************************
- *
- *  If the given tree value is sitting in a register, free it now.
- */
-
-#ifdef LEGACY_BACKEND
-void GCInfo::gcMarkRegPtrVal(GenTree* tree)
-{
-    if (varTypeIsGC(tree->TypeGet()))
-    {
-        if (tree->gtOper == GT_LCL_VAR)
-            compiler->codeGen->genMarkLclVar(tree);
-        if (tree->InReg())
-        {
-            gcMarkRegSetNpt(genRegMask(tree->gtRegNum));
-        }
-    }
+    return gcIsWriteBarrierCandidate(op, op->gtOp.gtOp2) != WBF_NoBarrier;
 }
-#endif // LEGACY_BACKEND
 
 /*****************************************************************************/
 /*****************************************************************************
@@ -433,11 +404,7 @@ void GCInfo::gcCountForHeader(UNALIGNED unsigned int* untrackedCount, UNALIGNED 
                 /* Has this argument been fully enregistered? */
                 CLANG_FORMAT_COMMENT_ANCHOR;
 
-#ifndef LEGACY_BACKEND
                 if (!varDsc->lvOnFrame)
-#else  // LEGACY_BACKEND
-                if (varDsc->lvRegister)
-#endif // LEGACY_BACKEND
                 {
                     /* if a CEE_JMP has been used, then we need to report all the arguments
                        even if they are enregistered, since we will be using this value
@@ -456,7 +423,7 @@ void GCInfo::gcCountForHeader(UNALIGNED unsigned int* untrackedCount, UNALIGNED 
                         /* If this non-enregistered pointer arg is never
                          * used, we don't need to report it
                          */
-                        assert(varDsc->lvRefCnt == 0);
+                        assert(varDsc->lvRefCnt() == 0);
                         continue;
                     }
                     else if (varDsc->lvIsRegArg && varDsc->lvTracked)
@@ -528,8 +495,8 @@ void GCInfo::gcCountForHeader(UNALIGNED unsigned int* untrackedCount, UNALIGNED 
 
     /* Also count spill temps that hold pointers */
 
-    assert(compiler->tmpAllFree());
-    for (TempDsc* tempThis = compiler->tmpListBeg(); tempThis != nullptr; tempThis = compiler->tmpListNxt(tempThis))
+    assert(regSet->tmpAllFree());
+    for (TempDsc* tempThis = regSet->tmpListBeg(); tempThis != nullptr; tempThis = regSet->tmpListNxt(tempThis))
     {
         if (varTypeIsGC(tempThis->tdTempType()) == false)
         {
@@ -671,8 +638,6 @@ void GCInfo::gcRegPtrSetInit()
 
 GCInfo::WriteBarrierForm GCInfo::gcWriteBarrierFormFromTargetAddress(GenTree* tgtAddr)
 {
-    GCInfo::WriteBarrierForm result = GCInfo::WBF_BarrierUnknown; // Default case, we have no information.
-
     // If we store through an int to a GC_REF field, we'll assume that needs to use a checked barriers.
     if (tgtAddr->TypeGet() == TYP_I_IMPL)
     {
@@ -742,18 +707,9 @@ GCInfo::WriteBarrierForm GCInfo::gcWriteBarrierFormFromTargetAddress(GenTree* tg
         // No need for a GC barrier when writing to a local variable.
         return GCInfo::WBF_NoBarrier;
     }
-    if (tgtAddr->OperGet() == GT_LCL_VAR || tgtAddr->OperGet() == GT_REG_VAR)
+    if (tgtAddr->OperGet() == GT_LCL_VAR)
     {
-        unsigned lclNum = 0;
-        if (tgtAddr->gtOper == GT_LCL_VAR)
-        {
-            lclNum = tgtAddr->gtLclVar.gtLclNum;
-        }
-        else
-        {
-            assert(tgtAddr->gtOper == GT_REG_VAR);
-            lclNum = tgtAddr->gtRegVar.gtLclNum;
-        }
+        unsigned lclNum = tgtAddr->AsLclVar()->GetLclNum();
 
         LclVarDsc* varDsc = &compiler->lvaTable[lclNum];
 
@@ -801,7 +757,6 @@ GCInfo::WriteBarrierForm GCInfo::gcWriteBarrierFormFromTargetAddress(GenTree* tg
     return GCInfo::WBF_BarrierUnknown;
 }
 
-#ifndef LEGACY_BACKEND
 //------------------------------------------------------------------------
 // gcUpdateForRegVarMove: Update the masks when a variable is moved
 //
@@ -868,7 +823,6 @@ void GCInfo::gcUpdateForRegVarMove(regMaskTP srcMask, regMaskTP dstMask, LclVarD
         VarSetOps::AddElemD(compiler, gcVarPtrSetCur, varDsc->lvVarIndex);
     }
 }
-#endif // !LEGACY_BACKEND
 
 /*****************************************************************************/
 /*****************************************************************************/

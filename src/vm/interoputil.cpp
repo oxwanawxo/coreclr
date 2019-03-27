@@ -533,19 +533,6 @@ BOOL IsManagedObject(IUnknown *pIUnknown)
         // We found an existing CCW hence this is a managed exception.
         return TRUE;
     }
-    
-    // QI IManagedObject. Note AppX doesn't support IManagedObject
-    if (!AppX::IsAppXProcess())
-    {
-        SafeComHolder<IManagedObject> pManagedObject = NULL;
-        HRESULT hrLocal = SafeQueryInterface(pIUnknown, IID_IManagedObject, (IUnknown**)&pManagedObject);
-        LogInteropQI(pIUnknown, IID_IManagedObject, hrLocal, "QI to determine if IErrorInfo is a managed exception");
-        if(SUCCEEDED(hrLocal))
-        {
-            return TRUE;
-        }
-        
-    }
     return FALSE;
 }
 
@@ -662,6 +649,26 @@ HRESULT GetRestrictedErrorDetails(IRestrictedErrorInfo *pRestrictedErrorInfo, BS
     }
 
     return E_FAIL;
+}
+
+// HRESULT for CLR created IErrorInfo pointers are accessible
+// from the enclosing simple wrapper
+// This is in-proc only.
+HRESULT GetHRFromCLRErrorInfo(IErrorInfo* pErr)
+{
+    CONTRACTL
+    {
+        THROWS;
+        GC_TRIGGERS;
+        MODE_COOPERATIVE;
+        PRECONDITION(CheckPointer(pErr));
+        PRECONDITION(IsInProcCCWTearOff(pErr));
+        PRECONDITION(IsSimpleTearOff(pErr));
+    }
+    CONTRACTL_END;
+
+    SimpleComCallWrapper* pSimpleWrap = SimpleComCallWrapper::GetWrapperFromIP(pErr);
+    return pSimpleWrap->IErrorInfo_hr();
 }
 #endif // FEATURE_COMINTEROP
 
@@ -822,9 +829,12 @@ HRESULT SetupErrorInfo(OBJECTREF pThrownObject, BOOL bIsWinRTScenario /* = FALSE
 }
 
 //-------------------------------------------------------------------
-// Called from DLLMain, to initialize com specific data structures.
+ // Used to populate ExceptionData with COM data
 //-------------------------------------------------------------------
-void FillExceptionData(ExceptionData* pedata, IErrorInfo* pErrInfo, IRestrictedErrorInfo* pRestrictedErrorInfo)
+void FillExceptionData(
+    _Inout_ ExceptionData* pedata,
+    _In_ IErrorInfo* pErrInfo,
+    _In_opt_ IRestrictedErrorInfo* pRestrictedErrorInfo)
 {
     CONTRACTL
     {
@@ -887,9 +897,9 @@ void FillExceptionData(ExceptionData* pedata, IErrorInfo* pErrInfo, IRestrictedE
 #endif // CROSSGEN_COMPILE
 
 //---------------------------------------------------------------------------
-//returns true if pImport has DefaultDllImportSearchPathsAttribute
-//if true, also returns dllImportSearchPathFlag and searchAssemblyDirectory values.
-BOOL GetDefaultDllImportSearchPathsAttributeValue(IMDInternalImport *pImport, mdToken token, DWORD * pDllImportSearchPathFlag)
+// If pImport has the DefaultDllImportSearchPathsAttribute, 
+// set the value of the attribute in pDlImportSearchPathFlags and return true.
+BOOL GetDefaultDllImportSearchPathsAttributeValue(IMDInternalImport *pImport, mdToken token, DWORD * pDllImportSearchPathFlags)
 {
     CONTRACTL
     {
@@ -919,7 +929,7 @@ BOOL GetDefaultDllImportSearchPathsAttributeValue(IMDInternalImport *pImport, md
     args[0].InitEnum(SERIALIZATION_TYPE_U4, (ULONG)0);
 
     ParseKnownCaArgs(ca, args, lengthof(args));
-    *pDllImportSearchPathFlag = args[0].val.u4;
+    *pDllImportSearchPathFlags = args[0].val.u4;
     return TRUE;
 }
 
@@ -1408,13 +1418,10 @@ void SafeRelease_OnException(IUnknown* pUnk, RCW* pRCW
     {
         NOTHROW;
         MODE_ANY;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
 #ifndef CROSSGEN_COMPILE
-    BEGIN_SO_INTOLERANT_CODE_NO_THROW_CHECK_THREAD(return;)
-
 #ifdef MDA_SUPPORTED
     // Report the exception that was thrown.
     if (pProbe) 
@@ -1425,8 +1432,6 @@ void SafeRelease_OnException(IUnknown* pUnk, RCW* pRCW
     LogInterop(W("An exception occurred during release"));
     LogInteropLeak(pUnk);
 #endif // FEATURE_COMINTEROP
-
-    END_SO_INTOLERANT_CODE;
 #endif // CROSSGEN_COMPILE
 }
 
@@ -1440,7 +1445,6 @@ ULONG SafeReleasePreemp(IUnknown * pUnk, RCW * pRCW)
         NOTHROW;
         GC_TRIGGERS;
         MODE_PREEMPTIVE;
-        SO_TOLERANT;
         PRECONDITION(CheckPointer(pUnk, NULL_OK));
     } CONTRACTL_END;
 
@@ -1506,11 +1510,6 @@ ULONG SafeReleasePreemp(IUnknown * pUnk, RCW * pRCW)
     return res;
 }
 
-#if defined(_TARGET_AMD64_) && defined(_MSC_VER)
-// codegen bug on amd64 causes BBT to fail for the following function.  as a
-// workaround I have disabled optimizations for it until we get an updated toolset.
-#pragma optimize( "", off )
-#endif
 //--------------------------------------------------------------------------------
 // Release helper, enables and disables GC during call-outs
 ULONG SafeRelease(IUnknown* pUnk, RCW* pRCW)
@@ -1519,7 +1518,6 @@ ULONG SafeRelease(IUnknown* pUnk, RCW* pRCW)
         NOTHROW;
         GC_TRIGGERS;
         MODE_ANY;
-        SO_TOLERANT;
         PRECONDITION(CheckPointer(pUnk, NULL_OK));
     } CONTRACTL_END;
 
@@ -1587,10 +1585,6 @@ ULONG SafeRelease(IUnknown* pUnk, RCW* pRCW)
 
     return res;
 }
-#if defined(_TARGET_AMD64_) && defined(_MSC_VER)
-// turn optimizations back on
-#pragma optimize( "", on )
-#endif
 
 #include <optdefault.h>
 
@@ -1615,7 +1609,7 @@ BOOL CanCastComObject(OBJECTREF obj, MethodTable * pTargetMT)
     }
     else
     {
-        return obj->GetTrueMethodTable()->CanCastToClass(pTargetMT);
+        return obj->GetMethodTable()->CanCastToClass(pTargetMT);
     }
 }
 
@@ -1646,7 +1640,6 @@ BOOL IsComObjectClass(TypeHandle type)
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
 
@@ -1675,7 +1668,6 @@ ReadBestFitCustomAttribute(MethodDesc* pMD, BOOL* BestFit, BOOL* ThrowOnUnmappab
     {
         NOTHROW;
         GC_NOTRIGGER;
-        SO_TOLERANT;
         MODE_ANY;
     }
     CONTRACTL_END;
@@ -1697,7 +1689,6 @@ ReadBestFitCustomAttribute(IMDInternalImport* pInternalImport, mdTypeDef cl, BOO
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        SO_TOLERANT;
         PRECONDITION(CheckPointer(pInternalImport));
     }
     CONTRACTL_END;
@@ -1824,9 +1815,50 @@ int InternalWideToAnsi(__in_ecount(iNumWideChars) LPCWSTR szWideString, int iNum
     return retval;
 }
 
+namespace
+{
+    HRESULT TryParseClassInterfaceAttribute(
+        _In_ IMDInternalImport *import,
+        _In_ mdToken tkObj,
+        _Out_ CorClassIfaceAttr *val)
+    {
+        CONTRACTL
+        {
+            NOTHROW;
+            GC_TRIGGERS;
+            MODE_ANY;
+            PRECONDITION(CheckPointer(import));
+            PRECONDITION(CheckPointer(val));
+        }
+        CONTRACTL_END
+
+        const BYTE *pVal = nullptr;
+        ULONG cbVal = 0;
+        HRESULT hr = import->GetCustomAttributeByName(tkObj, INTEROP_CLASSINTERFACE_TYPE, (const void**)&pVal, &cbVal);
+        if (hr != S_OK)
+        {
+            *val = clsIfNone;
+            return S_FALSE;
+        }
+
+        CustomAttributeParser cap(pVal, cbVal);
+        if (FAILED(cap.ValidateProlog()))
+            return COR_E_BADIMAGEFORMAT;
+
+        U1 u1;
+        if (FAILED(cap.GetU1(&u1)))
+            return COR_E_BADIMAGEFORMAT;
+
+        *val = (CorClassIfaceAttr)(u1);
+        _ASSERTE(*val < clsIfLast);
+
+        return S_OK;
+    }
+}
+
 //---------------------------------------------------------
 // Read the ClassInterfaceType custom attribute info from 
-// both assembly level and interface level
+// both assembly level and class level
 //---------------------------------------------------------
 CorClassIfaceAttr ReadClassInterfaceTypeCustomAttribute(TypeHandle type)
 {
@@ -1839,55 +1871,27 @@ CorClassIfaceAttr ReadClassInterfaceTypeCustomAttribute(TypeHandle type)
     }
     CONTRACTL_END
 
-    const BYTE *pVal;
-    ULONG cbVal;
-
-    if (!type.GetMethodTable()->IsWinRTObjectType() && !type.GetMethodTable()->IsExportedToWinRT()) // ignore classic COM interop CA on WinRT types
+    // Ignore classic COM interop CA on WinRT types
+    if (!type.GetMethodTable()->IsWinRTObjectType() && !type.GetMethodTable()->IsExportedToWinRT())
     {
+        CorClassIfaceAttr attrValueMaybe;
+
         // First look for the class interface attribute at the class level.
-        HRESULT hr = type.GetMethodTable()->GetMDImport()->GetCustomAttributeByName(type.GetCl(), INTEROP_CLASSINTERFACE_TYPE, (const void**)&pVal, &cbVal);
-        if (hr == S_OK)
+        HRESULT hr = TryParseClassInterfaceAttribute(type.GetMethodTable()->GetMDImport(), type.GetCl(), &attrValueMaybe);
+        if (FAILED(hr))
+            ThrowHR(hr, BFA_BAD_CLASS_INT_CA_FORMAT);
+
+        if (hr == S_FALSE)
         {
-            CustomAttributeParser cap(pVal, cbVal);
-            U1 u1;
-
-            if (FAILED(cap.ValidateProlog()))
-            {
-                ThrowHR(COR_E_BADIMAGEFORMAT, BFA_BAD_CLASS_INT_CA_FORMAT);
-        }
-            if (FAILED(cap.GetU1(&u1)))
-            {
-                ThrowHR(COR_E_BADIMAGEFORMAT, BFA_BAD_CLASS_INT_CA_FORMAT);
-            }
-            if ((CorClassIfaceAttr)(u1) < clsIfLast)
-            {
-                return (CorClassIfaceAttr)(u1);
-            }
+            // Check the class interface attribute at the assembly level.
+            Assembly *pAssembly = type.GetAssembly();
+            hr = TryParseClassInterfaceAttribute(pAssembly->GetManifestImport(), pAssembly->GetManifestToken(), &attrValueMaybe);
+            if (FAILED(hr))
+                ThrowHR(hr, BFA_BAD_CLASS_INT_CA_FORMAT);
         }
 
-        // If we haven't found the class interface attribute at the class level then look at the
-        // assembly level.
-        Assembly *pAssembly = type.GetAssembly();
-        hr = pAssembly->GetManifestImport()->GetCustomAttributeByName(pAssembly->GetManifestToken(), INTEROP_CLASSINTERFACE_TYPE, (const void**)&pVal, &cbVal);
-        IfFailThrow(hr);
         if (hr == S_OK)
-        {
-            CustomAttributeParser cap(pVal, cbVal);
-            U1 u1;
-
-            if (FAILED(cap.ValidateProlog()))
-            {
-                ThrowHR(COR_E_BADIMAGEFORMAT, BFA_BAD_CLASS_INT_CA_FORMAT);
-            }
-            if (FAILED(cap.GetU1(&u1)))
-            {
-                ThrowHR(COR_E_BADIMAGEFORMAT, BFA_BAD_CLASS_INT_CA_FORMAT);
-            }
-            if ((CorClassIfaceAttr)(u1) < clsIfLast)
-            {
-                return (CorClassIfaceAttr)(u1);
-            }
-        }
+            return attrValueMaybe;
     }
 
     return DEFAULT_CLASS_INTERFACE_TYPE;
@@ -1938,7 +1942,6 @@ HRESULT SafeQueryInterface(IUnknown* pUnk, REFIID riid, IUnknown** pResUnk)
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_TRIGGERS;
     STATIC_CONTRACT_MODE_ANY;
-    STATIC_CONTRACT_SO_TOLERANT;
     _ASSERTE(pUnk);
     _ASSERTE(pResUnk);
 
@@ -1950,7 +1953,6 @@ HRESULT SafeQueryInterface(IUnknown* pUnk, REFIID riid, IUnknown** pResUnk)
     GCX_PREEMP_NO_DTOR_HAVE_THREAD(pThread);
 
     BEGIN_CONTRACT_VIOLATION(ThrowsViolation); // message pump could happen, so arbitrary managed code could run
-    BEGIN_SO_TOLERANT_CODE(pThread);
 
     struct Param { HRESULT * const hr; IUnknown** const pUnk; REFIID riid; IUnknown*** const pResUnk; } param = { &hr, &pUnk, riid, &pResUnk };
 #define PAL_TRY_ARG(argName) (*(pParam->argName))
@@ -1972,7 +1974,6 @@ HRESULT SafeQueryInterface(IUnknown* pUnk, REFIID riid, IUnknown** pResUnk)
 #undef PAL_TRY_ARG
 #undef PAL_TRY_REFARG
 
-    END_SO_TOLERANT_CODE;
     END_CONTRACT_VIOLATION;
 
     LOG((LF_INTEROP, LL_EVERYTHING, hr == S_OK ? "QI Succeeded\n" : "QI Failed\n")); 
@@ -1999,7 +2000,6 @@ HRESULT SafeQueryInterfacePreemp(IUnknown* pUnk, REFIID riid, IUnknown** pResUnk
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_TRIGGERS;
     STATIC_CONTRACT_MODE_PREEMPTIVE;
-    STATIC_CONTRACT_SO_TOLERANT;
     _ASSERTE(pUnk);
     _ASSERTE(pResUnk);
 
@@ -2009,7 +2009,6 @@ HRESULT SafeQueryInterfacePreemp(IUnknown* pUnk, REFIID riid, IUnknown** pResUnk
     HRESULT hr = E_FAIL;
 
     BEGIN_CONTRACT_VIOLATION(ThrowsViolation); // message pump could happen, so arbitrary managed code could run
-    BEGIN_SO_TOLERANT_CODE(pThread);
 
     struct Param { HRESULT * const hr; IUnknown** const pUnk; REFIID riid; IUnknown*** const pResUnk; } param = { &hr, &pUnk, riid, &pResUnk };
 #define PAL_TRY_ARG(argName) (*(pParam->argName))
@@ -2031,9 +2030,7 @@ HRESULT SafeQueryInterfacePreemp(IUnknown* pUnk, REFIID riid, IUnknown** pResUnk
 #undef PAL_TRY_ARG
 #undef PAL_TRY_REFARG
 
-    END_SO_TOLERANT_CODE;
     END_CONTRACT_VIOLATION;
-
 
     LOG((LF_INTEROP, LL_EVERYTHING, hr == S_OK ? "QI Succeeded\n" : "QI Failed\n")); 
 
@@ -2049,51 +2046,6 @@ HRESULT SafeQueryInterfacePreemp(IUnknown* pUnk, REFIID riid, IUnknown** pResUnk
 #include <optdefault.h>
 
 #ifdef FEATURE_COMINTEROP
-
-// process unique GUID, every process has a unique GUID
-static Volatile<BSTR> bstrProcessGUID = NULL;
-
-// Global process GUID to identify the process
-BSTR GetProcessGUID()
-{
-    CONTRACT (BSTR)
-    {
-        NOTHROW;
-        GC_NOTRIGGER;
-        MODE_ANY;
-        POSTCONDITION(CheckPointer(RETVAL, NULL_OK));
-    }
-    CONTRACT_END;
-    
-    // See if we were beaten to it.
-    if (bstrProcessGUID.Load() == NULL)
-    {
-        // setup a process unique GUID
-        GUID processGUID = GUID_NULL;
-        HRESULT hr = CoCreateGuid(&processGUID);
-        _ASSERTE(hr == S_OK);
-        if (hr != S_OK)
-            RETURN NULL;
-
-        // This is a global memory alloc that will live as long as the process.
-        NewArrayHolder<WCHAR> guidstr = new (nothrow) WCHAR[48];
-        if (!guidstr)
-            RETURN NULL;
-        
-        int cbLen = GuidToLPWSTR (processGUID, guidstr, 46);
-        _ASSERTE(cbLen <= 46);
-        
-        // Save this new stub on the DelegateEEClass.       
-        if (FastInterlockCompareExchangePointer(bstrProcessGUID.GetPointer(), guidstr.GetValue(), NULL ) == NULL)
-        {
-            guidstr.SuppressRelease();
-        }
-        
-    }
-
-    RETURN bstrProcessGUID;
-}
-
 
 #ifndef CROSSGEN_COMPILE
 
@@ -2216,40 +2168,6 @@ void ReleaseRCWsInCaches(LPVOID pCtxCookie)
     }
 }
 
-// Out-of-line to keep SafeComHolder's required C++ prolog/epilog out of GetCCWfromIUnknown
-NOINLINE ComCallWrapper* GetCCWFromIUnknown_CrossDomain(IUnknown* pUnk, ComCallWrapper* pWrap, AppDomain* pDomain)
-{
-    CONTRACTL
-    {
-        NOTHROW;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END;
-
-    // We ignore PreferComInsteadOfManagedRemoting/ICustomQueryInterface if the CCW is from
-    // the current domain (we never create RCWs pointing to CCWs in the same domain).
-
-    if (pDomain && pDomain->GetPreferComInsteadOfManagedRemoting())
-    {
-        return NULL;
-    }
-
-    // If the user specifically does not support IManagedObject then don't do this bypass
-    if (pWrap && pWrap->GetSimpleWrapper() && pWrap->GetSimpleWrapper()->SupportsICustomQueryInterface())
-    {
-        SafeComHolder<IUnknown> pUnk = ComCallWrapper::GetComIPFromCCWNoThrow(
-                                            pWrap, IID_IManagedObject, NULL, 
-                                            GetComIPFromCCW::CheckVisibility);
-        if(!pUnk)
-        {
-            // They bypassed QueryInterface so don't collapse this IUnknown to the underlying managed object
-            pWrap = NULL;
-        }
-    }
-    return pWrap;
-}
-
 //--------------------------------------------------------------------------------
 // Marshalling Helpers
 //--------------------------------------------------------------------------------
@@ -2278,27 +2196,15 @@ ComCallWrapper* GetCCWFromIUnknown(IUnknown* pUnk, BOOL bEnableCustomization)
         {
             pWrap = NULL;
         }
-
-        // Only check for an interface if caller set bEnableCustomization to TRUE
-        if (bEnableCustomization)
-        {
-            AppDomain *pDomain = GetAppDomain();
-            if (pDomain == NULL || pWrap == NULL || pDomain->GetId() != pWrap->GetDomainID())
-            {
-                pWrap = GetCCWFromIUnknown_CrossDomain(pUnk, pWrap, pDomain);
-            }
-        }
     }
     
     RETURN pWrap;
 }
 
-
-HRESULT LoadRegTypeLibWithFlags(REFGUID guid, 
-                                unsigned short wVerMajor,
-                                unsigned short wVerMinor,
-                                int flags,
-                                ITypeLib**  pptlib)
+HRESULT LoadRegTypeLib(_In_ REFGUID guid,
+                       _In_ unsigned short wVerMajor,
+                       _In_ unsigned short wVerMinor,
+                       _Outptr_ ITypeLib **pptlib)
 {
     CONTRACTL
     {
@@ -2318,6 +2224,15 @@ HRESULT LoadRegTypeLibWithFlags(REFGUID guid,
     EX_TRY
     {
         hr = QueryPathOfRegTypeLib(guid, wVerMajor, wVerMinor, LOCALE_USER_DEFAULT, &wzPath);
+        if (SUCCEEDED(hr))
+        {
+#ifdef _WIN64
+            REGKIND rk = (REGKIND)(REGKIND_NONE | LOAD_TLB_AS_64BIT);
+#else
+            REGKIND rk = (REGKIND)(REGKIND_NONE | LOAD_TLB_AS_32BIT);
+#endif // _WIN64
+            hr = LoadTypeLibEx(wzPath, rk, pptlib);
+        }
     }
     EX_CATCH
     {
@@ -2325,50 +2240,7 @@ HRESULT LoadRegTypeLibWithFlags(REFGUID guid,
     }
     EX_END_CATCH(SwallowAllExceptions);
 
-    if (FAILED(hr))
-        return hr;
-
-    hr = LoadTypeLibExWithFlags(wzPath, flags, pptlib);
-    
     return hr;
-}
-
-
-HRESULT LoadTypeLibExWithFlags(LPCOLESTR  szFile, 
-                               int  flags,
-                               ITypeLib**  pptlib)
-{
-    CONTRACTL
-    {
-        NOTHROW;
-        GC_TRIGGERS;
-        MODE_ANY;
-    }
-    CONTRACTL_END;
-
-    return E_FAIL;
-}
-
-
-
-// HRESULT for CLR created IErrorInfo pointers are accessible
-// from the enclosing simple wrapper
-// This is in-proc only.
-HRESULT GetHRFromCLRErrorInfo(IErrorInfo* pErr)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_COOPERATIVE;
-        PRECONDITION(CheckPointer(pErr));
-        PRECONDITION(IsInProcCCWTearOff(pErr));
-        PRECONDITION(IsSimpleTearOff(pErr));
-    }
-    CONTRACTL_END;
-    
-    SimpleComCallWrapper* pSimpleWrap = SimpleComCallWrapper::GetWrapperFromIP(pErr);
-    return pSimpleWrap->IErrorInfo_hr();
 }
 
 VOID EnsureComStarted(BOOL fCoInitCurrentThread)
@@ -2408,7 +2280,6 @@ HRESULT EnsureComStartedNoThrow(BOOL fCoInitCurrentThread)
         NOTHROW;
         GC_TRIGGERS;
         MODE_ANY;
-        SO_TOLERANT;
         PRECONDITION(g_fEEStarted);
         PRECONDITION(GetThread() != NULL);      // Should always be inside BEGIN_EXTERNAL_ENTRYPOINT
     }
@@ -2421,11 +2292,7 @@ HRESULT EnsureComStartedNoThrow(BOOL fCoInitCurrentThread)
         GCX_COOP();
         EX_TRY
         {
-            BEGIN_SO_INTOLERANT_CODE(GetThread());
-
             EnsureComStarted(fCoInitCurrentThread);
-
-            END_SO_INTOLERANT_CODE;
         }
         EX_CATCH_HRESULT(hr);
     }
@@ -2488,7 +2355,6 @@ ULONG SafeAddRef(IUnknown* pUnk)
         NOTHROW;
         GC_TRIGGERS;
         MODE_ANY;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
     
@@ -2520,7 +2386,6 @@ ULONG SafeAddRefPreemp(IUnknown* pUnk)
         NOTHROW;
         GC_TRIGGERS;
         MODE_PREEMPTIVE;
-        SO_TOLERANT;
     }
     CONTRACTL_END;
     
@@ -2547,7 +2412,7 @@ ULONG SafeAddRefPreemp(IUnknown* pUnk)
 // marshaling scenarios where we can assume unmanaged code permissions
 // (and hence are already in a position of trusting unmanaged data.)
 
-HRESULT ClrSafeArrayGetVartype(SAFEARRAY *psa, VARTYPE *pvt)
+HRESULT ClrSafeArrayGetVartype(_In_ SAFEARRAY *psa, _Out_ VARTYPE *pvt)
 {
     CONTRACTL
     {
@@ -2561,7 +2426,7 @@ HRESULT ClrSafeArrayGetVartype(SAFEARRAY *psa, VARTYPE *pvt)
 
     if (pvt == NULL || psa == NULL)
     {
-       // with both args null this is what oleaut would return on call to SafeArrayGetVarType
+       // This is the HRESULT returned by OLEAUT if either of the args are null.
        return E_INVALIDARG;
     }
     
@@ -3372,7 +3237,7 @@ void ConvertOleColorToSystemColor(OLE_COLOR SrcOleColor, SYSTEMCOLOR *pDestSysCo
 
     // Retrieve the method desc to use for the current AD.
     MethodDesc *pOleColorToSystemColorMD = 
-        GetAppDomain()->GetMarshalingData()->GetOleColorMarshalingInfo()->GetOleColorToSystemColorMD();
+        GetAppDomain()->GetLoaderAllocator()->GetMarshalingData()->GetOleColorMarshalingInfo()->GetOleColorToSystemColorMD();
 
     MethodDescCallSite oleColorToSystemColor(pOleColorToSystemColorMD);
 
@@ -3401,7 +3266,7 @@ OLE_COLOR ConvertSystemColorToOleColor(OBJECTREF *pSrcObj)
     
     // Retrieve the method desc to use for the current AD.
     MethodDesc *pSystemColorToOleColorMD = 
-        GetAppDomain()->GetMarshalingData()->GetOleColorMarshalingInfo()->GetSystemColorToOleColorMD();
+        GetAppDomain()->GetLoaderAllocator()->GetMarshalingData()->GetOleColorMarshalingInfo()->GetSystemColorToOleColorMD();
     MethodDescCallSite systemColorToOleColor(pSystemColorToOleColorMD);
 
     // Set up the args and call the method.
@@ -3621,9 +3486,9 @@ ErrExit:
 //--------------------------------------------------------------------------------
 // Helper to get the version of the typelib that is created from an assembly.
 HRESULT GetTypeLibVersionForAssembly(
-    Assembly    *pAssembly, 
-    USHORT      *pMajorVersion,
-    USHORT      *pMinorVersion)
+    _In_ Assembly *pAssembly,
+    _Out_ USHORT *pMajorVersion,
+    _Out_ USHORT *pMinorVersion)
 {
     CONTRACTL
     {
@@ -3636,22 +3501,18 @@ HRESULT GetTypeLibVersionForAssembly(
     }
     CONTRACTL_END;
 
-    HRESULT     hr = S_OK;              // A result.
-    const BYTE  *pbData = NULL;         // Pointer to a custom attribute data.
-    ULONG       cbData = 0;             // Size of custom attribute data.
+    HRESULT hr;
+    const BYTE *pbData = nullptr;
+    ULONG cbData = 0;
 
-    if (pAssembly->IsWinMD())
-    {
-        // ignore classic COM interop CA on .winmd
-        hr = S_FALSE;
-    }
-    else
+    if (!pAssembly->IsWinMD())
     {
         // Check to see if the TypeLibVersionAttribute is set.
-        IfFailGo(pAssembly->GetManifestImport()->GetCustomAttributeByName(TokenFromRid(1, mdtAssembly), INTEROP_TYPELIBVERSION_TYPE, (const void**)&pbData, &cbData));
+        IfFailRet(pAssembly->GetManifestImport()->GetCustomAttributeByName(TokenFromRid(1, mdtAssembly), INTEROP_TYPELIBVERSION_TYPE, (const void**)&pbData, &cbData));
     }
-    
-    if (hr == S_OK && cbData >= (2 + 2 * sizeof(INT32)))
+
+    // For attribute contents, see https://docs.microsoft.com/dotnet/api/system.runtime.interopservices.typelibversionattribute
+    if (cbData >= (2 + 2 * sizeof(UINT32)))
     {
         CustomAttributeParser cap(pbData, cbData);
         IfFailRet(cap.SkipProlog());
@@ -3666,17 +3527,15 @@ HRESULT GetTypeLibVersionForAssembly(
     else
     {
         // Use the assembly's major and minor version number.
-        hr = S_OK;
-        pAssembly->GetVersion(pMajorVersion, pMinorVersion, NULL, NULL);
+        IfFailRet(pAssembly->GetVersion(pMajorVersion, pMinorVersion, nullptr, nullptr));
     }
 
-    // VB6 doesn't deal very well with a typelib a version of 0.0 so if that happens
-    // we change it to 1.0.
+    // Some system don't handle a typelib with a version of 0.0.
+    // When that happens, change it to 1.0.
     if (*pMajorVersion == 0 && *pMinorVersion == 0)
         *pMajorVersion = 1;
-    
-ErrExit:
-    return hr;
+
+    return S_OK;
 } // HRESULT TypeLibExporter::GetTypeLibVersionFromAssembly()
 
 #endif //CROSSGEN_COMPILE
@@ -3716,29 +3575,29 @@ BOOL IsMethodVisibleFromCom(MethodDesc *pMD)
 }
 
 //---------------------------------------------------------------------------
-// This method determines if a type is visible from COM or not based on 
+// This method determines if a type is visible from COM or not based on
 // its visibility. This version of the method works with a type handle.
 // This version will ignore a type's generic attributes.
 //
 // This API should *never* be called directly!!!
-BOOL SpecialIsGenericTypeVisibleFromCom(TypeHandle hndType)
+static BOOL SpecialIsGenericTypeVisibleFromCom(TypeHandle hndType)
 {
     CONTRACTL
     {
         NOTHROW;
         GC_NOTRIGGER;
         MODE_ANY;
-        PRECONDITION(!hndType.IsNull());        
+        PRECONDITION(!hndType.IsNull());
     }
     CONTRACTL_END;
-    
+
     DWORD                   dwFlags;
     mdTypeDef               tdEnclosingType;
     HRESULT                 hr;
     const BYTE *            pVal;
     ULONG                   cbVal;
-    MethodTable *           pMT = hndType.GetMethodTable(); 
-    _ASSERTE(pMT);    
+    MethodTable *           pMT = hndType.GetMethodTable();
+    _ASSERTE(pMT);
 
     mdTypeDef               mdType = pMT->GetCl();
     IMDInternalImport *     pInternalImport = pMT->GetMDImport();
@@ -3755,14 +3614,14 @@ BOOL SpecialIsGenericTypeVisibleFromCom(TypeHandle hndType)
     // If the type is an array, then it is not visible from COM.
     if (pMT->IsArray())
         return FALSE;
-    
+
     // Retrieve the flags for the current type.
     tdEnclosingType = mdType;
     if (FAILED(pInternalImport->GetTypeDefProps(tdEnclosingType, &dwFlags, 0)))
     {
         return FALSE;
     }
-    
+
     // Handle nested types.
     while (IsTdNestedPublic(dwFlags))
     {
@@ -3771,14 +3630,14 @@ BOOL SpecialIsGenericTypeVisibleFromCom(TypeHandle hndType)
         {
             return FALSE;
         }
-        
+
         // Retrieve the flags for the enclosing type.
         if (FAILED(pInternalImport->GetTypeDefProps(tdEnclosingType, &dwFlags, 0)))
         {
             return FALSE;
         }
     }
-    
+
     // If the outermost type is not visible then the specified type is not visible.
     if (!IsTdPublic(dwFlags))
         return FALSE;
@@ -3817,7 +3676,6 @@ BOOL SpecialIsGenericTypeVisibleFromCom(TypeHandle hndType)
     return TRUE;
 }
 
-
 //---------------------------------------------------------------------------
 // This method determines if a type is visible from COM or not based on
 // its visibility. This version of the method works with a type handle.
@@ -3838,10 +3696,6 @@ BOOL IsTypeVisibleFromCom(TypeHandle hndType)
         if (hndType.HasInstantiation() || hndType.IsGenericVariable())
             return FALSE;
     }
-
-    // If the type is collectible, then it is not visible from COM.
-    if (hndType.GetLoaderAllocator()->IsCollectible())
-        return FALSE;
 
     return SpecialIsGenericTypeVisibleFromCom(hndType);
 }
@@ -3908,6 +3762,7 @@ BOOL MethodNeedsForwardComStub(MethodDesc *pMD, DataImage *pImage)
     return FALSE;
 }
 
+#ifdef FEATURE_PREJIT
 //---------------------------------------------------------------------------
 // Determines if a method is visible from COM in a way that requires a marshaling
 // stub, i.e. it allows early binding.
@@ -3993,6 +3848,7 @@ BOOL MethodNeedsReverseComStub(MethodDesc *pMD)
 
     return IsMethodVisibleFromCom(pMD);
 }
+#endif // FEATURE_PREJIT
 
 
 #ifndef CROSSGEN_COMPILE
@@ -4013,7 +3869,7 @@ BOOL IsComTargetValidForType(REFLECTCLASSBASEREF* pRefClassObj, OBJECTREF* pTarg
     
     MethodTable* pInvokedMT = (*pRefClassObj)->GetType().GetMethodTable();
 
-    MethodTable* pTargetMT = (*pTarget)->GetTrueMethodTable();
+    MethodTable* pTargetMT = (*pTarget)->GetMethodTable();
     _ASSERTE(pTargetMT);
     PREFIX_ASSUME(pInvokedMT != NULL);
 
@@ -4083,7 +3939,6 @@ static HRESULT InvokeExHelper(
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
     STATIC_CONTRACT_MODE_ANY;
-    STATIC_CONTRACT_SO_INTOLERANT;
 
     _ASSERTE(pDispEx != NULL);
 
@@ -4112,8 +3967,6 @@ static HRESULT InvokeExHelper(
     
     PAL_TRY(Param *, pParam, &param)
     {
-        BEGIN_SO_TOLERANT_CODE(GetThread());
-    
         pParam->hr = pParam->pDispEx->InvokeEx(pParam->MemberID,
                                                pParam->lcid,
                                                pParam->flags,
@@ -4121,8 +3974,6 @@ static HRESULT InvokeExHelper(
                                                pParam->pVarResult,
                                                pParam->pExcepInfo,
                                                pParam->pspCaller);
-
-        END_SO_TOLERANT_CODE;
     }
     PAL_EXCEPT_FILTER(CallOutFilter)
     {
@@ -4147,7 +3998,6 @@ static HRESULT InvokeHelper(
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_TRIGGERS;
     STATIC_CONTRACT_MODE_ANY;
-    STATIC_CONTRACT_SO_INTOLERANT;
 
     _ASSERTE(pDisp != NULL);
 
@@ -4180,8 +4030,6 @@ static HRESULT InvokeHelper(
 
     PAL_TRY(Param *, pParam, &param)
     {
-        BEGIN_SO_TOLERANT_CODE(GetThread());
-    
         pParam->hr = pParam->pDisp->Invoke(pParam->MemberID,
                                            pParam->riid,
                                            pParam->lcid,
@@ -4190,8 +4038,6 @@ static HRESULT InvokeHelper(
                                            pParam->pVarResult,
                                            pParam->pExcepInfo,
                                            pParam->piArgErr);
-
-        END_SO_TOLERANT_CODE;
     }
     PAL_EXCEPT_FILTER(CallOutFilter)
     {
@@ -4376,8 +4222,19 @@ public:
 //--------------------------------------------------------------------------------
 // InvokeDispMethod will convert a set of managed objects and call IDispatch.  The
 // result will be returned as a CLR Variant pointed to by pRetVal.
-void IUInvokeDispMethod(REFLECTCLASSBASEREF* pRefClassObj, OBJECTREF* pTarget, OBJECTREF* pName, DISPID *pMemberID,
-                        OBJECTREF* pArgs, OBJECTREF* pByrefModifiers, OBJECTREF* pNamedArgs, OBJECTREF* pRetVal, LCID lcid, WORD flags, BOOL bIgnoreReturn, BOOL bIgnoreCase)
+void IUInvokeDispMethod(
+    REFLECTCLASSBASEREF* pRefClassObj,
+    OBJECTREF* pTarget,
+    OBJECTREF* pName,
+    DISPID *pMemberID,
+    OBJECTREF* pArgs,
+    OBJECTREF* pByrefModifiers,
+    OBJECTREF* pNamedArgs,
+    OBJECTREF* pRetVal,
+    LCID lcid,
+    WORD flags,
+    BOOL bIgnoreReturn,
+    BOOL bIgnoreCase)
 {
     CONTRACTL
     {
@@ -4854,6 +4711,79 @@ void IUInvokeDispMethod(REFLECTCLASSBASEREF* pRefClassObj, OBJECTREF* pTarget, O
 }
 
 #if defined(FEATURE_COMINTEROP_UNMANAGED_ACTIVATION) && defined(FEATURE_CLASSIC_COMINTEROP)
+
+void GetComClassHelper(
+    _Out_ OBJECTREF *pRef,
+    _In_ EEClassFactoryInfoHashTable *pClassFactHash,
+    _In_ ClassFactoryInfo *pClassFactInfo,
+    _In_opt_ WCHAR *wszProgID)
+{
+    CONTRACTL
+    {
+        THROWS;
+        GC_TRIGGERS;
+        MODE_ANY;
+        INJECT_FAULT(ThrowOutOfMemory());
+        PRECONDITION(CheckPointer(pRef));
+        PRECONDITION(CheckPointer(pClassFactHash));
+        PRECONDITION(CheckPointer(pClassFactInfo));
+        PRECONDITION(CheckPointer(wszProgID, NULL_OK));
+    }
+    CONTRACTL_END;
+
+    OBJECTHANDLE hRef;
+    AppDomain *pDomain = GetAppDomain();
+
+    CrstHolder ch(pDomain->GetRefClassFactCrst());
+
+    // Check again.
+    if (pClassFactHash->GetValue(pClassFactInfo, (HashDatum *)&hRef))
+    {
+        *pRef = ObjectFromHandle(hRef);
+    }
+    else
+    {
+        //
+        // There is no managed class for this CLSID
+        // so we will create a ComClassFactory to
+        // represent it.
+        //
+
+        NewHolder<ComClassFactory> pComClsFac = ComClassFactoryCreator::Create(pClassFactInfo->m_clsid);
+        pComClsFac->SetManagedVersion();
+
+        NewArrayHolder<WCHAR> wszRefProgID = NULL;
+        if (wszProgID)
+        {
+            size_t len = wcslen(wszProgID)+1;
+            wszRefProgID = new WCHAR[len];
+            wcscpy_s(wszRefProgID, len, wszProgID);
+        }
+
+        NewArrayHolder<WCHAR> wszRefServer = NULL;
+        if (pClassFactInfo->m_strServerName)
+        {
+            size_t len = wcslen(pClassFactInfo->m_strServerName)+1;
+            wszRefServer = new WCHAR[len];
+            wcscpy_s(wszRefServer, len, pClassFactInfo->m_strServerName);
+        }
+
+        pComClsFac->Init(wszRefProgID, wszRefServer, NULL);
+        AllocateComClassObject(pComClsFac, pRef);
+
+        // Insert to hash.
+        hRef = pDomain->CreateHandle(*pRef);
+        pClassFactHash->InsertValue(pClassFactInfo, (LPVOID)hRef);
+
+        // Make sure the hash code is working.
+        _ASSERTE (pClassFactHash->GetValue(pClassFactInfo, (HashDatum *)&hRef));
+
+        wszRefProgID.SuppressRelease();
+        wszRefServer.SuppressRelease();
+        pComClsFac.SuppressRelease();
+    }
+}
+
 //-------------------------------------------------------------
 // returns a ComClass reflect class that wraps the IClassFactory
 void GetComClassFromProgID(STRINGREF srefProgID, STRINGREF srefServer, OBJECTREF *pRef)
@@ -5053,74 +4983,6 @@ void GetComClassFromCLSID(REFCLSID clsid, STRINGREF srefServer, OBJECTREF *pRef)
     _ASSERTE(*pRef != NULL);
 }
 
-void GetComClassHelper(OBJECTREF *pRef, EEClassFactoryInfoHashTable *pClassFactHash, ClassFactoryInfo *pClassFactInfo, __in_opt WCHAR *wszProgID)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_ANY;
-        INJECT_FAULT(ThrowOutOfMemory());
-        PRECONDITION(CheckPointer(pRef));
-        PRECONDITION(CheckPointer(pClassFactHash));
-        PRECONDITION(CheckPointer(pClassFactInfo));
-        PRECONDITION(CheckPointer(wszProgID, NULL_OK));
-    }
-    CONTRACTL_END;
-        
-    OBJECTHANDLE hRef;
-    AppDomain *pDomain = GetAppDomain();
-    
-    CrstHolder ch(pDomain->GetRefClassFactCrst());
-        
-    // Check again.
-    if (pClassFactHash->GetValue(pClassFactInfo, (HashDatum *)&hRef))
-    {
-        *pRef = ObjectFromHandle(hRef);
-    }
-    else
-    {
-        //
-        // There is no managed class for this CLSID
-        // so we will create a ComClassFactory to
-        // represent it.
-        //
-
-        NewHolder<ComClassFactory> pComClsFac = ComClassFactoryCreator::Create(pClassFactInfo->m_clsid);
-        pComClsFac->SetManagedVersion();
-        
-        NewArrayHolder<WCHAR> wszRefProgID = NULL;
-        if (wszProgID)
-        {
-            size_t len = wcslen(wszProgID)+1;
-            wszRefProgID = new WCHAR[len];
-            wcscpy_s(wszRefProgID, len, wszProgID);
-        }
-        
-        NewArrayHolder<WCHAR> wszRefServer = NULL;
-        if (pClassFactInfo->m_strServerName)
-        {
-            size_t len = wcslen(pClassFactInfo->m_strServerName)+1;
-            wszRefServer = new WCHAR[len];                
-            wcscpy_s(wszRefServer, len, pClassFactInfo->m_strServerName);
-        }
-
-        pComClsFac->Init(wszRefProgID, wszRefServer, NULL);
-        AllocateComClassObject(pComClsFac, pRef);
-
-        // Insert to hash.
-        hRef = pDomain->CreateHandle(*pRef);
-        pClassFactHash->InsertValue(pClassFactInfo, (LPVOID)hRef);
-        
-        // Make sure the hash code is working.
-        _ASSERTE (pClassFactHash->GetValue(pClassFactInfo, (HashDatum *)&hRef));
-
-        wszRefProgID.SuppressRelease();
-        wszRefServer.SuppressRelease();
-        pComClsFac.SuppressRelease();
-    }
-}
-
 #endif // FEATURE_COMINTEROP_UNMANAGED_ACTIVATION && FEATURE_CLASSIC_COMINTEROP
 
 #endif //#ifndef CROSSGEN_COMPILE
@@ -5161,11 +5023,11 @@ ClassFactoryBase *GetComClassFactory(MethodTable* pClassMT)
     if (pClsFac == NULL)
     {
         //
-        // Collectible types do not support com interop
+        // Collectible types do not support WinRT interop
         //
-        if (pClassMT->Collectible())
+        if (pClassMT->Collectible() && (pClassMT->IsExportedToWinRT() || pClassMT->IsProjectedFromWinRT()))
         {
-            COMPlusThrow(kNotSupportedException, W("NotSupported_CollectibleCOM"));
+            COMPlusThrow(kNotSupportedException, W("NotSupported_CollectibleWinRT"));
         }
 
         NewHolder<ClassFactoryBase> pNewFactory;
@@ -5212,7 +5074,7 @@ ClassFactoryBase *GetComClassFactory(MethodTable* pClassMT)
 
 
 //-------------------------------------------------------------------
-// BOOL InitializeComInterop()
+// void InitializeComInterop()
 // Called from EEStartup, to initialize com Interop specific data 
 // structures.
 //-------------------------------------------------------------------
@@ -5256,7 +5118,7 @@ TypeHandle GetWinRTType(SString* ssTypeName, BOOL bThrowIfNotFound)
     SString ssAssemblyName(SString::Utf8Literal, "WindowsRuntimeAssemblyName, ContentType=WindowsRuntime");
     DomainAssembly *pAssembly = LoadDomainAssembly(&ssAssemblyName, NULL, 
                                                    NULL, 
-                                                   bThrowIfNotFound, FALSE, ssTypeName);
+                                                   bThrowIfNotFound, ssTypeName);
     if (pAssembly != NULL)
     {
         typeHandle = TypeName::GetTypeFromAssembly(*ssTypeName, pAssembly->GetAssembly(), bThrowIfNotFound);
@@ -5709,7 +5571,7 @@ void WinRTGuidGenerator::PopulateNamesAppendNamePointers(MethodTable *pMT, SArra
     // Scan through strings, and build list of pointers to them. This assumes that the strings are seperated by a single null character
     PWSTR pszName = (PWSTR)pBuffer;
     pszNames = (PCWSTR*)(pBuffer + cbNamesOld);
-    for (COUNT_T i = 0, P; i < cNames; i++)
+    for (COUNT_T i = 0; i < cNames; i++)
     {
         pszNames[i] = pszName;
         pszName += wcslen(pszName) + 1;
@@ -5954,7 +5816,7 @@ MethodTable *WinRTInterfaceRedirector::GetWinRTTypeForRedirectedInterfaceIndex(W
         const NonMscorlibRedirectedInterfaceInfo *pInfo = &s_rNonMscorlibInterfaceInfos[id & ~NON_MSCORLIB_MARKER];
         SString assemblyQualifiedTypeName(SString::Utf8, pInfo->m_szWinRTInterfaceAssemblyQualifiedTypeName);
 
-        RETURN TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode(), FALSE).GetMethodTable();
+        RETURN TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode()).GetMethodTable();
     }
 }
 
@@ -5971,7 +5833,7 @@ MethodDesc *WinRTInterfaceRedirector::LoadMethodFromRedirectedAssembly(LPCUTF8 s
 
     SString assemblyQualifiedTypeName(SString::Utf8, szAssemblyQualifiedTypeName);
 
-    MethodTable *pMT = TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode(), FALSE).GetMethodTable();
+    MethodTable *pMT = TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode()).GetMethodTable();
     return MemberLoader::FindMethodByName(pMT, szMethodName);
 }
 
@@ -6240,13 +6102,13 @@ MethodTable *WinRTDelegateRedirector::GetWinRTTypeForRedirectedDelegateIndex(Win
     case WinMDAdapter::RedirectedTypeIndex_System_Collections_Specialized_NotifyCollectionChangedEventHandler:
     {
         SString assemblyQualifiedTypeName(SString::Utf8, NCCEHWINRT_ASM_QUAL_TYPE_NAME);
-        return TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode(), FALSE).GetMethodTable();
+        return TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode()).GetMethodTable();
     }
 
     case WinMDAdapter::RedirectedTypeIndex_System_ComponentModel_PropertyChangedEventHandler:
     {
         SString assemblyQualifiedTypeName(SString::Utf8, PCEHWINRT_ASM_QUAL_TYPE_NAME);
-        return TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode(), FALSE).GetMethodTable();
+        return TypeName::GetTypeFromAsmQualifiedName(assemblyQualifiedTypeName.GetUnicode()).GetMethodTable();
     }
 
     default:
@@ -6272,13 +6134,13 @@ VOID IntializeInteropLogging()
     g_TraceCount = g_pConfig->GetTraceWrapper();
 }
 
-VOID LogInterop(__in_z LPSTR szMsg)
+VOID LogInterop(__in_z LPCSTR szMsg)
 {
     LIMITED_METHOD_CONTRACT;
     LOG( (LF_INTEROP, LL_INFO10, "%s\n",szMsg) );
 }
 
-VOID LogInterop(__in_z LPWSTR wszMsg)
+VOID LogInterop(__in_z LPCWSTR wszMsg)
 {
     LIMITED_METHOD_CONTRACT;
     LOG( (LF_INTEROP, LL_INFO10, "%S\n", wszMsg) );
@@ -6514,7 +6376,6 @@ VOID LogInteropAddRef(IUnknown* pItf, ULONG cbRef, __in_z LPCSTR szMsg)
         GC_TRIGGERS;
         MODE_ANY;
         PRECONDITION(CheckPointer(pItf));
-        SO_TOLERANT;
     }
     CONTRACTL_END;
     
@@ -6548,7 +6409,6 @@ VOID LogInteropRelease(IUnknown* pItf, ULONG cbRef, __in_z LPCSTR szMsg)
         GC_NOTRIGGER;
         MODE_ANY;
         PRECONDITION(CheckPointer(pItf, NULL_OK));
-        SO_TOLERANT;
     }
     CONTRACTL_END;
     
@@ -6635,7 +6495,7 @@ void UnmarshalObjectFromInterface(OBJECTREF *ppObjectDest, IUnknown **ppUnkSrc, 
             // We only verify that the object supports the interface for non-WinRT scenarios because we
             // believe that the likelihood of improperly constructed programs is significantly lower
             // with WinRT and the Object::SupportsInterface check is very expensive.
-            if (!(*ppObjectDest)->IsTransparentProxy() && !Object::SupportsInterface(*ppObjectDest, pItfMT))
+            if (!Object::SupportsInterface(*ppObjectDest, pItfMT))
             {
                 COMPlusThrowInvalidCastException(ppObjectDest, TypeHandle(pItfMT));
             }
@@ -6831,80 +6691,12 @@ TypeHandle GetClassFromIInspectable(IUnknown* pUnk, bool *pfSupportsIInspectable
     RETURN classTypeHandle;
 }
 
-//--------------------------------------------------------------------------
-// switch objects for this wrapper
-// used by JIT&ObjectPooling to ensure a deactivated CCW can point to a new object
-// during reactivate
-//--------------------------------------------------------------------------
-BOOL ReconnectWrapper(OBJECTREF* pOldRef, OBJECTREF* pNewRef)
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-        MODE_COOPERATIVE;
-        PRECONDITION(CheckPointer(pOldRef));
-        PRECONDITION(CheckPointer(pNewRef));
-    }
-    CONTRACTL_END;
-
-    if (!(*pOldRef)->IsTransparentProxy())
-    {
-        COMPlusThrowArgumentException(W("oldtp"), W("Argument_NotATP"));
-    }
-    else if (!(*pNewRef)->IsTransparentProxy())
-    {
-        COMPlusThrowArgumentException(W("newtp"), W("Argument_NotATP"));
-    }
-
-    _ASSERTE((*pOldRef)->GetTrueMethodTable() == (*pNewRef)->GetTrueMethodTable());
-
-    // grab the sync block for the current object
-    SyncBlock* pOldSyncBlock = (*pOldRef)->GetSyncBlock();
-    _ASSERTE(pOldSyncBlock);
-
-    // get the wrapper for the old object
-    InteropSyncBlockInfo* pInteropInfo = pOldSyncBlock->GetInteropInfo();
-    ComCallWrapper* pCCW = pInteropInfo->GetCCW();      
-    if (pCCW == NULL)
-        COMPlusThrowArgumentException(W("oldtp"), W("Argument_NoUnderlyingCCW"));
-
-    // get the syncblock for the new object and allocate an InteropSyncBlockInfo structure
-    SyncBlock* pNewSyncBlock = (*pNewRef)->GetSyncBlock();
-    _ASSERTE(pNewSyncBlock != NULL);
-    
-    NewHolder<InteropSyncBlockInfo> pNewInteropInfo = new InteropSyncBlockInfo();
-    bool check = pNewSyncBlock->SetInteropInfo(pNewInteropInfo);
-
-    //
-    // Now we switch
-    //
-    
-    // First, prevent the old object from getting to the CCW
-    pInteropInfo->SetCCW(NULL);
-        
-    // Next, point the CCW at the new object
-    StoreObjectInHandle(pCCW->GetObjectHandle(), (*pNewRef));
-
-    // Finally, point the new object at the CCW
-    pNewSyncBlock->GetInteropInfo()->SetCCW(pCCW);
-
-    // store other information about the new server
-    SimpleComCallWrapper* pSimpleWrap = pCCW->GetSimpleWrapper();
-    _ASSERTE(pSimpleWrap);
-    pSimpleWrap->ReInit(pNewSyncBlock);
-
-    if (check)
-        pNewInteropInfo.SuppressRelease();
-    
-    return TRUE;
-}
 
 ABI::Windows::Foundation::IUriRuntimeClass *CreateWinRTUri(LPCWSTR wszUri, INT32 cchUri)
 {
     STANDARD_VM_CONTRACT;
 
-    UriMarshalingInfo* marshalingInfo = GetAppDomain()->GetMarshalingData()->GetUriMarshalingInfo();
+    UriMarshalingInfo* marshalingInfo = GetAppDomain()->GetLoaderAllocator()->GetMarshalingData()->GetUriMarshalingInfo();
         
     // Get the cached factory from the UriMarshalingInfo object of the current appdomain
     ABI::Windows::Foundation::IUriRuntimeClassFactory* pFactory = marshalingInfo->GetUriFactory();
@@ -6926,9 +6718,7 @@ ABI::Windows::Foundation::IUriRuntimeClass *CreateWinRTUri(LPCWSTR wszUri, INT32
     return pIUriRC.Extract();
 }
 
-
-// static
-void DECLSPEC_NORETURN ThrowTypeLoadExceptionWithInner(MethodTable *pClassMT, LPCWSTR pwzName, HRESULT hr, unsigned resID)
+static void DECLSPEC_NORETURN ThrowTypeLoadExceptionWithInner(MethodTable *pClassMT, LPCWSTR pwzName, HRESULT hr, unsigned resID)
 {
     CONTRACTL
     {

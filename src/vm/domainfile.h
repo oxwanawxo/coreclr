@@ -45,8 +45,8 @@ enum FileLoadLevel
     FILE_LOAD_LOADLIBRARY,
     FILE_LOAD_POST_LOADLIBRARY,
     FILE_LOAD_EAGER_FIXUPS,
-    FILE_LOAD_VTABLE_FIXUPS,
     FILE_LOAD_DELIVER_EVENTS,
+    FILE_LOAD_VTABLE_FIXUPS,
     FILE_LOADED,                    // Loaded by not yet active
     FILE_LOAD_VERIFY_EXECUTION,
     FILE_ACTIVE                     // Fully active (constructors run & security checked)
@@ -81,7 +81,7 @@ class DomainFile
     DomainFile() {LIMITED_METHOD_CONTRACT;};
 #endif
 
-    LoaderAllocator *GetLoaderAllocator();
+    virtual LoaderAllocator *GetLoaderAllocator();
 
     PTR_AppDomain GetAppDomain()
     {
@@ -260,8 +260,6 @@ class DomainFile
     // Other public APIs
     // ------------------------------------------------------------
 
-    BOOL IsIntrospectionOnly();
-
 #ifndef DACCESS_COMPILE
     BOOL Equals(DomainFile *pFile) { WRAPPER_NO_CONTRACT; return GetFile()->Equals(pFile->GetFile()); }
     BOOL Equals(PEFile *pFile) { WRAPPER_NO_CONTRACT; return GetFile()->Equals(pFile); }
@@ -319,14 +317,6 @@ class DomainFile
     void VerifyExecution();
     void Activate();
 #endif
-
-    // This is called when a new active dependency is added.
-    static BOOL PropagateNewActivation(Module *pModuleFrom, Module *pModuleTo);
-#ifdef FEATURE_LOADER_OPTIMIZATION
-    static BOOL PropagateActivationInAppDomain(Module *pModuleFrom, Module *pModuleTo, AppDomain* pDomain);
-#endif
-    // This can be used to verify that no propagation is needed
-    static CHECK CheckUnactivatedInAllDomains(Module *pModule);
 
     // This should be used to permanently set the load to fail. Do not use with transient conditions
     void SetError(Exception *ex);
@@ -487,15 +477,6 @@ enum ModuleIterationOption
     kModIterIncludeAvailableToProfilers  = 3,
 };
 
-
-enum CMD_State
-{
-    CMD_Unknown,
-    CMD_NotNeeded,
-    CMD_IndeedMissing,
-    CMD_Resolved
-};
-
 // --------------------------------------------------------------------------------
 // DomainAssembly is a subclass of DomainFile which specifically represents a assembly.
 // --------------------------------------------------------------------------------
@@ -515,12 +496,11 @@ public:
         return PTR_PEAssembly(m_pFile);
     }
 
-#ifdef FEATURE_LOADER_OPTIMIZATION
-    
-public:
-    CMD_State CheckMissingDependencies();
-    BOOL MissingDependenciesCheckDone();
-#endif // FEATURE_LOADER_OPTIMIZATION
+    LoaderAllocator *GetLoaderAllocator()
+    {
+        LIMITED_METHOD_CONTRACT;
+        return m_pLoaderAllocator;
+    }
 
 #ifndef DACCESS_COMPILE
     void ReleaseFiles();
@@ -661,7 +641,6 @@ public:
     BOOL GetResource(LPCSTR szName, DWORD *cbResource,
                      PBYTE *pbInMemoryResource, DomainAssembly** pAssemblyRef,
                      LPCSTR *szFileName, DWORD *dwLocation,
-                     StackCrawlMark *pStackMark, BOOL fSkipSecurityCheck,
                      BOOL fSkipRaiseResolveEvent);
 
 #ifdef FEATURE_PREJIT
@@ -673,9 +652,6 @@ public:
 
     void GetOptimizedIdentitySignature(CORCOMPILE_ASSEMBLY_SIGNATURE *pSignature);
     BOOL CheckZapDependencyIdentities(PEImage *pNativeImage);
-    BOOL CheckZapSecurity(PEImage *pNativeImage);
-
-    BOOL CheckFileSystemTimeStamps(PEFile *pZapManifest);
 
 #endif // FEATURE_PREJIT
 
@@ -705,7 +681,6 @@ public:
     BOOL IsVisibleToDebugger();
     BOOL NotifyDebuggerLoad(int flags, BOOL attaching);
     void NotifyDebuggerUnload();
-    BOOL IsUnloading();
 
     inline BOOL IsCollectible();
     // 
@@ -758,11 +733,6 @@ private:
  public:
     ULONG HashIdentity();
 
- private:
-
-    BOOL ShouldLoadDomainNeutral();
-    BOOL ShouldLoadDomainNeutralHelper();
-
     // ------------------------------------------------------------
     // Instance data
     // ------------------------------------------------------------
@@ -771,15 +741,25 @@ private:
     LOADERHANDLE                            m_hExposedAssemblyObject;
     PTR_Assembly                            m_pAssembly;
     DebuggerAssemblyControlFlags            m_debuggerFlags;
-    CMD_State                               m_MissingDependenciesCheckStatus;
     ArrayList                               m_Modules;
     BOOL                                    m_fDebuggerUnloadStarted;
     BOOL                                    m_fCollectible;
     Volatile<bool>                          m_fHostAssemblyPublished;
-    Volatile<bool>                          m_fCalculatedShouldLoadDomainNeutral;
-    Volatile<bool>                          m_fShouldLoadDomainNeutral;
+    PTR_LoaderAllocator                     m_pLoaderAllocator;
+    DomainAssembly*                         m_NextDomainAssemblyInSameALC;
 
   public:
+      DomainAssembly* GetNextDomainAssemblyInSameALC()
+      {
+          return m_NextDomainAssemblyInSameALC;
+      }
+
+      void SetNextDomainAssemblyInSameALC(DomainAssembly* domainAssembly)
+      {
+          _ASSERTE(m_NextDomainAssemblyInSameALC == NULL);
+          m_NextDomainAssemblyInSameALC = domainAssembly;
+      }
+
     // Indicates if the assembly can be cached in a binding cache such as AssemblySpecBindingCache.
     inline bool CanUseWithBindingCache()
     { STATIC_CONTRACT_WRAPPER; return GetFile()->CanUseWithBindingCache(); }

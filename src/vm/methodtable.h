@@ -5,12 +5,6 @@
 // File: methodtable.h
 //
 
-
-//
-
-//
-// ============================================================================
-
 #ifndef _METHODTABLE_H_
 #define _METHODTABLE_H_
 
@@ -22,7 +16,6 @@
 #include "hash.h"
 #include "crst.h"
 #include "cgensys.h"
-#include "declsec.h"
 #ifdef FEATURE_COMINTEROP
 #include "stdinterfaces.h"
 #endif
@@ -33,6 +26,7 @@
 #include "contractimpl.h"
 #include "generics.h"
 #include "fixuppointer.h"
+#include "gcinfotypes.h"
 
 /*
  * Forward Declarations
@@ -111,7 +105,7 @@ struct InterfaceInfo_t
 #endif
 
     // Method table of the interface
-#if defined(PLATFORM_UNIX) && defined(_TARGET_ARM_)
+#if defined(FEATURE_NGEN_RELOCS_OPTIMIZATIONS)
     RelativeFixupPointer<PTR_MethodTable> m_pMethodTable;
 #else
     FixupPointer<PTR_MethodTable> m_pMethodTable;
@@ -289,89 +283,6 @@ struct CrossModuleGenericsStaticsInfo
 };  // struct CrossModuleGenericsStaticsInfo
 typedef DPTR(CrossModuleGenericsStaticsInfo) PTR_CrossModuleGenericsStaticsInfo;
 
-// This structure records methods and fields which are interesting for VTS
-// (Version Tolerant Serialization). A pointer to it is optionally appended to
-// MethodTables with VTS event methods or NotSerialized or OptionallySerialized
-// fields. The structure is variable length to incorporate a packed array of
-// data describing the disposition of fields in the type.
-struct RemotingVtsInfo
-{
-    enum VtsCallbackType
-    {
-        VTS_CALLBACK_ON_SERIALIZING = 0,
-        VTS_CALLBACK_ON_SERIALIZED,
-        VTS_CALLBACK_ON_DESERIALIZING,
-        VTS_CALLBACK_ON_DESERIALIZED,
-        VTS_NUM_CALLBACK_TYPES
-    };
-
-    FixupPointer<PTR_MethodDesc> m_pCallbacks[VTS_NUM_CALLBACK_TYPES];
-#ifdef _DEBUG
-    DWORD               m_dwNumFields;
-#endif
-    DWORD               m_rFieldTypes[1];
-
-    static DWORD GetSize(DWORD dwNumFields)
-    {
-        LIMITED_METHOD_CONTRACT;
-        // Encode each field in two bits. Round up allocation to the nearest DWORD.
-        DWORD dwBitsRequired = dwNumFields * 2;
-        DWORD dwBytesRequired = (dwBitsRequired + 7) / 8;
-        return (DWORD)(offsetof(RemotingVtsInfo, m_rFieldTypes[0]) + ALIGN_UP(dwBytesRequired, sizeof(DWORD)));
-    }
-
-    void SetIsNotSerialized(DWORD dwFieldIndex)
-    {
-        LIMITED_METHOD_CONTRACT;
-        _ASSERTE(dwFieldIndex < m_dwNumFields);
-        DWORD dwRecordIndex = dwFieldIndex * 2;
-        DWORD dwOffset = dwRecordIndex / (sizeof(DWORD) * 8);
-        DWORD dwMask = 1 << (dwRecordIndex % (sizeof(DWORD) * 8));
-        m_rFieldTypes[dwOffset] |= dwMask;
-    }
-
-    BOOL IsNotSerialized(DWORD dwFieldIndex)
-    {
-        LIMITED_METHOD_CONTRACT;
-        _ASSERTE(dwFieldIndex < m_dwNumFields);
-        DWORD dwRecordIndex = dwFieldIndex * 2;
-        DWORD dwOffset = dwRecordIndex / (sizeof(DWORD) * 8);
-        DWORD dwMask = 1 << (dwRecordIndex % (sizeof(DWORD) * 8));
-        return m_rFieldTypes[dwOffset] & dwMask;
-    }
-
-    void SetIsOptionallySerialized(DWORD dwFieldIndex)
-    {
-        LIMITED_METHOD_CONTRACT;
-        _ASSERTE(dwFieldIndex < m_dwNumFields);
-        DWORD dwRecordIndex = dwFieldIndex * 2;
-        DWORD dwOffset = dwRecordIndex / (sizeof(DWORD) * 8);
-        DWORD dwMask = 2 << (dwRecordIndex % (sizeof(DWORD) * 8));
-        m_rFieldTypes[dwOffset] |= dwMask;
-    }
-
-    BOOL IsOptionallySerialized(DWORD dwFieldIndex)
-    {
-        LIMITED_METHOD_CONTRACT;
-        _ASSERTE(dwFieldIndex < m_dwNumFields);
-        DWORD dwRecordIndex = dwFieldIndex * 2;
-        DWORD dwOffset = dwRecordIndex / (sizeof(DWORD) * 8);
-        DWORD dwMask = 2 << (dwRecordIndex % (sizeof(DWORD) * 8));
-        return m_rFieldTypes[dwOffset] & dwMask;
-    }
-};  // struct RemotingVtsInfo
-typedef DPTR(RemotingVtsInfo) PTR_RemotingVtsInfo;
-
-
-struct ContextStaticsBucket
-{
-    // Offset which points to the CLS storage. Allocated lazily - -1 means no offset allocated yet.
-    DWORD m_dwContextStaticsOffset;
-    // Size of CLS fields
-    WORD m_wContextStaticsSize;
-};
-typedef DPTR(ContextStaticsBucket) PTR_ContextStaticsBucket;
-
 #ifdef FEATURE_COMINTEROP
 struct RCWPerTypeData;
 #endif // FEATURE_COMINTEROP
@@ -394,10 +305,7 @@ struct MethodTableWriteableData
         // TO BE UPDATED IN ORDER TO ENSURE THAT METHODTABLES DUPLICATED FOR GENERIC INSTANTIATIONS
         // CARRY THE CORRECT INITIAL FLAGS.
     
-        enum_flag_RemotingConfigChecked     = 0x00000001,
-        enum_flag_RequiresManagedActivation = 0x00000002,
         enum_flag_Unrestored                = 0x00000004,
-        enum_flag_CriticalTypePrepared      = 0x00000008,     // CriticalFinalizerObject derived type has had backout routines prepared
         enum_flag_HasApproxParent           = 0x00000010,
         enum_flag_UnrestoredTypeKey         = 0x00000020,     
         enum_flag_IsNotFullyLoaded          = 0x00000040,
@@ -531,38 +439,6 @@ public:
     }
 #endif // FEATURE_PREJIT
 
-    inline BOOL IsRemotingConfigChecked() const
-    {
-        LIMITED_METHOD_CONTRACT;
-        return m_dwFlags & enum_flag_RemotingConfigChecked;
-    }
-    inline void SetRemotingConfigChecked()
-    {
-        WRAPPER_NO_CONTRACT;
-        // remembers that we went through the rigorous
-        // checks to decide whether this class should be
-        // activated locally or remote
-        FastInterlockOr(EnsureWritablePages((ULONG *)&m_dwFlags), enum_flag_RemotingConfigChecked);
-    }
-    inline void TrySetRemotingConfigChecked()
-    {
-        WRAPPER_NO_CONTRACT;
-        // remembers that we went through the rigorous
-        // checks to decide whether this class should be
-        // activated locally or remote
-        if (EnsureWritablePagesNoThrow(&m_dwFlags, sizeof(m_dwFlags)))
-            FastInterlockOr((ULONG *)&m_dwFlags, enum_flag_RemotingConfigChecked);
-    }
-    inline BOOL RequiresManagedActivation() const
-    {
-        LIMITED_METHOD_CONTRACT;
-        return m_dwFlags & enum_flag_RequiresManagedActivation;
-    }
-    inline void SetRequiresManagedActivation()
-    {
-        WRAPPER_NO_CONTRACT;
-        FastInterlockOr(EnsureWritablePages((ULONG *) &m_dwFlags), enum_flag_RequiresManagedActivation|enum_flag_RemotingConfigChecked);
-    }
 
     inline LOADERHANDLE GetExposedClassObjectHandle() const
     {
@@ -599,19 +475,6 @@ public:
                        MethodTableWriteableData::enum_flag_Unrestored |
                        MethodTableWriteableData::enum_flag_IsNotFullyLoaded |
                        MethodTableWriteableData::enum_flag_HasApproxParent);
-    }
-
-    // Have the backout methods (Finalizer, Dispose, ReleaseHandle etc.) been prepared for this type? This currently only happens
-    // for types derived from CriticalFinalizerObject.
-    inline BOOL CriticalTypeHasBeenPrepared() const
-    {
-        LIMITED_METHOD_CONTRACT;
-        return m_dwFlags & enum_flag_CriticalTypePrepared;
-    }
-    inline void SetCriticalTypeHasBeenPrepared()
-    {
-        WRAPPER_NO_CONTRACT;
-        FastInterlockOr(EnsureWritablePages((ULONG*)&m_dwFlags), enum_flag_CriticalTypePrepared);
     }
 
     inline CrossModuleGenericsStaticsInfo * GetCrossModuleGenericsStaticsInfo()
@@ -835,9 +698,6 @@ public:
     PTR_DomainLocalModule   GetDomainLocalModule();
 #endif
 
-    // Return whether the type lives in the shared domain.
-    BOOL IsDomainNeutral();
-
     MethodTable *LoadEnclosingMethodTable(ClassLoadLevel targetLevel = CLASS_DEPENDENCIES_LOADED);
 
     LPCWSTR GetPathForErrorMessages();
@@ -881,11 +741,6 @@ public:
     void GetEventInterfaceInfo(MethodTable **ppSrcItfType, MethodTable **ppEvProvType);
 
     BOOL            IsExtensibleRCW();
-
-#if defined(FEATURE_TYPEEQUIVALENCE)
-    // mark the type as opted into type equivalence
-    void SetHasTypeEquivalence();
-#endif
 
     // Helper to get parent class skipping over COM class in 
     // the hierarchy
@@ -958,19 +813,24 @@ public:
     BOOL IsICastable(); // This type implements ICastable interface
 
 #ifdef FEATURE_TYPEEQUIVALENCE
+    // mark the type as opted into type equivalence
+    void SetHasTypeEquivalence()
+    {
+        LIMITED_METHOD_CONTRACT;
+        SetFlag(enum_flag_HasTypeEquivalence);
+    }
+#endif // FEATURE_TYPEEQUIVALENCE
+
     // type has opted into type equivalence or is instantiated by/derived from a type that is
     BOOL HasTypeEquivalence()
     {
         LIMITED_METHOD_CONTRACT;
+#ifdef FEATURE_TYPEEQUIVALENCE
         return GetFlag(enum_flag_HasTypeEquivalence);
-    }
 #else
-    BOOL HasTypeEquivalence()
-    {
-        LIMITED_METHOD_CONTRACT;
         return FALSE;
+#endif // FEATURE_TYPEEQUIVALENCE
     }
-#endif
 
     //-------------------------------------------------------------------
     // DYNAMIC ADDITION OF INTERFACES FOR COM INTEROP
@@ -992,11 +852,6 @@ public:
         return GetNumInterfaces() > 0 && IsComObjectType() && !ParentEquals(g_pObjectClass);
     }
 #endif // FEATURE_COMINTEROP
-
-    BOOL IsIntrospectionOnly();
-
-    // Checks this type and its instantiation for "IsIntrospectionOnly"
-    BOOL ContainsIntrospectionOnlyTypes();
 
 #ifndef DACCESS_COMPILE
     VOID EnsureActive();
@@ -1071,8 +926,6 @@ public:
 
     // uniquely identifes this type in the Domain table
     DWORD GetClassIndex();
-
-    bool ClassRequiresUnmanagedCodeCheck();
 
 private:
 
@@ -1540,15 +1393,19 @@ public:
     PCODE GetSlot(UINT32 slotNumber)
     {
         WRAPPER_NO_CONTRACT;
-        STATIC_CONTRACT_SO_TOLERANT;
         CONSISTENCY_CHECK(slotNumber < GetNumVtableSlots());
-        PTR_PCODE pSlot = GetSlotPtrRaw(slotNumber);
-        if (IsZapped() && slotNumber >= GetNumVirtuals())
+
+        TADDR pSlot = GetSlotPtrRaw(slotNumber);
+        if (slotNumber < GetNumVirtuals())
+        {
+            return VTableIndir2_t::GetValueMaybeNullAtPtr(pSlot);
+        }
+        else if (IsZapped() && slotNumber >= GetNumVirtuals())
         {
             // Non-virtual slots in NGened images are relative pointers
-            return RelativePointer<PCODE>::GetValueAtPtr(dac_cast<TADDR>(pSlot));
+            return RelativePointer<PCODE>::GetValueAtPtr(pSlot);
         }
-        return *pSlot;
+        return *dac_cast<PTR_PCODE>(pSlot);
     }
 
     // Special-case for when we know that the slot number corresponds
@@ -1562,13 +1419,13 @@ public:
 
         DWORD index = GetIndexOfVtableIndirection(slotNum);
         TADDR base = dac_cast<TADDR>(&(GetVtableIndirections()[index]));
-        return *(VTableIndir_t::GetValueMaybeNullAtPtr(base) + GetIndexAfterVtableIndirection(slotNum));
+        DPTR(VTableIndir2_t) baseAfterInd = VTableIndir_t::GetValueMaybeNullAtPtr(base) + GetIndexAfterVtableIndirection(slotNum);
+        return VTableIndir2_t::GetValueMaybeNullAtPtr(dac_cast<TADDR>(baseAfterInd));
     }
 
-    PTR_PCODE GetSlotPtrRaw(UINT32 slotNum)
+    TADDR GetSlotPtrRaw(UINT32 slotNum)
     {
         WRAPPER_NO_CONTRACT;
-        STATIC_CONTRACT_SO_TOLERANT;
         CONSISTENCY_CHECK(slotNum < GetNumVtableSlots());
 
         if (slotNum < GetNumVirtuals())
@@ -1576,28 +1433,28 @@ public:
             // Virtual slots live in chunks pointed to by vtable indirections
             DWORD index = GetIndexOfVtableIndirection(slotNum);
             TADDR base = dac_cast<TADDR>(&(GetVtableIndirections()[index]));
-            return VTableIndir_t::GetValueMaybeNullAtPtr(base) + GetIndexAfterVtableIndirection(slotNum);
+            DPTR(VTableIndir2_t) baseAfterInd = VTableIndir_t::GetValueMaybeNullAtPtr(base) + GetIndexAfterVtableIndirection(slotNum);
+            return dac_cast<TADDR>(baseAfterInd);
         }
         else if (HasSingleNonVirtualSlot())
         {
             // Non-virtual slots < GetNumVtableSlots live in a single chunk pointed to by an optional member,
             // except when there is only one in which case it lives in the optional member itself
             _ASSERTE(slotNum == GetNumVirtuals());
-            return dac_cast<PTR_PCODE>(GetNonVirtualSlotsPtr());
+            return GetNonVirtualSlotsPtr();
         }
         else
         {
             // Non-virtual slots < GetNumVtableSlots live in a single chunk pointed to by an optional member
             _ASSERTE(HasNonVirtualSlotsArray());
             g_IBCLogger.LogMethodTableNonVirtualSlotsAccess(this);
-            return GetNonVirtualSlotsArray() + (slotNum - GetNumVirtuals());
+            return dac_cast<TADDR>(GetNonVirtualSlotsArray() + (slotNum - GetNumVirtuals()));
         }
     }
 
-    PTR_PCODE GetSlotPtr(UINT32 slotNum)
+    TADDR GetSlotPtr(UINT32 slotNum)
     {
         WRAPPER_NO_CONTRACT;
-        STATIC_CONTRACT_SO_TOLERANT;
 
         // Slots in NGened images are relative pointers
         CONSISTENCY_CHECK(!IsZapped());
@@ -1660,10 +1517,12 @@ public:
     #define VTABLE_SLOTS_PER_CHUNK 8
     #define VTABLE_SLOTS_PER_CHUNK_LOG2 3
 
-#if defined(PLATFORM_UNIX) && defined(_TARGET_ARM_)
-    typedef RelativePointer<PTR_PCODE> VTableIndir_t;
+#if defined(FEATURE_NGEN_RELOCS_OPTIMIZATIONS)
+    typedef RelativePointer<PCODE> VTableIndir2_t;
+    typedef RelativePointer<DPTR(VTableIndir2_t)> VTableIndir_t;
 #else
-    typedef PlainPointer<PTR_PCODE> VTableIndir_t;
+    typedef PlainPointer<PCODE> VTableIndir2_t;
+    typedef PlainPointer<DPTR(VTableIndir2_t)> VTableIndir_t;
 #endif
 
     static DWORD GetIndexOfVtableIndirection(DWORD slotNum);
@@ -1692,10 +1551,10 @@ public:
         BOOL Finished();
         DWORD GetIndex();
         DWORD GetOffsetFromMethodTable();
-        PTR_PCODE GetIndirectionSlot();
+        DPTR(VTableIndir2_t) GetIndirectionSlot();
 
 #ifndef DACCESS_COMPILE
-        void SetIndirectionSlot(PTR_PCODE pChunk);
+        void SetIndirectionSlot(DPTR(VTableIndir2_t) pChunk);
 #endif
 
         DWORD GetStartSlot();
@@ -1790,7 +1649,7 @@ public:
     unsigned GetNumParentVirtuals()
     {
         LIMITED_METHOD_CONTRACT;
-        if (IsInterface() || IsTransparentProxy()) {
+        if (IsInterface()) {
             return 0;
         }
         MethodTable *pMTParent = GetParentMethodTable();
@@ -1798,11 +1657,13 @@ public:
         return pMTParent == NULL ? 0 : pMTParent->GetNumVirtuals();
     }
 
+    #define SIZEOF__MethodTable_ (0x10 + (6 INDEBUG(+1)) * TARGET_POINTER_SIZE)
+
     static inline DWORD GetVtableOffset()
     {
         LIMITED_METHOD_DAC_CONTRACT;
 
-        return (sizeof(MethodTable));
+        return SIZEOF__MethodTable_;
     }
 
     // Return total methods: virtual, static, and instance method slots.
@@ -1882,7 +1743,7 @@ public:
     BOOL IsString()
     {
         LIMITED_METHOD_DAC_CONTRACT;
-        return HasComponentSize() && !IsArray();
+        return HasComponentSize() && !IsArray() && RawGetComponentSize() == 2;
     }
 
     BOOL            HasComponentSize() const
@@ -2016,20 +1877,6 @@ public:
 
     DWORD GetIndexForFieldDesc(FieldDesc *pField);
 
-    //-------------------------------------------------------------------
-    // REMOTING and THUNKING.  
-    //
-    // We find a lot of information from the VTable.  But sometimes the VTable is a
-    // thunking layer rather than the true type's VTable.  For instance, context
-    // proxies use a single VTable for proxies to all the types we've loaded.
-    // The following service adjusts a MethodTable based on the supplied instance.  As
-    // we add new thunking layers, we just need to teach this service how to navigate
-    // through them.
-    inline BOOL IsTransparentProxy()
-    {
-        return FALSE;
-    }
-
     BOOL IsMarshaledByRef()
     {
         return FALSE;
@@ -2088,7 +1935,7 @@ public:
     bool IsNativeHFA();
     CorElementType GetNativeHFAType();
 
-#if defined(UNIX_AMD64_ABI)
+#ifdef UNIX_AMD64_ABI
     inline bool IsRegPassedStruct()
     {
         LIMITED_METHOD_CONTRACT;
@@ -2100,7 +1947,12 @@ public:
         LIMITED_METHOD_CONTRACT;
         SetFlag(enum_flag_IsRegStructPassed);
     }
-#endif // defined(UNIX_AMD64_ABI)
+#else
+    inline bool IsRegPassedStruct()
+    {
+        return false;
+    }
+#endif
 
 #ifdef FEATURE_64BIT_ALIGNMENT
     // Returns true iff the native view of this type requires 64-bit aligment.
@@ -2112,7 +1964,6 @@ public:
     // See JIT_IsInstanceOfInterface
     inline BOOL InstanceRequiresNonTrivialInterfaceCast()
     {
-        STATIC_CONTRACT_SO_TOLERANT;
         LIMITED_METHOD_CONTRACT;
 
         return GetFlag(enum_flag_NonTrivialInterfaceCast);
@@ -2160,12 +2011,12 @@ public:
 #ifndef DACCESS_COMPILE
     FORCEINLINE BOOL IsEquivalentTo(MethodTable *pOtherMT COMMA_INDEBUG(TypeHandlePairList *pVisited = NULL));
 
-#ifdef FEATURE_COMINTEROP
+#ifdef FEATURE_TYPEEQUIVALENCE
     // This method is public so that TypeHandle has direct access to it
     BOOL IsEquivalentTo_Worker(MethodTable *pOtherMT COMMA_INDEBUG(TypeHandlePairList *pVisited));      // out-of-line part, SO tolerant
 private:
     BOOL IsEquivalentTo_WorkerInner(MethodTable *pOtherMT COMMA_INDEBUG(TypeHandlePairList *pVisited)); // out-of-line part, SO intolerant
-#endif // FEATURE_COMINTEROP
+#endif // FEATURE_TYPEEQUIVALENCE
 #endif
 
 public:
@@ -2173,7 +2024,7 @@ public:
     // THE METHOD TABLE PARENT (SUPERCLASS/BASE CLASS)
     //
 
-#if defined(PLATFORM_UNIX) && defined(_TARGET_ARM_)
+#if defined(FEATURE_NGEN_RELOCS_OPTIMIZATIONS)
 #define PARENT_MT_FIXUP_OFFSET (-FIXUP_POINTER_INDIRECTION)
     typedef RelativeFixupPointer<PTR_MethodTable> ParentMT_t;
 #else
@@ -2205,7 +2056,7 @@ public:
     inline static PTR_VOID GetParentMethodTableOrIndirection(PTR_VOID pMT)
     {
         WRAPPER_NO_CONTRACT;
-#if defined(PLATFORM_UNIX) && defined(_TARGET_ARM_)
+#if defined(FEATURE_NGEN_RELOCS_OPTIMIZATIONS)
         PTR_MethodTable pMethodTable = dac_cast<PTR_MethodTable>(pMT);
         PTR_MethodTable pParentMT = ReadPointerMaybeNull((MethodTable*) pMethodTable, &MethodTable::m_pParentMethodTable);
         return dac_cast<PTR_VOID>(pParentMT);
@@ -2341,8 +2192,8 @@ public:
     BOOL ImplementsInterface(MethodTable *pInterface);
     BOOL ImplementsEquivalentInterface(MethodTable *pInterface);
 
-    MethodDesc *GetMethodDescForInterfaceMethod(TypeHandle ownerType, MethodDesc *pInterfaceMD);
-    MethodDesc *GetMethodDescForInterfaceMethod(MethodDesc *pInterfaceMD); // You can only use this one for non-generic interfaces
+    MethodDesc *GetMethodDescForInterfaceMethod(TypeHandle ownerType, MethodDesc *pInterfaceMD, BOOL throwOnConflict);
+    MethodDesc *GetMethodDescForInterfaceMethod(MethodDesc *pInterfaceMD, BOOL throwOnConflict); // You can only use this one for non-generic interfaces
     
     //-------------------------------------------------------------------
     // INTERFACE MAP.  
@@ -2590,30 +2441,31 @@ protected:
                            UINT32 slotNumber,
                            DispatchMapEntry *pEntry);
 
-public:
+private:
     BOOL FindDispatchImpl(
         UINT32         typeID, 
         UINT32         slotNumber, 
-        DispatchSlot * pImplSlot);
+        DispatchSlot * pImplSlot,
+        BOOL           throwOnConflict);
 
-
+public:
 #ifndef DACCESS_COMPILE
     BOOL FindDefaultInterfaceImplementation(
         MethodDesc *pInterfaceMD,
         MethodTable *pObjectMT,
-        MethodDesc **ppDefaultMethod);
+        MethodDesc **ppDefaultMethod,
+        BOOL allowVariance,
+        BOOL throwOnConflict);
 #endif // DACCESS_COMPILE
 
-    DispatchSlot FindDispatchSlot(UINT32 typeID, UINT32 slotNumber);
-
-    DispatchSlot FindDispatchSlot(DispatchToken tok);
+    DispatchSlot FindDispatchSlot(UINT32 typeID, UINT32 slotNumber, BOOL throwOnConflict);
 
     // You must use the second of these two if there is any chance the pMD is a method
     // on a generic interface such as IComparable<T> (which it normally can be).  The 
     // ownerType is used to provide an exact qualification in the case the pMD is
     // a shared method descriptor.
-    DispatchSlot FindDispatchSlotForInterfaceMD(MethodDesc *pMD);
-    DispatchSlot FindDispatchSlotForInterfaceMD(TypeHandle ownerType, MethodDesc *pMD);
+    DispatchSlot FindDispatchSlotForInterfaceMD(MethodDesc *pMD, BOOL throwOnConflict);
+    DispatchSlot FindDispatchSlotForInterfaceMD(TypeHandle ownerType, MethodDesc *pMD, BOOL throwOnConflict);
 
     MethodDesc *ReverseInterfaceMDLookup(UINT32 slotNumber);
 
@@ -2675,29 +2527,6 @@ public:
         return GetFlag(enum_flag_HasCriticalFinalizer);
     }
 
-    // Have the backout methods (Finalizer, Dispose, ReleaseHandle etc.) been prepared for this type? This currently only happens
-    // for types derived from CriticalFinalizerObject.
-    BOOL CriticalTypeHasBeenPrepared()
-    {
-        LIMITED_METHOD_CONTRACT;
-        _ASSERTE(HasCriticalFinalizer());
-        return GetWriteableData()->CriticalTypeHasBeenPrepared();
-    }
-
-    void SetCriticalTypeHasBeenPrepared()
-    {
-        CONTRACTL
-        {
-            THROWS;
-            GC_NOTRIGGER;
-            MODE_ANY;
-        }
-        CONTRACTL_END;
-
-        _ASSERTE(HasCriticalFinalizer());
-        GetWriteableDataForWrite()->SetCriticalTypeHasBeenPrepared();
-    }
-
     //-------------------------------------------------------------------
     // STATIC FIELDS
     //
@@ -2712,8 +2541,8 @@ public:
     inline PTR_BYTE GetGCThreadStaticsBasePointer();
 #endif //!DACCESS_COMPILE
 
-    inline PTR_BYTE GetNonGCThreadStaticsBasePointer(PTR_Thread pThread, PTR_AppDomain pDomain);
-    inline PTR_BYTE GetGCThreadStaticsBasePointer(PTR_Thread pThread, PTR_AppDomain pDomain);
+    inline PTR_BYTE GetNonGCThreadStaticsBasePointer(PTR_Thread pThread);
+    inline PTR_BYTE GetGCThreadStaticsBasePointer(PTR_Thread pThread);
 
     inline DWORD IsDynamicStatics()
     {
@@ -3057,13 +2886,6 @@ public:
     BOOL HasRCWPerTypeData();
 #endif // FEATURE_COMINTEROP
 
-    // The following two methods produce correct results only if this type is
-    // marked Serializable (verified by assert in checked builds) and the field
-    // in question was introduced in this type (the index is the FieldDesc
-    // index).
-    BOOL IsFieldNotSerialized(DWORD dwFieldIndex);
-    BOOL IsFieldOptionallySerialized(DWORD dwFieldIndex);
-
     //-------------------------------------------------------------------
     // DICTIONARIES FOR GENERIC INSTANTIATIONS
     //
@@ -3111,7 +2933,7 @@ public:
     // must have a dictionary entry. On the other hand, for instantiations shared with Dict<string,double> the opposite holds.
     //
 
-#if defined(PLATFORM_UNIX) && defined(_TARGET_ARM_)
+#if defined(FEATURE_NGEN_RELOCS_OPTIMIZATIONS)
     typedef RelativePointer<PTR_Dictionary> PerInstInfoElem_t;
     typedef RelativePointer<DPTR(PerInstInfoElem_t)> PerInstInfo_t;
 #else
@@ -3202,27 +3024,7 @@ public:
 
     inline DWORD GetAttrClass();
 
-    inline BOOL IsSerializable();
     inline BOOL HasFieldsWhichMustBeInited();
-    inline BOOL SupportsAutoNGen();
-    inline BOOL RunCCTorAsIfNGenImageExists();
-
-    //-------------------------------------------------------------------
-    // SECURITY SEMANTICS 
-    //
-
-    void SetIsAsyncPinType()
-    {
-        LIMITED_METHOD_CONTRACT;
-        _ASSERTE(GetFlag(enum_flag_Category_Mask) == 0);
-        SetFlag(enum_flag_Category_AsyncPin);
-    }
-
-    BOOL IsAsyncPinType()
-    {
-        LIMITED_METHOD_DAC_CONTRACT;
-        return GetFlag(enum_flag_Category_Mask) == enum_flag_Category_AsyncPin;
-    }
 
     inline BOOL IsPreRestored() const
     {
@@ -3284,65 +3086,6 @@ public:
     {
         LIMITED_METHOD_DAC_CONTRACT;
         return ReadPointer(this, &MethodTable::m_pWriteableData);
-    }
-
-    //-------------------------------------------------------------------
-    // Remoting related
-    // 
-    inline BOOL IsRemotingConfigChecked()
-    {
-        WRAPPER_NO_CONTRACT;
-        return GetWriteableData()->IsRemotingConfigChecked();
-    }
-    inline void SetRemotingConfigChecked()
-    {
-        CONTRACTL
-        {
-            THROWS;
-            GC_NOTRIGGER;
-            MODE_ANY;
-        }
-        CONTRACTL_END;
-
-        GetWriteableDataForWrite()->SetRemotingConfigChecked();
-    }
-    inline void TrySetRemotingConfigChecked()
-    {
-        CONTRACTL
-        {
-            NOTHROW;
-            GC_NOTRIGGER;
-            MODE_ANY;
-            SO_TOLERANT;
-        }
-        CONTRACTL_END;
-
-        GetWriteableDataForWrite()->TrySetRemotingConfigChecked();
-    }
-    inline BOOL RequiresManagedActivation()
-    {
-        WRAPPER_NO_CONTRACT;
-        return GetWriteableData()->RequiresManagedActivation();
-    }
-    inline void SetRequiresManagedActivation()
-    {
-        CONTRACTL
-        {
-            THROWS;
-            GC_NOTRIGGER;
-            MODE_ANY;
-        }
-        CONTRACTL_END;
-
-        GetWriteableDataForWrite()->SetRequiresManagedActivation();
-    }
-
-    // Determines whether the type may require managed activation. The actual answer is known later
-    // once the remoting config is checked.
-    inline BOOL MayRequireManagedActivation()
-    {
-        LIMITED_METHOD_CONTRACT;
-        return IsMarshaledByRef();
     }
 
     //-------------------------------------------------------------------
@@ -3793,6 +3536,8 @@ public:
         MethodTable *             pMTDecl, 
         MethodTable *             pMTImpl);
 
+    void CopySlotFrom(UINT32 slotNumber, MethodDataWrapper &hSourceMTData, MethodTable *pSourceMT);
+
 protected:
     static void CheckInitMethodDataCache();
     static MethodData *FindParentMethodDataHelper(MethodTable *pMT);
@@ -3911,23 +3656,21 @@ private:
         enum_flag_GenericsMask_SharedInst   = 0x00000020,   // shared instantiation, e.g. List<__Canon> or List<MyValueType<__Canon>>
         enum_flag_GenericsMask_TypicalInst  = 0x00000030,   // the type instantiated at its formal parameters, e.g. List<T>
 
-        enum_flag_HasRemotingVtsInfo        = 0x00000080,   // Optional data present indicating VTS methods and optional fields
-
-        enum_flag_HasVariance               = 0x00000100,   // This is an instantiated type some of whose type parameters are co or contra-variant
+        enum_flag_HasVariance               = 0x00000100,   // This is an instantiated type some of whose type parameters are co- or contra-variant
 
         enum_flag_HasDefaultCtor            = 0x00000200,
         enum_flag_HasPreciseInitCctors      = 0x00000400,   // Do we need to run class constructors at allocation time? (Not perf important, could be moved to EEClass
 
 #if defined(FEATURE_HFA)
 #if defined(UNIX_AMD64_ABI)
-#error Can't define both FEATURE_HFA and UNIX_AMD64_ABI
+#error "Can't define both FEATURE_HFA and UNIX_AMD64_ABI"
 #endif
         enum_flag_IsHFA                     = 0x00000800,   // This type is an HFA (Homogenous Floating-point Aggregate)
 #endif // FEATURE_HFA
 
 #if defined(UNIX_AMD64_ABI)
 #if defined(FEATURE_HFA)
-#error Can't define both FEATURE_HFA and UNIX_AMD64_ABI
+#error "Can't define both FEATURE_HFA and UNIX_AMD64_ABI"
 #endif
         enum_flag_IsRegStructPassed         = 0x00000800,   // This type is a System V register passed struct.
 #endif // UNIX_AMD64_ABI
@@ -3971,10 +3714,8 @@ private:
 
         enum_flag_Category_Class            = 0x00000000,
         enum_flag_Category_Unused_1         = 0x00010000,
-
-        enum_flag_Category_MarshalByRef_Mask= 0x000E0000,
-        enum_flag_Category_MarshalByRef     = 0x00020000,
-        enum_flag_Category_Contextful       = 0x00030000, // sub-category of MarshalByRef
+        enum_flag_Category_Unused_2         = 0x00020000,
+        enum_flag_Category_Unused_3         = 0x00030000,
 
         enum_flag_Category_ValueType        = 0x00040000,
         enum_flag_Category_ValueType_Mask   = 0x000C0000,
@@ -3988,9 +3729,9 @@ private:
         enum_flag_Category_IfArrayThenSzArray                   = 0x00020000, // sub-category of Array
 
         enum_flag_Category_Interface        = 0x000C0000,
-        enum_flag_Category_Unused_2         = 0x000D0000,
-        enum_flag_Category_TransparentProxy = 0x000E0000,
-        enum_flag_Category_AsyncPin         = 0x000F0000,
+        enum_flag_Category_Unused_4         = 0x000D0000,
+        enum_flag_Category_Unused_5         = 0x000E0000,
+        enum_flag_Category_Unused_6         = 0x000F0000,
 
         enum_flag_Category_ElementTypeMask  = 0x000E0000, // bits that matter for element type mask
 
@@ -4182,7 +3923,7 @@ private:
 
     RelativePointer<PTR_Module> m_pLoaderModule;    // LoaderModule. It is equal to the ZapModule in ngened images
     
-#if defined(PLATFORM_UNIX) && defined(_TARGET_ARM_)
+#if defined(FEATURE_NGEN_RELOCS_OPTIMIZATIONS)
     RelativePointer<PTR_MethodTableWriteableData> m_pWriteableData;
 #else
     PlainPointer<PTR_MethodTableWriteableData> m_pWriteableData;
@@ -4198,7 +3939,7 @@ private:
     static const TADDR UNION_MASK = 3; 
 
     union {
-#if defined(PLATFORM_UNIX) && defined(_TARGET_ARM_)
+#if defined(FEATURE_NGEN_RELOCS_OPTIMIZATIONS)
         RelativePointer<DPTR(EEClass)> m_pEEClass;
         RelativePointer<TADDR> m_pCanonMT;
 #else
@@ -4233,7 +3974,7 @@ private:
     public:
     union
     {
-#if defined(PLATFORM_UNIX) && defined(_TARGET_ARM_)
+#if defined(FEATURE_NGEN_RELOCS_OPTIMIZATIONS)
         RelativePointer<PTR_InterfaceInfo>   m_pInterfaceMap;
 #else
         PlainPointer<PTR_InterfaceInfo>   m_pInterfaceMap;
@@ -4321,7 +4062,6 @@ public:
     inline DPTR(TYPE) GETTER() \
     { \
         LIMITED_METHOD_CONTRACT; \
-        STATIC_CONTRACT_SO_TOLERANT; \
         _ASSERTE(Has##NAME()); \
         return dac_cast<DPTR(TYPE)>(dac_cast<TADDR>(this) + GetOffsetOfOptionalMember(OptionalMember_##NAME)); \
     }
@@ -4343,13 +4083,10 @@ private:
 
     inline static DWORD GetOptionalMembersAllocationSize(
                                                   DWORD dwMultipurposeSlotsMask,
-                                                  BOOL needsRemotableMethodInfo,
                                                   BOOL needsGenericsStaticsInfo,
                                                   BOOL needsGuidInfo,
                                                   BOOL needsCCWTemplate,
                                                   BOOL needsRCWPerTypeData,
-                                                  BOOL needsRemotingVtsInfo,
-                                                  BOOL needsContextStatic,
                                                   BOOL needsTokenOverflow);
     inline DWORD GetOptionalMembersSize();
 
@@ -4401,12 +4138,6 @@ private:
 
     void SetModule(Module * pModule);
 
-    /************************************
-    //
-    // CONTEXT STATIC
-    //
-    ************************************/
-
 public:
 
     BOOL Validate ();
@@ -4422,13 +4153,21 @@ public:
     // Is field layout of the inheritance chain fixed within the current version bubble?
     //
     BOOL IsInheritanceChainLayoutFixedInCurrentVersionBubble();
+
+    //
+    // Is the inheritance chain fixed within the current version bubble?
+    //
+    BOOL IsInheritanceChainFixedInCurrentVersionBubble();
 #endif
 
 };  // class MethodTable
 
-#if defined(FEATURE_COMINTEROP) && !defined(DACCESS_COMPILE)
+#ifndef CROSSBITNESS_COMPILE
+static_assert_no_msg(sizeof(MethodTable) == SIZEOF__MethodTable_);
+#endif
+#if defined(FEATURE_TYPEEQUIVALENCE) && !defined(DACCESS_COMPILE)
 WORD GetEquivalentMethodSlot(MethodTable * pOldMT, MethodTable * pNewMT, WORD wMTslot, BOOL *pfFound);
-#endif // defined(FEATURE_COMINTEROP) && !defined(DACCESS_COMPILE)
+#endif // defined(FEATURE_TYPEEQUIVALENCE) && !defined(DACCESS_COMPILE)
 
 MethodTable* CreateMinimalMethodTable(Module* pContainingModule, 
                                       LoaderHeap* pCreationHeap,
