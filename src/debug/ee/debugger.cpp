@@ -261,7 +261,7 @@ bool IsGuardPageGone()
 
     // We're not going to be called for a unmanaged exception.
     // Should always have a managed thread, but just in case something really
-    // crazy happens, it's not worth an AV. (since this is just being used as a hint)
+    // strange happens, it's not worth an AV. (since this is just being used as a hint)
     if (pThread == NULL)
     {
         return false;
@@ -1411,22 +1411,6 @@ DebuggerEval::DebuggerEval(CONTEXT * pContext, DebuggerIPCE_FuncEvalInfo * pEval
     // AppDomain ID which is safe to use after the AD is unloaded.  It's only safe to
     // use the DebuggerModule* after we've verified the ADID is still valid (i.e. by entering that domain).
     m_debuggerModule = g_pDebugger->LookupOrCreateModule(pEvalInfo->vmDomainFile);
-
-    if (m_debuggerModule == NULL)
-    {
-        // We have no associated code.
-        _ASSERTE((m_evalType == DB_IPCE_FET_NEW_STRING) || (m_evalType == DB_IPCE_FET_NEW_ARRAY));
-
-        // We'll just do the creation in whatever domain the thread is already in.
-        // It's conceivable that we might want to allow the caller to specify a specific domain, but
-        // ICorDebug provides the debugger with no was to specify the domain.
-        m_appDomainId = m_thread->GetDomain()->GetId();
-    }
-    else
-    {
-        m_appDomainId = m_debuggerModule->GetAppDomain()->GetId();
-    }
-
     m_funcEvalKey = pEvalInfo->funcEvalKey;
     m_argCount = pEvalInfo->argCount;
     m_targetCodeAddr = NULL;
@@ -2973,6 +2957,13 @@ DebuggerMethodInfo *Debugger::GetOrCreateMethodInfo(Module *pModule, mdMethodDef
 
 #ifndef DACCESS_COMPILE
 
+// Helper to use w/ the debug stores.
+BYTE* InteropSafeNoThrowNew(void*, size_t cBytes)
+{
+    BYTE* p = new (interopsafe, nothrow) BYTE[cBytes];
+    return p;
+}
+
 /******************************************************************************
  * GetILToNativeMapping returns a map from IL offsets to native
  * offsets for this code. An array of COR_PROF_IL_TO_NATIVE_MAP
@@ -3008,9 +2999,52 @@ HRESULT Debugger::GetILToNativeMapping(PCODE pNativeCodeStartAddress, ULONG32 cM
 #endif // PROFILING_SUPPORTED
 
     MethodDesc *fd = g_pEEInterface->GetNativeCodeMethodDesc(pNativeCodeStartAddress);
-    if (fd == NULL || fd->IsWrapperStub() || fd->IsDynamicMethod())
+    if (fd == NULL || fd->IsWrapperStub())
     {
         return E_FAIL;
+    }
+
+    if (fd->IsDynamicMethod())
+    {
+        if (g_pConfig->GetTrackDynamicMethodDebugInfo())
+        {
+            DebugInfoRequest diq;
+            diq.InitFromStartingAddr(fd, pNativeCodeStartAddress);
+
+            if (cMap == 0)
+            {
+                if (DebugInfoManager::GetBoundariesAndVars(diq, nullptr, nullptr, pcMap, nullptr, nullptr, nullptr))
+                {
+                    return S_OK;
+                }
+
+                return E_FAIL;
+            }
+
+            ICorDebugInfo::OffsetMapping* pMap = nullptr;
+            if (DebugInfoManager::GetBoundariesAndVars(diq, InteropSafeNoThrowNew, nullptr, pcMap, &pMap, nullptr, nullptr))
+            {
+                for (ULONG32 i = 0; i < cMap; ++i)
+                {
+                    map[i].ilOffset = pMap[i].ilOffset;
+                    map[i].nativeStartOffset = pMap[i].nativeOffset;
+                    if (i > 0)
+                    {
+                        map[i - 1].nativeEndOffset = map[i].nativeStartOffset;
+                    }
+                }
+
+                DeleteInteropSafe(pMap);
+
+                return S_OK;
+            }
+
+            return E_FAIL;
+        }
+        else
+        {
+            return E_FAIL;
+        }
     }
 
     DebuggerMethodInfo *pDMI = GetOrCreateMethodInfo(fd->GetModule(), fd->GetMemberDef());
@@ -3095,7 +3129,7 @@ HRESULT Debugger::GetILToNativeMapping(PCODE pNativeCodeStartAddress, ULONG32 cM
 
 HRESULT Debugger::GetILToNativeMappingIntoArrays(
     MethodDesc * pMethodDesc,
-    PCODE pCode,
+    PCODE pNativeCodeStartAddress,
     USHORT cMapMax,
     USHORT * pcMap,
     UINT ** prguiILOffset,
@@ -3108,6 +3142,7 @@ HRESULT Debugger::GetILToNativeMappingIntoArrays(
     }
     CONTRACTL_END;
 
+    _ASSERTE(pMethodDesc != NULL);
     _ASSERTE(pcMap != NULL);
     _ASSERTE(prguiILOffset != NULL);
     _ASSERTE(prguiNativeOffset != NULL);
@@ -3118,7 +3153,18 @@ HRESULT Debugger::GetILToNativeMappingIntoArrays(
 
     // Get the JIT info by functionId.
 
-    DebuggerJitInfo * pDJI = GetJitInfo(pMethodDesc, (const BYTE *)pCode);
+    if (pMethodDesc->IsWrapperStub() || pMethodDesc->IsDynamicMethod())
+    {
+        return E_FAIL;
+    }
+
+    DebuggerMethodInfo *pDMI = GetOrCreateMethodInfo(pMethodDesc->GetModule(), pMethodDesc->GetMemberDef());
+    if (pDMI == NULL)
+    {
+        return E_FAIL;
+    }
+
+    DebuggerJitInfo *pDJI = pDMI->FindOrCreateInitAndAddJitInfo(pMethodDesc, pNativeCodeStartAddress);
 
     // Dunno what went wrong
     if (pDJI == NULL)
@@ -5351,7 +5397,7 @@ DebuggerModule* Debugger::LookupOrCreateModule(Module* pModule, AppDomain *pAppD
         HRESULT hr = S_OK;
         EX_TRY
         {
-            DomainFile * pDomainFile = pModule->FindDomainFile(pAppDomain);
+            DomainFile * pDomainFile = pModule->GetDomainFile();
             SIMPLIFYING_ASSUMPTION(pDomainFile != NULL);
             dmod = AddDebuggerModule(pDomainFile); // throws
         }
@@ -9357,8 +9403,8 @@ void Debugger::SendCreateAppDomainEvent(AppDomain * pRuntimeAppDomain)
         return;
     }
 
-    STRESS_LOG2(LF_CORDB, LL_INFO10000, "D::SCADE: AppDomain creation:%#08x, %#08x\n",
-            pRuntimeAppDomain, pRuntimeAppDomain->GetId().m_dwId);
+    STRESS_LOG1(LF_CORDB, LL_INFO10000, "D::SCADE: AppDomain creation:%#08x\n",
+            pRuntimeAppDomain);
 
 
 
@@ -9412,8 +9458,8 @@ void Debugger::SendExitAppDomainEvent(AppDomain* pRuntimeAppDomain)
     LOG((LF_CORDB, LL_INFO100, "D::EAD: Exit AppDomain 0x%08x.\n",
         pRuntimeAppDomain));
 
-    STRESS_LOG3(LF_CORDB, LL_INFO10000, "D::EAD: AppDomain exit:%#08x, %#08x, %#08x\n",
-            pRuntimeAppDomain, pRuntimeAppDomain->GetId().m_dwId, CORDebuggerAttached());
+    STRESS_LOG2(LF_CORDB, LL_INFO10000, "D::EAD: AppDomain exit:%#08x, %#08x\n",
+            pRuntimeAppDomain, CORDebuggerAttached());
 
     Thread *thread = g_pEEInterface->GetThread();
     // Prevent other Runtime threads from handling events.
@@ -9608,7 +9654,7 @@ void Debugger::LoadModule(Module* pRuntimeModule,
             _ASSERTE(pManifestModule->IsManifest());
             _ASSERTE(pManifestModule->GetAssembly() == pRuntimeModule->GetAssembly());
 
-            DomainFile * pManifestDomainFile = pManifestModule->GetDomainFile(pAppDomain);
+            DomainFile * pManifestDomainFile = pManifestModule->GetDomainFile();
 
             DebuggerLockHolder dbgLockHolder(this);
 
@@ -9757,7 +9803,7 @@ void Debugger::LoadModuleFinished(Module * pRuntimeModule, AppDomain * pAppDomai
 #ifdef _DEBUG
     {
         // This notification is called once the module is loaded
-        DomainFile * pDomainFile = pRuntimeModule->FindDomainFile(pAppDomain);
+        DomainFile * pDomainFile = pRuntimeModule->GetDomainFile();
         _ASSERTE((pDomainFile != NULL) && (pDomainFile->GetLoadLevel() >= FILE_LOADED));
     }
 #endif // _DEBUG
@@ -10218,7 +10264,7 @@ BOOL Debugger::SendSystemClassLoadUnloadEvent(mdTypeDef classMetadataToken,
         // triggers too early in the loading process. FindDomainFile will not become
         // non-NULL until the module is fully loaded into the domain which is what we
         // want.
-        if (classModule->FindDomainFile(pAppDomain) != NULL )
+        if (classModule->GetDomainFile() != NULL )
         {
             // Find the Left Side module that this class belongs in.
             DebuggerModule* pModule = LookupOrCreateModule(classModule, pAppDomain);
@@ -10403,7 +10449,6 @@ void Debugger::FuncEvalComplete(Thread* pThread, DebuggerEval *pDE)
     //
     AppDomain *pDomain = pThread->GetDomain();
     AppDomain *pResultDomain = ((pDE->m_debuggerModule == NULL) ? pDomain : pDE->m_debuggerModule->GetAppDomain());
-    _ASSERTE( pResultDomain->GetId() == pDE->m_appDomainId );
 
     // Send a func eval complete event to the Right Side.
     DebuggerIPCEvent* ipce = m_pRCThread->GetIPCEventSendBuffer();
@@ -11099,9 +11144,7 @@ bool Debugger::HandleIPCEvent(DebuggerIPCEvent * pEvent)
             if(fValid)
             {
                 // Get the appdomain
-                IGCHandleManager *mgr = GCHandleUtilities::GetGCHandleManager();
-                ADIndex appDomainIndex = ADIndex((DWORD)(SIZE_T)(mgr->GetHandleContext(objectHandle)));
-                pAppDomain = SystemDomain::GetAppDomainAtIndex(appDomainIndex);
+                pAppDomain = AppDomain::GetCurrentDomain();
 
                 _ASSERTE(pAppDomain != NULL);
             }
@@ -13190,7 +13233,7 @@ HRESULT Debugger::UpdateNotYetLoadedFunction(mdMethodDef token, Module * pModule
     HRESULT hr = pModule->GetMDImport()->GetParentToken(token, &classToken);
     if (FAILED(hr))
     {
-        // We never expect this to actually fail, but just in case it does for some other crazy reason,
+        // We never expect this to actually fail, but just in case it does for some other strange reason,
         // we'll return before we AV.
         CONSISTENCY_CHECK_MSGF(false, ("Class lookup failed:mdToken:0x%08x, pModule=%p. hr=0x%08x\n", token, pModule, hr));
         return hr;
@@ -14745,12 +14788,11 @@ HRESULT Debugger::AddAppDomainToIPC(AppDomain *pAppDomain)
     HRESULT hr = S_OK;
     LPCWSTR szName = NULL;
 
-    LOG((LF_CORDB, LL_INFO100, "D::AADTIPC: Executing AADTIPC for AppDomain 0x%08x (0x%x).\n",
-        pAppDomain,
-        pAppDomain->GetId().m_dwId));
+    LOG((LF_CORDB, LL_INFO100, "D::AADTIPC: Executing AADTIPC for AppDomain 0x%08x.\n",
+        pAppDomain));
 
-    STRESS_LOG2(LF_CORDB, LL_INFO10000, "D::AADTIPC: AddAppDomainToIPC:%#08x, %#08x\n",
-            pAppDomain, pAppDomain->GetId().m_dwId);
+    STRESS_LOG1(LF_CORDB, LL_INFO10000, "D::AADTIPC: AddAppDomainToIPC:%#08x\n",
+            pAppDomain);
 
 
 
@@ -14789,9 +14831,6 @@ HRESULT Debugger::AddAppDomainToIPC(AppDomain *pAppDomain)
             hr = E_OUTOFMEMORY;
             goto LErrExit;
         }
-
-        // copy the ID
-        pAppDomainInfo->m_id = pAppDomain->GetId().m_dwId;
 
         // Now set the AppDomainName.
 
@@ -14845,9 +14884,8 @@ HRESULT Debugger::RemoveAppDomainFromIPC (AppDomain *pAppDomain)
 
     HRESULT hr = E_FAIL;
 
-    LOG((LF_CORDB, LL_INFO100, "D::RADFIPC: Executing RADFIPC for AppDomain 0x%08x (0x%x).\n",
-        pAppDomain,
-        pAppDomain->GetId().m_dwId));
+    LOG((LF_CORDB, LL_INFO100, "D::RADFIPC: Executing RADFIPC for AppDomain 0x%08x.\n",
+        pAppDomain));
 
     // if none of the slots are occupied, then simply return.
     if (m_pAppDomainCB->m_iNumOfUsedSlots == 0)
@@ -14989,7 +15027,7 @@ HRESULT Debugger::IterateAppDomainsForPdbs()
 
     while (pADInfo)
     {
-        STRESS_LOG3(LF_CORDB, LL_INFO100, "Iterating over domain %#08x AD:%#08x %ls\n", pADInfo->m_pAppDomain->GetId().m_dwId, pADInfo->m_pAppDomain, pADInfo->m_szAppDomainName);
+        STRESS_LOG2(LF_CORDB, LL_INFO100, "Iterating over domain AD:%#08x %ls\n", pADInfo->m_pAppDomain, pADInfo->m_szAppDomainName);
 
         AppDomain::AssemblyIterator i;
         i = pADInfo->m_pAppDomain->IterateAssembliesEx((AssemblyIterationFlags)(kIncludeLoaded | kIncludeLoading | kIncludeExecution));
@@ -15635,7 +15673,7 @@ HRESULT Debugger::SetReference(void *objectRefAddress,
         OBJECTREF *dst = (OBJECTREF*)objectRefAddress;
         OBJECTREF  src = *((OBJECTREF*)&newReference);
 
-        SetObjectReferenceUnchecked(dst, src);
+        SetObjectReference(dst, src);
     }
     else
     {
@@ -15674,7 +15712,7 @@ HRESULT Debugger::SetValueClass(void *oldData, void *newData, DebuggerIPCE_Basic
         return CORDBG_E_CLASS_NOT_LOADED;
 
     // Update the value class.
-    CopyValueClassUnchecked(oldData, newData, th.GetMethodTable());
+    CopyValueClass(oldData, newData, th.GetMethodTable());
 
     // Free the buffer that is holding the new data. This is a buffer that was created in response to a GET_BUFFER
     // message, so we release it with ReleaseRemoteBuffer.

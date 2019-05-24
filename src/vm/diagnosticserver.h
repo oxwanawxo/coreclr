@@ -15,25 +15,17 @@ enum class DiagnosticMessageType : uint32_t
 {
     ///////////////////////////////////////////////////////////////////////////
     // Debug = 0
+    GenerateCoreDump = 1,           // Initiates core dump generation
 
     ///////////////////////////////////////////////////////////////////////////
-    // EventPipe
-    EnableEventPipe = 1024,
-    DisableEventPipe,
-
-    // TODO: Define what else is available on the out-of-proc interface?
-    // GetSessionInfo,
-    // CreateProvider,
-    // DefineEvent,
-    // GetProvider,
-    // DeleteProvider,
-    // EventActivityIdControl,
-    // WriteEvent,
-    // WriteEventData,
-    // GetNextEvent,
+    // EventPipe = 1024
+    StartEventPipeTracing = 1024,   // To file
+    StopEventPipeTracing,
+    CollectEventPipeTracing,        // To IPC
 
     ///////////////////////////////////////////////////////////////////////////
     // Profiler = 2048
+    AttachProfiler = 2048,
 };
 
 //! TODO: Temp class.

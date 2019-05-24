@@ -3099,15 +3099,10 @@ STRINGREF GetResourceStringFromManaged(STRINGREF key)
     MethodDescCallSite getResourceStringLocal(METHOD__ENVIRONMENT__GET_RESOURCE_STRING_LOCAL);
 
     // Call Environment::GetResourceStringLocal(String name).  Returns String value (or maybe null)
-
-    ENTER_DOMAIN_PTR(SystemDomain::System()->DefaultDomain(),ADV_DEFAULTAD);
-
     // Don't need to GCPROTECT pArgs, since it's not used after the function call.
 
     ARG_SLOT pArgs[1] = { ObjToArgSlot(gc.key) };
     gc.ret = getResourceStringLocal.Call_RetSTRINGREF(pArgs);
-
-    END_DOMAIN_TRANSITION;
 
     GCPROTECT_END();
 
@@ -4210,19 +4205,6 @@ LONG WatsonLastChance(                  // EXCEPTION_CONTINUE_SEARCH, _CONTINUE_
     switch (tore.GetType())
     {
         case TypeOfReportedError::FatalError:
-            #ifdef MDA_SUPPORTED
-            {
-                MdaFatalExecutionEngineError * pMDA = MDA_GET_ASSISTANT_EX(FatalExecutionEngineError);
-
-                if ((pMDA != NULL) && (pExceptionInfo != NULL) && (pExceptionInfo->ExceptionRecord != NULL))
-                {
-                    TADDR addr = (TADDR) pExceptionInfo->ExceptionRecord->ExceptionAddress;
-                    HRESULT hrError = pExceptionInfo->ExceptionRecord->ExceptionCode;
-                    pMDA->ReportFEEE(addr, hrError);
-                }
-            }
-            #endif // MDA_SUPPORTED
-
             if (pThread != NULL)
             {
                 NotifyDebuggerLastChance(pThread, pExceptionInfo, jitAttachRequested);
@@ -4743,17 +4725,6 @@ LONG InternalUnhandledExceptionFilter_Worker(
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
-
-    if (GetEEPolicy()->GetActionOnFailure(FAIL_FatalRuntime) == eDisableRuntime)
-    {
-        ETaskType type = ::GetCurrentTaskType();
-        if (type != TT_UNKNOWN && type != TT_USER)
-        {
-            LOG((LF_EH, LL_INFO100, "InternalUnhandledExceptionFilter_Worker: calling EEPolicy::HandleFatalError\n"));
-            EEPolicy::HandleFatalError(COR_E_EXECUTIONENGINE, (UINT_PTR)GetIP(pExceptionInfo->ContextRecord), NULL, pExceptionInfo);
-        }
-    }
-
     // We don't do anything when this is called from an unmanaged thread.
     Thread *pThread = GetThread();
 
@@ -5139,17 +5110,29 @@ LONG InternalUnhandledExceptionFilter(
 
 } // LONG InternalUnhandledExceptionFilter()
 
-static bool s_useEntryPointFilter = false;
+
+// Represent the value of USE_ENTRYPOINT_FILTER as passed in the property bag to the host during construction
+static bool s_useEntryPointFilterCorhostProperty = false;
 
 void ParseUseEntryPointFilter(LPCWSTR value)
 {
-#ifdef PLATFORM_WINDOWS // This feature has only been tested on Windows, keep it disabled on other platforms
     // set s_useEntryPointFilter true if value != "0"
     if (value && (_wcsicmp(value, W("0")) != 0))
     {
-        s_useEntryPointFilter = true;
+        s_useEntryPointFilterCorhostProperty = true;
     }
+}
+
+bool GetUseEntryPointFilter()
+{
+#ifdef PLATFORM_WINDOWS // This feature has only been tested on Windows, keep it disabled on other platforms
+    static bool s_useEntryPointFilterEnv = CLRConfig::GetConfigValue(CLRConfig::INTERNAL_UseEntryPointFilter) != 0;
+
+    return s_useEntryPointFilterCorhostProperty || s_useEntryPointFilterEnv;
+#else
+    return false;
 #endif
+
 }
 
 // This filter is used to trigger unhandled exception processing for the entrypoint thread
@@ -5172,7 +5155,7 @@ LONG EntryPointFilter(PEXCEPTION_POINTERS pExceptionInfo, PVOID _pData)
         return ret;
     }
 
-    if (!s_useEntryPointFilter)
+    if (!GetUseEntryPointFilter())
     {
         return EXCEPTION_CONTINUE_SEARCH;
     }
@@ -7992,7 +7975,7 @@ LONG WINAPI CLRVectoredExceptionHandlerShim(PEXCEPTION_POINTERS pExceptionInfo)
     // in-proc helper thread to work. What it does is continue the exception unhandled which
     // will let the thread immediately execute to this point. Inside this worker the thread
     // will block until the debugger knows how to continue the exception. If it decides the
-    // exception was handled then we immediately resume execution as if the exeption had never
+    // exception was handled then we immediately resume execution as if the exception had never
     // even been allowed to run into this handler. If it is unhandled then we keep processing
     // this handler
     //
@@ -12825,7 +12808,7 @@ VOID DECLSPEC_NORETURN RealCOMPlusThrow(RuntimeExceptionKind reKind, LPCWSTR wsz
 //
 // - Can be called with gc enabled or disabled.
 //   This allows a catch-all error path to post a generic catchall error
-//   message w/out bonking more specific error messages posted by inner functions.
+//   message w/out overwriting more specific error messages posted by inner functions.
 //==========================================================================
 VOID DECLSPEC_NORETURN ThrowTypeLoadException(LPCWSTR pFullTypeName,
                                               LPCWSTR pAssemblyName,
@@ -12964,7 +12947,7 @@ VOID DECLSPEC_NORETURN RealCOMPlusThrowArgumentException(LPCWSTR argName, LPCWST
 //
 // - Can be called with gc enabled or disabled.
 //   This allows a catch-all error path to post a generic catchall error
-//   message w/out bonking more specific error messages posted by inner functions.
+//   message w/out overwriting more specific error messages posted by inner functions.
 //==========================================================================
 VOID DECLSPEC_NORETURN ThrowTypeLoadException(LPCUTF8 pszNameSpace,
                                               LPCUTF8 pTypeName,

@@ -157,7 +157,7 @@ BOOL NDirectMethodDesc::HasDefaultDllImportSearchPathsAttribute()
 
     _ASSERTE(!IsZapped());
 
-    BOOL attributeIsFound = GetDefaultDllImportSearchPathsAttributeValue(GetMDImport(),GetMemberDef(),&ndirect.m_DefaultDllImportSearchPathsAttributeValue);
+    BOOL attributeIsFound = GetDefaultDllImportSearchPathsAttributeValue(GetModule(),GetMemberDef(),&ndirect.m_DefaultDllImportSearchPathsAttributeValue);
 
     if(attributeIsFound )
     {
@@ -3169,6 +3169,10 @@ void DynamicMethodDesc::Restore()
         RestoreSignatureContainingInternalTypes(pSig, cSigLen);
     }
 }
+#else // FEATURE_PREJIT
+void DynamicMethodDesc::Restore()
+{
+}
 #endif // FEATURE_PREJIT
 
 #ifdef FEATURE_NATIVE_IMAGE_GENERATION
@@ -3912,7 +3916,6 @@ void ComPlusCallInfo::Fixup(DataImage *image)
 
 #endif // !DACCESS_COMPILE
 
-#ifdef FEATURE_PREJIT
 //*******************************************************************************
 void MethodDesc::CheckRestore(ClassLoadLevel level)
 {
@@ -3932,11 +3935,11 @@ void MethodDesc::CheckRestore(ClassLoadLevel level)
 
             // First restore method table pointer in singleton chunk;
             // it might be out-of-module
+#ifdef FEATURE_PREJIT
             GetMethodDescChunk()->RestoreMTPointer(level);
 #ifdef _DEBUG
             Module::RestoreMethodTablePointer(&m_pDebugMethodTable, NULL, level);
 #endif
-
             // Now restore wrapped method desc if present; we need this for the dictionary layout too
             if (pIMD->IMD_IsWrapperStubWithInstantiations())
                 Module::RestoreMethodDescPointer(&pIMD->m_pWrappedMethodDesc);
@@ -3946,6 +3949,9 @@ void MethodDesc::CheckRestore(ClassLoadLevel level)
             {
                 GetMethodDictionary()->Restore(GetNumGenericMethodArgs(), level);
             }
+#else
+            ClassLoader::EnsureLoaded(TypeHandle(GetMethodTable()), level);
+#endif
 
             g_IBCLogger.LogMethodDescWriteAccess(this);
 
@@ -3992,13 +3998,6 @@ void MethodDesc::CheckRestore(ClassLoadLevel level)
         }
     }
 }
-#else // FEATURE_PREJIT
-//*******************************************************************************
-void MethodDesc::CheckRestore(ClassLoadLevel level)
-{
-    LIMITED_METHOD_CONTRACT;
-}
-#endif // !FEATURE_PREJIT
 
 // static
 MethodDesc* MethodDesc::GetMethodDescFromStubAddr(PCODE addr, BOOL fSpeculative /*=FALSE*/)
@@ -4803,8 +4802,12 @@ bool MethodDesc::DetermineAndSetIsEligibleForTieredCompilation()
         // Functional requirement
         CodeVersionManager::IsMethodSupported(this) &&
 
-        // Policy - Debugging works much better with unoptimized code
-        !CORDisableJITOptimizations(GetModule()->GetDebuggerInfoBits()) &&
+        // Policy - If QuickJit is disabled and the module does not have any pregenerated code, the method would effectively not
+        // be tiered currently, so make the method ineligible for tiering to avoid some unnecessary overhead
+        (g_pConfig->TieredCompilation_QuickJit() || GetModule()->HasNativeOrReadyToRunImage()) &&
+
+        // Policy - Generating optimized code is not disabled
+        !IsJitOptimizationDisabled() &&
 
         // Policy - Tiered compilation is not disabled by the profiler
         !CORProfilerDisableTieredCompilation())
@@ -4818,6 +4821,24 @@ bool MethodDesc::DetermineAndSetIsEligibleForTieredCompilation()
     return false;
 }
 
+#endif // !DACCESS_COMPILE
+
+#ifndef CROSSGEN_COMPILE
+bool MethodDesc::IsJitOptimizationDisabled()
+{
+    WRAPPER_NO_CONTRACT;
+
+    return
+        g_pConfig->JitMinOpts() ||
+#ifdef _DEBUG
+        g_pConfig->GenDebuggableCode() ||
+#endif
+        CORDisableJITOptimizations(GetModule()->GetDebuggerInfoBits()) ||
+        (!IsNoMetadata() && IsMiNoOptimization(GetImplAttrs()));
+}
+#endif
+
+#ifndef DACCESS_COMPILE
 #ifndef CROSSGEN_COMPILE
 
 void MethodDesc::RecordAndBackpatchEntryPointSlot(
@@ -5106,7 +5127,7 @@ void NDirectMethodDesc::InterlockedSetNDirectFlags(WORD wFlags)
 }
 
 #ifndef CROSSGEN_COMPILE
-FARPROC NDirectMethodDesc::FindEntryPointWithMangling(HINSTANCE hMod, PTR_CUTF8 entryPointName) const
+FARPROC NDirectMethodDesc::FindEntryPointWithMangling(NATIVE_LIBRARY_HANDLE hMod, PTR_CUTF8 entryPointName) const
 {
     CONTRACTL
     {
@@ -5116,7 +5137,11 @@ FARPROC NDirectMethodDesc::FindEntryPointWithMangling(HINSTANCE hMod, PTR_CUTF8 
     }
     CONTRACTL_END;
 
+#ifndef FEATURE_PAL
     FARPROC pFunc = GetProcAddress(hMod, entryPointName);
+#else
+    FARPROC pFunc = PAL_GetProcAddressDirect(hMod, entryPointName);
+#endif
 
 #if defined(_TARGET_X86_)
 
@@ -5127,6 +5152,13 @@ FARPROC NDirectMethodDesc::FindEntryPointWithMangling(HINSTANCE hMod, PTR_CUTF8 
 
     if (IsStdCall())
     {
+        if (GetModule()->IsReadyToRun())
+        {
+            // Computing if marshalling is required also computes the required stack size. We need the stack size to correctly form the
+            // name of the import pinvoke function on x86
+            ((NDirectMethodDesc*)this)->MarshalingRequired();
+        }
+
         DWORD probedEntrypointNameLength = (DWORD)(strlen(entryPointName) + 1); // 1 for null terminator
         int dstbufsize = (int)(sizeof(char) * (probedEntrypointNameLength + 10)); // 10 for stdcall mangling
         LPSTR szProbedEntrypointName = ((LPSTR)_alloca(dstbufsize + 1));
@@ -5152,7 +5184,7 @@ FARPROC NDirectMethodDesc::FindEntryPointWithMangling(HINSTANCE hMod, PTR_CUTF8 
 }
 
 //*******************************************************************************
-LPVOID NDirectMethodDesc::FindEntryPoint(HINSTANCE hMod) const
+LPVOID NDirectMethodDesc::FindEntryPoint(NATIVE_LIBRARY_HANDLE hMod) const
 {
     CONTRACTL
     {
@@ -5270,8 +5302,8 @@ BOOL MethodDesc::HasNativeCallableAttribute()
     }
     CONTRACTL_END;
 
-    HRESULT hr = GetMDImport()->GetCustomAttributeByName(GetMemberDef(),
-        g_NativeCallableAttribute,
+    HRESULT hr = GetModule()->GetCustomAttribute(GetMemberDef(),
+        WellKnownAttribute::NativeCallable,
         NULL,
         NULL);
     if (hr == S_OK)

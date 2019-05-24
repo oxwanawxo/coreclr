@@ -3829,18 +3829,15 @@ ClrDataAccess::GetAppDomainByUniqueID(
 
     EX_TRY
     {
-        AppDomainIterator iter(FALSE);
-
-        status = E_INVALIDARG;
-        while (iter.Next())
+        if (uniqueID != DefaultADID)
         {
-            if (iter.GetDomain()->GetId().m_dwId == uniqueID)
-            {
-                *appDomain = new (nothrow)
-                    ClrDataAppDomain(this, iter.GetDomain());
-                status = *appDomain ? S_OK : E_OUTOFMEMORY;
-                break;
-            }
+            status = E_INVALIDARG;
+        }
+        else
+        {
+            *appDomain = new (nothrow)
+                ClrDataAppDomain(this, AppDomain::GetCurrentDomain());
+            status = *appDomain ? S_OK : E_OUTOFMEMORY;
         }
     }
     EX_CATCH
@@ -7848,13 +7845,10 @@ STDAPI OutOfProcessExceptionEventSignatureCallback(__in PDWORD pContext,
     }
     EX_CATCH_HRESULT(hr);
 
-#ifndef FEATURE_WINDOWSPHONE
-    // we can't assert this on phone as it's possible for the OS to kill
+    // it's possible for the OS to kill
     // the faulting process before WER crash reporting has completed.
-    _ASSERTE(hr == S_OK);
-#else
     _ASSERTE(hr == S_OK || hr == CORDBG_E_READVIRTUAL_FAILURE);
-#endif
+
     if (hr != S_OK)
     {
         // S_FALSE means either it is not a managed exception or we do not have Watson buckets.
@@ -8105,7 +8099,7 @@ bool DacHandleWalker::FetchMoreHandles(HANDLESCANPROC callback)
                         if (mask & 1)
                         {
                             dac_handle_table *pTable = hTable;
-                            PTR_AppDomain pDomain = SystemDomain::GetAppDomainAtIndex(ADIndex(pTable->uADIndex));
+                            PTR_AppDomain pDomain = AppDomain::GetCurrentDomain();
                             param.AppDomain = TO_CDADDR(pDomain.GetAddr());
                             param.Type = handleType;
 
@@ -8475,7 +8469,6 @@ StackWalkAction DacStackReferenceWalker::Callback(CrawlFrame *pCF, VOID *pData)
 
     MethodDesc *pMD = pCF->GetFunction();
     gcctx->sc->pMD = pMD;
-    gcctx->sc->pCurrentDomain = pCF->GetAppDomain();
 
     PREGDISPLAY pRD = pCF->GetRegisterSet();
     dsc->sp = (TADDR)GetRegdisplaySP(pRD);;

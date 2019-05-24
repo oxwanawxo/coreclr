@@ -145,12 +145,11 @@ void Lowering::LowerStoreIndir(GenTreeIndir* node)
 //
 void Lowering::LowerBlockStore(GenTreeBlk* blkNode)
 {
-    GenTree*  dstAddr       = blkNode->Addr();
-    unsigned  size          = blkNode->gtBlkSize;
-    GenTree*  source        = blkNode->Data();
-    Compiler* compiler      = comp;
-    GenTree*  srcAddrOrFill = nullptr;
-    bool      isInitBlk     = blkNode->OperIsInitBlkOp();
+    GenTree* dstAddr       = blkNode->Addr();
+    unsigned size          = blkNode->gtBlkSize;
+    GenTree* source        = blkNode->Data();
+    GenTree* srcAddrOrFill = nullptr;
+    bool     isInitBlk     = blkNode->OperIsInitBlkOp();
 
     if (!isInitBlk)
     {
@@ -593,7 +592,6 @@ void Lowering::LowerPutArgStk(GenTreePutArgStk* putArgStk)
     }
 
 #ifdef FEATURE_PUT_STRUCT_ARG_STK
-    GenTree* dst     = putArgStk;
     GenTree* srcAddr = nullptr;
 
     bool haveLocalAddr = false;
@@ -615,7 +613,7 @@ void Lowering::LowerPutArgStk(GenTreePutArgStk* putArgStk)
     // it might be the right thing to do.
 
     // This threshold will decide from using the helper or let the JIT decide to inline
-    // a code sequence of its choice.
+    // a code sequence of its choice, but currently we use CPBLK_UNROLL_LIMIT, see #20549.
     ssize_t helperThreshold = max(CPBLK_MOVS_LIMIT, CPBLK_UNROLL_LIMIT);
     ssize_t size            = putArgStk->gtNumSlots * TARGET_POINTER_SIZE;
 
@@ -1765,11 +1763,11 @@ void Lowering::ContainCheckDivOrMod(GenTreeOp* node)
         return;
     }
 
-    GenTree* dividend = node->gtGetOp1();
-    GenTree* divisor  = node->gtGetOp2();
+    GenTree* divisor = node->gtGetOp2();
 
     bool divisorCanBeRegOptional = true;
 #ifdef _TARGET_X86_
+    GenTree* dividend = node->gtGetOp1();
     if (dividend->OperGet() == GT_LONG)
     {
         divisorCanBeRegOptional = false;
@@ -2494,15 +2492,32 @@ bool Lowering::IsContainableHWIntrinsicOp(GenTreeHWIntrinsic* containingNode, Ge
 
         case HW_Category_SimpleSIMD:
         {
-            // These intrinsics only expect 16 or 32-byte nodes for containment
-            assert((genTypeSize(node->TypeGet()) == 16) || (genTypeSize(node->TypeGet()) == 32));
+            switch (containingIntrinsicId)
+            {
+                case NI_SSE41_ConvertToVector128Int16:
+                case NI_SSE41_ConvertToVector128Int32:
+                case NI_SSE41_ConvertToVector128Int64:
+                case NI_AVX2_ConvertToVector256Int16:
+                case NI_AVX2_ConvertToVector256Int32:
+                case NI_AVX2_ConvertToVector256Int64:
+                {
+                    supportsGeneralLoads = (!node->OperIsHWIntrinsic());
+                    break;
+                }
+
+                default:
+                {
+                    // These intrinsics only expect 16 or 32-byte nodes for containment
+                    assert((genTypeSize(node->TypeGet()) == 16) || (genTypeSize(node->TypeGet()) == 32));
+                    supportsAlignedSIMDLoads =
+                        !comp->canUseVexEncoding() && (containingIntrinsicId != NI_SSE2_ConvertToVector128Double);
+                    supportsUnalignedSIMDLoads = !supportsAlignedSIMDLoads;
+                    supportsGeneralLoads       = supportsUnalignedSIMDLoads;
+                    break;
+                }
+            }
+
             assert(supportsSIMDScalarLoads == false);
-
-            supportsAlignedSIMDLoads =
-                !comp->canUseVexEncoding() && (containingIntrinsicId != NI_SSE2_ConvertToVector128Double);
-            supportsUnalignedSIMDLoads = !supportsAlignedSIMDLoads;
-            supportsGeneralLoads       = supportsUnalignedSIMDLoads;
-
             break;
         }
 
@@ -2656,8 +2671,8 @@ bool Lowering::IsContainableHWIntrinsicOp(GenTreeHWIntrinsic* containingNode, Ge
 
             switch (containingIntrinsicId)
             {
-                case NI_Base_Vector128_CreateScalarUnsafe:
-                case NI_Base_Vector256_CreateScalarUnsafe:
+                case NI_Vector128_CreateScalarUnsafe:
+                case NI_Vector256_CreateScalarUnsafe:
                 {
                     assert(supportsSIMDScalarLoads == false);
 
@@ -2910,6 +2925,22 @@ void Lowering::ContainCheckHWIntrinsic(GenTreeHWIntrinsic* node)
                         break;
                     }
 
+                    case NI_SSE41_ConvertToVector128Int16:
+                    case NI_SSE41_ConvertToVector128Int32:
+                    case NI_SSE41_ConvertToVector128Int64:
+                    case NI_AVX2_ConvertToVector256Int16:
+                    case NI_AVX2_ConvertToVector256Int32:
+                    case NI_AVX2_ConvertToVector256Int64:
+                    {
+                        if (!varTypeIsSIMD(op1->gtType))
+                        {
+                            GenTree** pAddr = &node->gtOp1;
+                            ContainCheckHWIntrinsicAddr(node, pAddr);
+                            return;
+                        }
+                        break;
+                    }
+
                     default:
                     {
                         break;
@@ -2974,14 +3005,14 @@ void Lowering::ContainCheckHWIntrinsic(GenTreeHWIntrinsic* node)
                     {
                         switch (intrinsicId)
                         {
-                            case NI_SSE_CompareLessThanOrderedScalar:
-                            case NI_SSE_CompareLessThanUnorderedScalar:
-                            case NI_SSE_CompareLessThanOrEqualOrderedScalar:
-                            case NI_SSE_CompareLessThanOrEqualUnorderedScalar:
-                            case NI_SSE2_CompareLessThanOrderedScalar:
-                            case NI_SSE2_CompareLessThanUnorderedScalar:
-                            case NI_SSE2_CompareLessThanOrEqualOrderedScalar:
-                            case NI_SSE2_CompareLessThanOrEqualUnorderedScalar:
+                            case NI_SSE_CompareScalarOrderedLessThan:
+                            case NI_SSE_CompareScalarUnorderedLessThan:
+                            case NI_SSE_CompareScalarOrderedLessThanOrEqual:
+                            case NI_SSE_CompareScalarUnorderedLessThanOrEqual:
+                            case NI_SSE2_CompareScalarOrderedLessThan:
+                            case NI_SSE2_CompareScalarUnorderedLessThan:
+                            case NI_SSE2_CompareScalarOrderedLessThanOrEqual:
+                            case NI_SSE2_CompareScalarUnorderedLessThanOrEqual:
                             {
                                 // We need to swap the operands for CompareLessThanOrEqual
                                 node->gtOp1 = op2;
@@ -2992,7 +3023,7 @@ void Lowering::ContainCheckHWIntrinsic(GenTreeHWIntrinsic* node)
 
                             default:
                             {
-                                // TODO-XArch-CQ: The Compare*OrderedScalar and Compare*UnorderedScalar methods
+                                // TODO-XArch-CQ: The CompareScalarOrdered* and CompareScalarUnordered* methods
                                 //                are commutative if you also inverse the intrinsic.
                                 break;
                             }

@@ -41,6 +41,7 @@ set(VM_SOURCES_DAC_AND_WKS_COMMON
     assembly.cpp
     baseassemblyspec.cpp
     binder.cpp
+    callcounter.cpp
     ceeload.cpp
     class.cpp
     classhash.cpp
@@ -57,6 +58,7 @@ set(VM_SOURCES_DAC_AND_WKS_COMMON
     debughelp.cpp
     debuginfostore.cpp
     decodemd.cpp
+    diagnosticprotocolhelper.cpp
     disassembler.cpp
     dllimport.cpp
     domainfile.cpp
@@ -287,7 +289,6 @@ set(VM_SOURCES_WKS
     assemblynative.cpp
     assemblyspec.cpp
     cachelinealloc.cpp
-    callcounter.cpp
     callhelpers.cpp
     callsiteinspect.cpp
     ceemain.cpp
@@ -351,7 +352,6 @@ set(VM_SOURCES_WKS
     jithelpers.cpp
     managedmdimport.cpp
     marshalnative.cpp
-    mdaassistants.cpp
     methodtablebuilder.cpp
     mlinfo.cpp
     mscorlib.cpp # <DisablePrecompiledHeaders>true</DisablePrecompiledHeaders>
@@ -363,9 +363,6 @@ set(VM_SOURCES_WKS
     objectlist.cpp
     olevariant.cpp
     pendingload.cpp
-    profattach.cpp
-    profattachclient.cpp
-    profattachserver.cpp
     profdetach.cpp
     profilermetadataemitvalidator.cpp
     profilingenumerators.cpp
@@ -388,7 +385,6 @@ set(VM_SOURCES_WKS
     syncclean.cpp
     synch.cpp
     synchronizationcontextnative.cpp
-    testhookmgr.cpp
     threaddebugblockinginfo.cpp
     threadsuspend.cpp
     typeparse.cpp
@@ -474,7 +470,6 @@ set(VM_HEADERS_WKS
     invokeutil.h
     managedmdimport.hpp
     marshalnative.h
-    mdaassistants.h
     methodtablebuilder.h
     mlinfo.h
     mscorlib.h
@@ -486,13 +481,9 @@ set(VM_HEADERS_WKS
     objectlist.h
     olevariant.h
     pendingload.h
-    profattach.h
-    profattachclient.h
-    profattachserver.h
     profdetach.h
     profilermetadataemitvalidator.h
     profilingenumerators.h
-    profilinghelper.h
     profilinghelper.h
     proftoeeinterfaceimpl.h
     proftoeeinterfaceimpl.inl
@@ -512,7 +503,6 @@ set(VM_HEADERS_WKS
     syncclean.hpp
     synch.h
     synchronizationcontextnative.h
-    testhookmgr.h
     tieredcompilation.h
     threaddebugblockinginfo.h
     threadsuspend.h
@@ -679,6 +669,7 @@ elseif(CLR_CMAKE_TARGET_ARCH_I386)
         ${ARCH_SOURCES_DIR}/asmhelpers.asm
         ${ARCH_SOURCES_DIR}/gmsasm.asm
         ${ARCH_SOURCES_DIR}/jithelp.asm
+        ${ARCH_SOURCES_DIR}/PInvokeStubs.asm
     )
 
     set(VM_HEADERS_WKS_ARCH_ASM
@@ -735,6 +726,7 @@ else(WIN32)
             ${ARCH_SOURCES_DIR}/asmhelpers.S
             ${ARCH_SOURCES_DIR}/jithelp.S
             ${ARCH_SOURCES_DIR}/gmsasm.S
+            ${ARCH_SOURCES_DIR}/pinvokestubs.S
             ${ARCH_SOURCES_DIR}/umthunkstub.S
         )
     elseif(CLR_CMAKE_TARGET_ARCH_ARM)
@@ -916,5 +908,5 @@ add_subdirectory(dac)
 add_subdirectory(wks)
 
 if(FEATURE_PERFTRACING)
-    add_subdirectory(${GENERATED_EVENTING_DIR}/eventpipe ${CMAKE_CURRENT_BINARY_DIR}/eventpipe)
+    add_subdirectory(eventing)
 endif(FEATURE_PERFTRACING)

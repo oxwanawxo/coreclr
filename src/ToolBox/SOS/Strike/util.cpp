@@ -46,6 +46,7 @@ PIMAGEHLP_SYMBOL sym = (PIMAGEHLP_SYMBOL) symBuffer;
 #include <sys/stat.h>
 #include <coreruncommon.h>
 #include <dlfcn.h>
+#include <wctype.h>
 #endif // !FEATURE_PAL
 
 #include <coreclrhost.h>
@@ -1931,7 +1932,7 @@ CLRDATA_ADDRESS GetAppDomain(CLRDATA_ADDRESS objPtr)
             return NULL;
         }
         
-        DWORD adIndex = (value >> SBLK_APPDOMAIN_SHIFT) & SBLK_MASK_APPDOMAININDEX;
+        DWORD adIndex = 0;
         if ( ((value & BIT_SBLK_IS_HASH_OR_SYNCBLKINDEX) != 0) || adIndex==0)
         {
             // No AppDomainID information. We'll make use of a heuristic.
@@ -3251,21 +3252,27 @@ void DumpTieredNativeCodeAddressInfo(struct DacpTieredVersionData * pTieredVersi
     for(int i = cTieredVersionData - 1; i >= 0; --i)
     {
         const char *descriptor = NULL;
-        switch(pTieredVersionData[i].TieredInfo)
+        switch(pTieredVersionData[i].OptimizationTier)
         {
-        case DacpTieredVersionData::TIERED_UNKNOWN:
+        case DacpTieredVersionData::OptimizationTier_Unknown:
         default:
             _ASSERTE(!"Update SOS to understand the new tier");
             descriptor = "Unknown Tier";
             break;
-        case DacpTieredVersionData::NON_TIERED:
-            descriptor = "Non-Tiered";
+        case DacpTieredVersionData::OptimizationTier_MinOptJitted:
+            descriptor = "MinOptJitted";
             break;
-        case DacpTieredVersionData::TIERED_0:
-            descriptor = "Tier 0";
+        case DacpTieredVersionData::OptimizationTier_Optimized:
+            descriptor = "Optimized";
             break;
-        case DacpTieredVersionData::TIERED_1:
-            descriptor = "Tier 1";
+        case DacpTieredVersionData::OptimizationTier_QuickJitted:
+            descriptor = "QuickJitted";
+            break;
+        case DacpTieredVersionData::OptimizationTier_OptimizedTier1:
+            descriptor = "OptimizedTier1";
+            break;
+        case DacpTieredVersionData::OptimizationTier_ReadyToRun:
+            descriptor = "ReadyToRun";
             break;
         }
 
@@ -3827,7 +3834,7 @@ void StringObjectContent(size_t obj, BOOL fLiteral, const int length)
             ULONG j,k=0;
             for (j = 0; j < wcharsRead; j ++) 
             {
-                if (_iswprint (buffer[j])) {
+                if (iswprint (buffer[j])) {
                     out[k] = buffer[j];
                     k ++;
                 }

@@ -90,9 +90,6 @@
 
 #include "volatile.h"
 
-// make all the unsafe redefinitions available
-#include "unsafe.h"
-
 #include <../../debug/inc/dbgtargetcontext.h>
 
 //-----------------------------------------------------------------------------------------------------------
@@ -114,11 +111,11 @@
 
 typedef VPTR(class LoaderAllocator)     PTR_LoaderAllocator;
 typedef VPTR(class AppDomain)           PTR_AppDomain;
-typedef VPTR(class AppDomainBaseObject) PTR_AppDomainBaseObject;
 typedef DPTR(class ArrayBase)           PTR_ArrayBase;
 typedef DPTR(class ArrayTypeDesc)       PTR_ArrayTypeDesc;
 typedef DPTR(class Assembly)            PTR_Assembly;
 typedef DPTR(class AssemblyBaseObject)  PTR_AssemblyBaseObject;
+typedef DPTR(class AssemblyLoadContextBaseObject) PTR_AssemblyLoadContextBaseObject;
 typedef DPTR(class AssemblyNameBaseObject) PTR_AssemblyNameBaseObject;
 typedef VPTR(class BaseDomain)          PTR_BaseDomain;
 typedef DPTR(class ClassLoader)         PTR_ClassLoader;
@@ -384,7 +381,7 @@ inline VOID UnsafeEEEnterCriticalSection(LPCRITICAL_SECTION lpCriticalSection)
     STATIC_CONTRACT_GC_NOTRIGGER;
     STATIC_CONTRACT_CAN_TAKE_LOCK;
 
-    UnsafeEnterCriticalSection(lpCriticalSection);
+    EnterCriticalSection(lpCriticalSection);
     INCTHREADLOCKCOUNT();
 }
 
@@ -393,7 +390,7 @@ inline VOID UnsafeEELeaveCriticalSection(LPCRITICAL_SECTION lpCriticalSection)
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
 
-    UnsafeLeaveCriticalSection(lpCriticalSection);
+    LeaveCriticalSection(lpCriticalSection);
     DECTHREADLOCKCOUNT();
 }
 
@@ -403,7 +400,7 @@ inline BOOL UnsafeEETryEnterCriticalSection(LPCRITICAL_SECTION lpCriticalSection
     STATIC_CONTRACT_GC_NOTRIGGER;
     STATIC_CONTRACT_CAN_TAKE_LOCK;
 
-    BOOL fEnteredCriticalSection = UnsafeTryEnterCriticalSection(lpCriticalSection);
+    BOOL fEnteredCriticalSection = TryEnterCriticalSection(lpCriticalSection);
     if(fEnteredCriticalSection)
     {
         INCTHREADLOCKCOUNT();
@@ -470,6 +467,7 @@ extern DummyGlobalContract ___contract;
 #include "WinRTRedirector.h"
 #include "winrtredirector.inl"
 #endif // FEATURE_COMINTEROP
+#include "eventtrace.inl"
 
 #if defined(COMMON_TURNED_FPO_ON)
 #pragma optimize("", on)        // Go back to command line default optimizations
