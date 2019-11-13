@@ -11,17 +11,14 @@ namespace System
 {
     public abstract partial class Enum
     {
-        [DllImport(JitHelpers.QCall, CharSet = CharSet.Unicode)]
+        [DllImport(RuntimeHelpers.QCall, CharSet = CharSet.Unicode)]
         private static extern void GetEnumValuesAndNames(QCallTypeHandle enumType, ObjectHandleOnStack values, ObjectHandleOnStack names, Interop.BOOL getNames);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        public override extern bool Equals(object? obj);
+        public extern override bool Equals(object? obj);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern object InternalBoxEnum(RuntimeType enumType, long value);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern int InternalCompareTo(object thisRef, object? target);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private extern CorElementType InternalGetCorElementType();
@@ -57,9 +54,9 @@ namespace System
                 string[]? names = null;
                 RuntimeTypeHandle enumTypeHandle = enumType.GetTypeHandleInternal();
                 GetEnumValuesAndNames(
-                    JitHelpers.GetQCallTypeHandleOnStack(ref enumTypeHandle),
-                    JitHelpers.GetObjectHandleOnStack(ref values),
-                    JitHelpers.GetObjectHandleOnStack(ref names),
+                    new QCallTypeHandle(ref enumTypeHandle),
+                    ObjectHandleOnStack.Create(ref values),
+                    ObjectHandleOnStack.Create(ref names),
                     getNames ? Interop.BOOL.TRUE : Interop.BOOL.FALSE);
                 bool hasFlagsAttribute = enumType.IsDefined(typeof(FlagsAttribute), inherit: false);
 
@@ -145,37 +142,6 @@ namespace System
             if (!(enumType is RuntimeType rtType))
                 throw new ArgumentException(SR.Arg_MustBeType, nameof(enumType));
             return rtType;
-        }
-
-        public int CompareTo(object? target)
-        {
-            const int retIncompatibleMethodTables = 2;  // indicates that the method tables did not match
-            const int retInvalidEnumType = 3; // indicates that the enum was of an unknown/unsupported underlying type
-
-            if (this == null)
-                throw new NullReferenceException();
-
-            int ret = InternalCompareTo(this, target);
-
-            if (ret < retIncompatibleMethodTables)
-            {
-                // -1, 0 and 1 are the normal return codes
-                return ret;
-            }
-            else if (ret == retIncompatibleMethodTables)
-            {
-                Type thisType = this.GetType();
-                Type targetType = target!.GetType();
-
-                throw new ArgumentException(SR.Format(SR.Arg_EnumAndObjectMustBeSameType, targetType, thisType));
-            }
-            else
-            {
-                // assert valid return code (3)
-                Debug.Assert(ret == retInvalidEnumType, "Enum.InternalCompareTo return code was invalid");
-
-                throw new InvalidOperationException(SR.InvalidOperation_UnknownEnumType);
-            }
         }
     }
 }

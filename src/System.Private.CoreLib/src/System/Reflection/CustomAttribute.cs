@@ -2,12 +2,10 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 
 namespace System.Reflection
 {
@@ -112,7 +110,7 @@ namespace System.Reflection
 
             // No pseudo attributes for RuntimeAssembly
 
-            return GetCustomAttributes((RuntimeModule)target.ManifestModule!, RuntimeAssembly.GetToken(target.GetNativeHandle()));
+            return GetCustomAttributes((RuntimeModule)target.ManifestModule, RuntimeAssembly.GetToken(target.GetNativeHandle()));
         }
 
         internal static IList<CustomAttributeData> GetCustomAttributesInternal(RuntimeParameterInfo target)
@@ -258,7 +256,7 @@ namespace System.Reflection
 
             for (int i = 0; i < records.Length; i++)
             {
-                scope.GetCustomAttributeProps(tkCustomAttributeTokens[i], 
+                scope.GetCustomAttributeProps(tkCustomAttributeTokens[i],
                     out records[i].tkCtor.Value, out records[i].blob);
             }
 
@@ -275,7 +273,7 @@ namespace System.Reflection
                 }
             }
 
-            return new CustomAttributeTypedArgument();
+            return default;
         }
         #endregion
 
@@ -440,9 +438,9 @@ namespace System.Reflection
         #endregion
 
         #region Public Members
-        public virtual Type? AttributeType { get { return Constructor.DeclaringType; } }
+        public virtual Type AttributeType => Constructor.DeclaringType!;
 
-        public virtual ConstructorInfo Constructor { get { return m_ctor; } }
+        public virtual ConstructorInfo Constructor => m_ctor;
 
         public virtual IList<CustomAttributeTypedArgument> ConstructorArguments
         {
@@ -500,148 +498,32 @@ namespace System.Reflection
         #endregion
     }
 
-    public readonly struct CustomAttributeNamedArgument
+    public readonly partial struct CustomAttributeTypedArgument
     {
-        public static bool operator ==(CustomAttributeNamedArgument left, CustomAttributeNamedArgument right) => left.Equals(right);
-        public static bool operator !=(CustomAttributeNamedArgument left, CustomAttributeNamedArgument right) => !left.Equals(right);
-
-        private readonly MemberInfo m_memberInfo;
-        private readonly CustomAttributeTypedArgument m_value;
-
-        #region Constructor
-        public CustomAttributeNamedArgument(MemberInfo memberInfo, object? value)
-        {
-            if (memberInfo == null)
-                throw new ArgumentNullException(nameof(memberInfo));
-
-            Type type;
-            if (memberInfo is FieldInfo field)
-            {
-                type = field.FieldType;
-            }
-            else if (memberInfo is PropertyInfo property)
-            {
-                type = property.PropertyType;
-            }
-            else
-            {
-                throw new ArgumentException(SR.Argument_InvalidMemberForNamedArgument);
-            }
-
-            m_memberInfo = memberInfo;
-            m_value = new CustomAttributeTypedArgument(type, value);
-        }
-
-        public CustomAttributeNamedArgument(MemberInfo memberInfo, CustomAttributeTypedArgument typedArgument)
-        {
-            if (memberInfo == null)
-                throw new ArgumentNullException(nameof(memberInfo));
-
-            m_memberInfo = memberInfo;
-            m_value = typedArgument;
-        }
-        #endregion
-
-        #region Object Override
-        public override string ToString()
-        {
-            if (m_memberInfo == null)
-                return base.ToString();
-
-            return string.Format("{0} = {1}", MemberInfo.Name, TypedValue.ToString(ArgumentType != typeof(object)));
-        }
-        public override int GetHashCode()
-        {
-            return base.GetHashCode();
-        }
-        public override bool Equals(object? obj)
-        {
-            return obj == (object)this;
-        }
-        #endregion
-
-        #region Internal Members
-        internal Type ArgumentType
-        {
-            get
-            {
-                return m_memberInfo is FieldInfo ?
-                    ((FieldInfo)m_memberInfo).FieldType :
-                    ((PropertyInfo)m_memberInfo).PropertyType;
-            }
-        }
-        #endregion
-
-        public MemberInfo MemberInfo => m_memberInfo;
-        public CustomAttributeTypedArgument TypedValue => m_value;
-        public string MemberName => MemberInfo.Name;
-        public bool IsField => MemberInfo is FieldInfo;
-    }
-
-    public readonly struct CustomAttributeTypedArgument
-    {
-        public static bool operator ==(CustomAttributeTypedArgument left, CustomAttributeTypedArgument right) => left.Equals(right);
-        public static bool operator !=(CustomAttributeTypedArgument left, CustomAttributeTypedArgument right) => !left.Equals(right);
-
         #region Private Static Methods
         private static Type CustomAttributeEncodingToType(CustomAttributeEncoding encodedType)
         {
-            switch (encodedType)
+            return encodedType switch
             {
-                case (CustomAttributeEncoding.Enum):
-                    return typeof(Enum);
-
-                case (CustomAttributeEncoding.Int32):
-                    return typeof(int);
-
-                case (CustomAttributeEncoding.String):
-                    return typeof(string);
-
-                case (CustomAttributeEncoding.Type):
-                    return typeof(Type);
-
-                case (CustomAttributeEncoding.Array):
-                    return typeof(Array);
-
-                case (CustomAttributeEncoding.Char):
-                    return typeof(char);
-
-                case (CustomAttributeEncoding.Boolean):
-                    return typeof(bool);
-
-                case (CustomAttributeEncoding.SByte):
-                    return typeof(sbyte);
-
-                case (CustomAttributeEncoding.Byte):
-                    return typeof(byte);
-
-                case (CustomAttributeEncoding.Int16):
-                    return typeof(short);
-
-                case (CustomAttributeEncoding.UInt16):
-                    return typeof(ushort);
-
-                case (CustomAttributeEncoding.UInt32):
-                    return typeof(uint);
-
-                case (CustomAttributeEncoding.Int64):
-                    return typeof(long);
-
-                case (CustomAttributeEncoding.UInt64):
-                    return typeof(ulong);
-
-                case (CustomAttributeEncoding.Float):
-                    return typeof(float);
-
-                case (CustomAttributeEncoding.Double):
-                    return typeof(double);
-
-                case (CustomAttributeEncoding.Object):
-                    return typeof(object);
-
-                default:
-                    throw new ArgumentException(SR.Format(SR.Arg_EnumIllegalVal, (int)encodedType), nameof(encodedType));
-            }
+                CustomAttributeEncoding.Enum => typeof(Enum),
+                CustomAttributeEncoding.Int32 => typeof(int),
+                CustomAttributeEncoding.String => typeof(string),
+                CustomAttributeEncoding.Type => typeof(Type),
+                CustomAttributeEncoding.Array => typeof(Array),
+                CustomAttributeEncoding.Char => typeof(char),
+                CustomAttributeEncoding.Boolean => typeof(bool),
+                CustomAttributeEncoding.SByte => typeof(sbyte),
+                CustomAttributeEncoding.Byte => typeof(byte),
+                CustomAttributeEncoding.Int16 => typeof(short),
+                CustomAttributeEncoding.UInt16 => typeof(ushort),
+                CustomAttributeEncoding.UInt32 => typeof(uint),
+                CustomAttributeEncoding.Int64 => typeof(long),
+                CustomAttributeEncoding.UInt64 => typeof(ulong),
+                CustomAttributeEncoding.Float => typeof(float),
+                CustomAttributeEncoding.Double => typeof(double),
+                CustomAttributeEncoding.Object => typeof(object),
+                _ => throw new ArgumentException(SR.Format(SR.Arg_EnumIllegalVal, (int)encodedType), nameof(encodedType)),
+            };
         }
 
         private static object EncodedValueToRawValue(long val, CustomAttributeEncoding encodedType)
@@ -699,30 +581,6 @@ namespace System.Reflection
             return type;
         }
         #endregion
-
-        private readonly object? m_value;
-        private readonly Type m_argumentType;
-
-        #region Constructor
-        public CustomAttributeTypedArgument(Type argumentType, object? value)
-        {
-            // value can be null.
-            if (argumentType == null)
-                throw new ArgumentNullException(nameof(argumentType));
-
-            m_value = (value is null) ? null : CanonicalizeValue(value);
-            m_argumentType = argumentType;
-        }
-
-        public CustomAttributeTypedArgument(object value)
-        {
-            // value cannot be null.
-            if (value == null)
-                throw new ArgumentNullException(nameof(value));
-
-            m_value = CanonicalizeValue(value);
-            m_argumentType = value.GetType();
-        }
 
         private static object CanonicalizeValue(object value)
         {
@@ -796,55 +654,6 @@ namespace System.Reflection
                 m_value = EncodedValueToRawValue(encodedArg.PrimitiveValue, encodedType);
             }
         }
-        #endregion
-
-        public override string ToString() => ToString(false);
-
-        internal string ToString(bool typed)
-        {
-            if (m_argumentType == null)
-                return base.ToString();
-
-            if (ArgumentType.IsEnum)
-                return string.Format(typed ? "{0}" : "({1}){0}", Value, ArgumentType.FullName);
-
-            else if (Value == null)
-                return string.Format(typed ? "null" : "({0})null", ArgumentType.Name);
-
-            else if (ArgumentType == typeof(string))
-                return string.Format("\"{0}\"", Value);
-
-            else if (ArgumentType == typeof(char))
-                return string.Format("'{0}'", Value);
-
-            else if (ArgumentType == typeof(Type))
-                return string.Format("typeof({0})", ((Type)Value!).FullName);
-
-            else if (ArgumentType.IsArray)
-            {
-                IList<CustomAttributeTypedArgument> array = (IList<CustomAttributeTypedArgument>)Value!;
-
-                Type elementType = ArgumentType.GetElementType()!;
-                string result = string.Format(@"new {0}[{1}] {{ ", elementType.IsEnum ? elementType.FullName : elementType.Name, array.Count);
-
-                for (int i = 0; i < array.Count; i++)
-                {
-                    result += string.Format(i == 0 ? "{0}" : ", {0}", array[i].ToString(elementType != typeof(object)));
-                }
-
-                result += " }";
-
-                return result;
-            }
-
-            return string.Format(typed ? "{0}" : "({1}){0}", Value, ArgumentType.Name);
-        }
-
-        public override int GetHashCode() => base.GetHashCode();
-        public override bool Equals(object? obj) => obj == (object)this;
-
-        public Type ArgumentType => m_argumentType;
-        public object? Value => m_value;
     }
 
     [StructLayout(LayoutKind.Auto)]
@@ -946,7 +755,7 @@ namespace System.Reflection
             m_fieldOrProperty = fieldOrProperty;
             m_padding = fieldOrProperty;
             m_type = type;
-            m_encodedArgument = new CustomAttributeEncodedArgument();
+            m_encodedArgument = default;
         }
 
         public CustomAttributeEncodedArgument EncodedArgument => m_encodedArgument;
@@ -961,7 +770,7 @@ namespace System.Reflection
         public CustomAttributeCtorParameter(CustomAttributeType type)
         {
             m_type = type;
-            m_encodedArgument = new CustomAttributeEncodedArgument();
+            m_encodedArgument = default;
         }
 
         public CustomAttributeEncodedArgument CustomAttributeEncodedArgument => m_encodedArgument;
@@ -1140,7 +949,7 @@ namespace System.Reflection
             PseudoCustomAttribute.GetCustomAttributes(type, caType, out RuntimeType.ListBuilder<Attribute> pcas);
 
             // if we are asked to go up the hierarchy chain we have to do it now and regardless of the
-            // attribute usage for the specific attribute because a derived attribute may override the usage...           
+            // attribute usage for the specific attribute because a derived attribute may override the usage...
             // ... however if the attribute is sealed we can rely on the attribute usage
             if (!inherit || (caType.IsSealed && !CustomAttribute.GetAttributeUsage(caType).Inherited))
             {
@@ -1149,12 +958,12 @@ namespace System.Reflection
                 return attributes;
             }
 
-            RuntimeType.ListBuilder<object> result = new RuntimeType.ListBuilder<object>();
+            RuntimeType.ListBuilder<object> result = default;
             bool mustBeInheritable = false;
             bool useObjectArray = (caType.IsValueType || caType.ContainsGenericParameters);
             RuntimeType arrayType = useObjectArray ? (RuntimeType)typeof(object) : caType;
 
-            for (var i = 0; i < pcas.Count; i++)
+            for (int i = 0; i < pcas.Count; i++)
                 result.Add(pcas[i]);
 
             while (type != (RuntimeType)typeof(object) && type != null)
@@ -1165,7 +974,7 @@ namespace System.Reflection
             }
 
             object[] typedResult = CreateAttributeArrayHelper(arrayType, result.Count);
-            for (var i = 0; i < result.Count; i++)
+            for (int i = 0; i < result.Count; i++)
             {
                 typedResult[i] = result[i];
             }
@@ -1183,7 +992,7 @@ namespace System.Reflection
             PseudoCustomAttribute.GetCustomAttributes(method, caType, out RuntimeType.ListBuilder<Attribute> pcas);
 
             // if we are asked to go up the hierarchy chain we have to do it now and regardless of the
-            // attribute usage for the specific attribute because a derived attribute may override the usage...           
+            // attribute usage for the specific attribute because a derived attribute may override the usage...
             // ... however if the attribute is sealed we can rely on the attribute usage
             if (!inherit || (caType.IsSealed && !CustomAttribute.GetAttributeUsage(caType).Inherited))
             {
@@ -1192,12 +1001,12 @@ namespace System.Reflection
                 return attributes;
             }
 
-            RuntimeType.ListBuilder<object> result = new RuntimeType.ListBuilder<object>();
+            RuntimeType.ListBuilder<object> result = default;
             bool mustBeInheritable = false;
             bool useObjectArray = (caType.IsValueType || caType.ContainsGenericParameters);
             RuntimeType arrayType = useObjectArray ? (RuntimeType)typeof(object) : caType;
 
-            for (var i = 0; i < pcas.Count; i++)
+            for (int i = 0; i < pcas.Count; i++)
                 result.Add(pcas[i]);
 
             while (method != null)
@@ -1208,7 +1017,7 @@ namespace System.Reflection
             }
 
             object[] typedResult = CreateAttributeArrayHelper(arrayType, result.Count);
-            for (var i = 0; i < result.Count; i++)
+            for (int i = 0; i < result.Count; i++)
             {
                 typedResult[i] = result[i];
             }
@@ -1315,7 +1124,7 @@ namespace System.Reflection
                 {
                     if (FilterCustomAttributeRecord(car[i].tkCtor, in scope,
                         decoratedModule, decoratedMetadataToken, attributeFilterType, mustBeInheritable, ref derivedAttributes,
-                        out _, out _, out _, out _))
+                        out _, out _, out _))
                         return true;
                 }
             }
@@ -1337,15 +1146,15 @@ namespace System.Reflection
         private static object[] GetCustomAttributes(
             RuntimeModule decoratedModule, int decoratedMetadataToken, int pcaCount, RuntimeType? attributeFilterType)
         {
-            RuntimeType.ListBuilder<object> attributes = new RuntimeType.ListBuilder<object>();
+            RuntimeType.ListBuilder<object> attributes = default;
 
-            AddCustomAttributes(ref attributes, decoratedModule, decoratedMetadataToken, attributeFilterType, false, new RuntimeType.ListBuilder<object>());
+            AddCustomAttributes(ref attributes, decoratedModule, decoratedMetadataToken, attributeFilterType, false, default);
 
             bool useObjectArray = attributeFilterType == null || attributeFilterType.IsValueType || attributeFilterType.ContainsGenericParameters;
             RuntimeType arrayType = useObjectArray ? (RuntimeType)typeof(object) : attributeFilterType!;
 
             object[] result = CreateAttributeArrayHelper(arrayType, attributes.Count + pcaCount);
-            for (var i = 0; i < attributes.Count; i++)
+            for (int i = 0; i < attributes.Count; i++)
             {
                 result[i] = attributes[i];
             }
@@ -1377,7 +1186,7 @@ namespace System.Reflection
                 if (!FilterCustomAttributeRecord(caRecord.tkCtor, in scope,
                                                  decoratedModule, decoratedMetadataToken, attributeFilterType!, mustBeInheritable,
                                                  ref derivedAttributes,
-                                                 out RuntimeType attributeType, out IRuntimeMethodInfo? ctor, out bool ctorHasParameters, out bool isVarArg))
+                                                 out RuntimeType attributeType, out IRuntimeMethodInfo? ctorWithParameters, out bool isVarArg))
                 {
                     continue;
                 }
@@ -1388,13 +1197,13 @@ namespace System.Reflection
                 // Create custom attribute object
                 int cNamedArgs;
                 object attribute;
-                if (ctorHasParameters)
+                if (ctorWithParameters != null)
                 {
-                    attribute = CreateCaObject(decoratedModule, attributeType, ctor!, ref blobStart, blobEnd, out cNamedArgs);
+                    attribute = CreateCaObject(decoratedModule, attributeType, ctorWithParameters, ref blobStart, blobEnd, out cNamedArgs);
                 }
                 else
                 {
-                    attribute = RuntimeTypeHandle.CreateCaInstance(attributeType, ctor);
+                    attribute = attributeType.CreateInstanceDefaultCtor(publicOnly: false, skipCheckThis: true, fillCache: true, wrapExceptions: false);
 
                     // It is allowed by the ECMA spec to have an empty signature blob
                     int blobLen = (int)((byte*)blobEnd - (byte*)blobStart);
@@ -1443,8 +1252,8 @@ namespace System.Reflection
                                 }
                             }
 
-                            PropertyInfo? property = type is null ? 
-                                attributeType.GetProperty(name) : 
+                            PropertyInfo? property = type is null ?
+                                attributeType.GetProperty(name) :
                                 attributeType.GetProperty(name, type, Type.EmptyTypes);
 
                             // Did we get a valid property reference?
@@ -1495,19 +1304,17 @@ namespace System.Reflection
             bool mustBeInheritable,
             ref RuntimeType.ListBuilder<object> derivedAttributes,
             out RuntimeType attributeType,
-            out IRuntimeMethodInfo? ctor,
-            out bool ctorHasParameters,
+            out IRuntimeMethodInfo? ctorWithParameters,
             out bool isVarArg)
         {
-            ctor = null;
-            ctorHasParameters = false;
+            ctorWithParameters = null;
             isVarArg = false;
 
             // Resolve attribute type from ctor parent token found in decorated decoratedModule scope
             attributeType = (decoratedModule.ResolveType(scope.GetParentToken(caCtorToken), null, null) as RuntimeType)!;
 
             // Test attribute type against user provided attribute type filter
-            if (!(attributeFilterType.IsAssignableFrom(attributeType)))
+            if (!attributeFilterType.IsAssignableFrom(attributeType))
                 return false;
 
             // Ensure if attribute type must be inheritable that it is inheritable
@@ -1525,7 +1332,7 @@ namespace System.Reflection
             // Resolve the attribute ctor
             ConstArray ctorSig = scope.GetMethodSignature(caCtorToken);
             isVarArg = (ctorSig[0] & 0x05) != 0;
-            ctorHasParameters = ctorSig[1] != 0;
+            bool ctorHasParameters = ctorSig[1] != 0;
 
             if (ctorHasParameters)
             {
@@ -1533,24 +1340,16 @@ namespace System.Reflection
                 // See https://github.com/dotnet/coreclr/issues/21456 for why we fast-path non-generics here (fewer allocations)
                 if (attributeType.IsGenericType)
                 {
-                    ctor = decoratedModule.ResolveMethod(caCtorToken, attributeType.GenericTypeArguments, null)!.MethodHandle.GetMethodInfo();
+                    ctorWithParameters = decoratedModule.ResolveMethod(caCtorToken, attributeType.GenericTypeArguments, null)!.MethodHandle.GetMethodInfo();
                 }
                 else
                 {
-                    ctor = ModuleHandle.ResolveMethodHandleInternal(decoratedModule.GetNativeHandle(), caCtorToken);
+                    ctorWithParameters = ModuleHandle.ResolveMethodHandleInternal(decoratedModule.GetNativeHandle(), caCtorToken);
                 }
-            }
-            else
-            {
-                // Resolve method ctor token from decorated decoratedModule scope
-                ctor = attributeType.GetTypeHandleInternal().GetDefaultConstructor();
-
-                if (ctor == null && !attributeType.IsValueType)
-                    throw new MissingMethodException(".ctor");
             }
 
             // Visibility checks
-            MetadataToken tkParent = new MetadataToken();
+            MetadataToken tkParent = default;
 
             if (decoratedToken.IsParamDef)
             {
@@ -1584,16 +1383,16 @@ namespace System.Reflection
             // otherwise we check access against the module.
             RuntimeTypeHandle parentTypeHandle = tkParent.IsTypeDef ?
                                                     decoratedModule.ModuleHandle.ResolveTypeHandle(tkParent) :
-                                                    new RuntimeTypeHandle();
+                                                    default;
 
             RuntimeTypeHandle attributeTypeHandle = attributeType.TypeHandle;
 
-            bool result = RuntimeMethodHandle.IsCAVisibleFromDecoratedType(JitHelpers.GetQCallTypeHandleOnStack(ref attributeTypeHandle),
-                                                                    ctor != null ? ctor.Value : RuntimeMethodHandleInternal.EmptyHandle,
-                                                                    JitHelpers.GetQCallTypeHandleOnStack(ref parentTypeHandle),
-                                                                    JitHelpers.GetQCallModuleOnStack(ref decoratedModule)) != Interop.BOOL.FALSE;
+            bool result = RuntimeMethodHandle.IsCAVisibleFromDecoratedType(new QCallTypeHandle(ref attributeTypeHandle),
+                                                                    ctorWithParameters != null ? ctorWithParameters.Value : RuntimeMethodHandleInternal.EmptyHandle,
+                                                                    new QCallTypeHandle(ref parentTypeHandle),
+                                                                    new QCallModule(ref decoratedModule)) != Interop.BOOL.FALSE;
 
-            GC.KeepAlive(ctor);
+            GC.KeepAlive(ctorWithParameters);
             return result;
         }
         #endregion
@@ -1606,7 +1405,7 @@ namespace System.Reflection
 
             if (mustBeInheritable)
             {
-                attributeUsageAttribute = CustomAttribute.GetAttributeUsage(attributeType);
+                attributeUsageAttribute = GetAttributeUsage(attributeType);
 
                 if (!attributeUsageAttribute.Inherited)
                     return false;
@@ -1620,9 +1419,7 @@ namespace System.Reflection
             {
                 if (derivedAttributes[i].GetType() == attributeType)
                 {
-                    if (attributeUsageAttribute == null)
-                        attributeUsageAttribute = CustomAttribute.GetAttributeUsage(attributeType);
-
+                    attributeUsageAttribute ??= GetAttributeUsage(attributeType);
                     return attributeUsageAttribute.AllowMultiple;
                 }
             }
@@ -1653,10 +1450,7 @@ namespace System.Reflection
                 attributeUsageAttribute = new AttributeUsageAttribute(targets, allowMultiple, inherited);
             }
 
-            if (attributeUsageAttribute == null)
-                return AttributeUsageAttribute.Default;
-
-            return attributeUsageAttribute;
+            return attributeUsageAttribute ?? AttributeUsageAttribute.Default;
         }
         #endregion
 
@@ -1672,8 +1466,8 @@ namespace System.Reflection
         }
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern unsafe object _CreateCaObject(RuntimeModule pModule, RuntimeType type, IRuntimeMethodInfo pCtor, byte** ppBlob, byte* pEndBlob, int* pcNamedArgs);
-        private static unsafe object CreateCaObject(RuntimeModule module, RuntimeType type, IRuntimeMethodInfo ctor, ref IntPtr blob, IntPtr blobEnd, out int namedArgs)
+        private static extern object _CreateCaObject(RuntimeModule pModule, RuntimeType type, IRuntimeMethodInfo pCtor, byte** ppBlob, byte* pEndBlob, int* pcNamedArgs);
+        private static object CreateCaObject(RuntimeModule module, RuntimeType type, IRuntimeMethodInfo ctor, ref IntPtr blob, IntPtr blobEnd, out int namedArgs)
         {
             byte* pBlob = (byte*)blob;
             byte* pBlobEnd = (byte*)blobEnd;
@@ -1685,9 +1479,9 @@ namespace System.Reflection
         }
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern unsafe void _GetPropertyOrFieldData(
+        private static extern void _GetPropertyOrFieldData(
             RuntimeModule pModule, byte** ppBlobStart, byte* pBlobEnd, out string name, out bool bIsProperty, out RuntimeType type, out object value);
-        private static unsafe void GetPropertyOrFieldData(
+        private static void GetPropertyOrFieldData(
             RuntimeModule module, ref IntPtr blobStart, IntPtr blobEnd, out string name, out bool isProperty, out RuntimeType? type, out object? value)
         {
             byte* pBlobStart = (byte*)blobStart;
@@ -1713,7 +1507,7 @@ namespace System.Reflection
     {
         #region Private Static Data Members
         // Here we can avoid the need to take a lock when using Dictionary by rearranging
-        // the only method that adds values to the Dictionary. For more details on 
+        // the only method that adds values to the Dictionary. For more details on
         // Dictionary versus Hashtable thread safety:
         // See code:Dictionary#DictionaryVersusHashtableThreadSafety
         private static readonly Dictionary<RuntimeType, RuntimeType> s_pca = CreatePseudoCustomAttributeDictionary();
@@ -1728,7 +1522,7 @@ namespace System.Reflection
                 typeof(FieldOffsetAttribute), // field
                 typeof(SerializableAttribute), // class, struct, enum, delegate
                 typeof(MarshalAsAttribute), // parameter, field, return-value
-                typeof(ComImportAttribute), // class, interface 
+                typeof(ComImportAttribute), // class, interface
                 typeof(NonSerializedAttribute), // field, inherited
                 typeof(InAttribute), // parameter
                 typeof(OutAttribute), // parameter
@@ -1750,13 +1544,13 @@ namespace System.Reflection
         [Conditional("DEBUG")]
         private static void VerifyPseudoCustomAttribute(RuntimeType pca)
         {
-            // If any of these are invariants are no longer true will have to 
+            // If any of these are invariants are no longer true will have to
             // re-architect the PCA product logic and test cases -- you've been warned!
             Debug.Assert(pca.BaseType == typeof(Attribute), "Pseudo CA Error");
             AttributeUsageAttribute usage = CustomAttribute.GetAttributeUsage(pca);
-            Debug.Assert(usage.Inherited == false, "Pseudo CA Error");
-            //AllowMultiple is true for TypeForwardedToAttribute
-            //Debug.Assert(usage.AllowMultiple == false, "Pseudo CA Error");
+            Debug.Assert(!usage.Inherited, "Pseudo CA Error");
+            // AllowMultiple is true for TypeForwardedToAttribute
+            // Debug.Assert(usage.AllowMultiple == false, "Pseudo CA Error");
         }
         #endregion
 
@@ -1765,7 +1559,7 @@ namespace System.Reflection
         {
             Debug.Assert(type != null);
             Debug.Assert(caType != null);
-            pcas = new RuntimeType.ListBuilder<Attribute>();
+            pcas = default;
 
             bool all = caType == typeof(object) || caType == typeof(Attribute);
             if (!all && !s_pca.ContainsKey(caType))
@@ -1806,7 +1600,7 @@ namespace System.Reflection
         {
             Debug.Assert(method != null);
             Debug.Assert(caType != null);
-            pcas = new RuntimeType.ListBuilder<Attribute>();
+            pcas = default;
 
             bool all = caType == typeof(object) || caType == typeof(Attribute);
             if (!all && !s_pca.ContainsKey(caType))
@@ -1847,7 +1641,7 @@ namespace System.Reflection
         {
             Debug.Assert(parameter != null);
             Debug.Assert(caType != null);
-            pcas = new RuntimeType.ListBuilder<Attribute>();
+            pcas = default;
 
             bool all = caType == typeof(object) || caType == typeof(Attribute);
             if (!all && !s_pca.ContainsKey(caType))
@@ -1905,7 +1699,7 @@ namespace System.Reflection
             Debug.Assert(field != null);
             Debug.Assert(caType != null);
 
-            pcas = new RuntimeType.ListBuilder<Attribute>();
+            pcas = default;
 
             bool all = caType == typeof(object) || caType == typeof(Attribute);
             if (!all && !s_pca.ContainsKey(caType))
@@ -2090,7 +1884,7 @@ namespace System.Reflection
 
             // Metadata parameter checking should not have allowed 0 for packing size.
             // The runtime later converts a packing size of 0 to 8 so do the same here
-            // because it's more useful from a user perspective. 
+            // because it's more useful from a user perspective.
             if (pack == 0)
                 pack = 8; // DEFAULT_PACKING_SIZE
 

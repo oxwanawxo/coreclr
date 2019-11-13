@@ -12,11 +12,10 @@ using EditorBrowsableState = System.ComponentModel.EditorBrowsableState;
 
 using Internal.Runtime.CompilerServices;
 
+#pragma warning disable SA1121 // explicitly using type aliases instead of built-in types
 #if BIT64
-using nint = System.Int64;
 using nuint = System.UInt64;
 #else // BIT64
-using nint = System.Int32;
 using nuint = System.UInt32;
 #endif // BIT64
 
@@ -54,7 +53,7 @@ namespace System
                 this = default;
                 return; // returns default
             }
-            if (default(T)! == null && array.GetType() != typeof(T[])) // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34757
+            if (default(T)! == null && array.GetType() != typeof(T[])) // TODO-NULLABLE: default(T) == null warning (https://github.com/dotnet/roslyn/issues/34757)
                 ThrowHelper.ThrowArrayTypeMismatchException();
 
             _object = array;
@@ -72,7 +71,7 @@ namespace System
                 this = default;
                 return; // returns default
             }
-            if (default(T)! == null && array.GetType() != typeof(T[])) // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34757
+            if (default(T)! == null && array.GetType() != typeof(T[])) // TODO-NULLABLE: default(T) == null warning (https://github.com/dotnet/roslyn/issues/34757)
                 ThrowHelper.ThrowArrayTypeMismatchException();
             if ((uint)start > (uint)array.Length)
                 ThrowHelper.ThrowArgumentOutOfRangeException();
@@ -104,7 +103,7 @@ namespace System
                 this = default;
                 return; // returns default
             }
-            if (default(T)! == null && array.GetType() != typeof(T[])) // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34757
+            if (default(T)! == null && array.GetType() != typeof(T[])) // TODO-NULLABLE: default(T) == null warning (https://github.com/dotnet/roslyn/issues/34757)
                 ThrowHelper.ThrowArrayTypeMismatchException();
 #if BIT64
             // See comment in Span<T>.Slice for how this works.
@@ -296,7 +295,7 @@ namespace System
                 // in which case that's the dangerous operation performed by the dev, and we're just following
                 // suit here to make it work as best as possible.
 
-                ref T refToReturn = ref Unsafe.AsRef<T>(null);
+                ref T refToReturn = ref Unsafe.NullRef<T>();
                 int lengthOfUnderlyingSpan = 0;
 
                 // Copy this field into a local so that it can't change out from under us mid-operation.

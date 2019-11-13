@@ -34,6 +34,7 @@ add_library_clr(linuxnonjit
    ${SHARED_LIB_SOURCES}
    ${JIT_ARCH_ALTJIT_SOURCES}
 )
+target_precompile_header(TARGET linuxnonjit HEADER jitpch.h ADDITIONAL_INCLUDE_DIRECTORIES ${JIT_SOURCE_DIR})
 
 add_dependencies(linuxnonjit jit_exports)
 
@@ -74,4 +75,4 @@ target_link_libraries(linuxnonjit
 )
 
 # add the install targets
-install_clr(linuxnonjit)
+install_clr(TARGETS linuxnonjit)

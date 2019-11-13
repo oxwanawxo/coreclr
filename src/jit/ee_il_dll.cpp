@@ -70,7 +70,7 @@ extern "C" DLLEXPORT void __stdcall jitStartup(ICorJitHost* jitHost)
     JitConfig.initialize(jitHost);
 
 #ifdef DEBUG
-    const wchar_t* jitStdOutFile = JitConfig.JitStdOutFile();
+    const WCHAR* jitStdOutFile = JitConfig.JitStdOutFile();
     if (jitStdOutFile != nullptr)
     {
         jitstdout = _wfopen(jitStdOutFile, W("a"));
@@ -176,12 +176,14 @@ HINSTANCE GetModuleInst()
     return (g_hInst);
 }
 
+#ifndef FEATURE_CORECLR
 extern "C" DLLEXPORT void __stdcall sxsJitStartup(CoreClrCallbacks const& cccallbacks)
 {
 #ifndef SELF_NO_HOST
     InitUtilcode(cccallbacks);
 #endif
 }
+#endif // FEATURE_CORECLR
 
 #endif // !FEATURE_MERGE_JIT_AND_ENGINE
 
@@ -1306,7 +1308,7 @@ static LONG FilterSuperPMIExceptions_ee_il(PEXCEPTION_POINTERS pExceptionPointer
 
 const char* Compiler::eeGetMethodName(CORINFO_METHOD_HANDLE method, const char** classNamePtr)
 {
-    if (eeGetHelperNum(method))
+    if (eeGetHelperNum(method) != CORINFO_HELP_UNDEF)
     {
         if (classNamePtr != nullptr)
         {
@@ -1408,7 +1410,7 @@ const char* Compiler::eeGetClassName(CORINFO_CLASS_HANDLE clsHnd)
 
 #ifdef DEBUG
 
-const wchar_t* Compiler::eeGetCPString(size_t strHandle)
+const WCHAR* Compiler::eeGetCPString(size_t strHandle)
 {
 #ifdef FEATURE_PAL
     return nullptr;

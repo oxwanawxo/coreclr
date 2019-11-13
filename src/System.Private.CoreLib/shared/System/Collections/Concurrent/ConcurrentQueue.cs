@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 
 namespace System.Collections.Concurrent
@@ -99,7 +100,7 @@ namespace System.Collections.Concurrent
 
             // Initialize the segment and add all of the data to it.
             _tail = _head = new ConcurrentQueueSegment<T>(length);
-            foreach (T item in collection!) // TODO-NULLABLE: https://github.com/dotnet/csharplang/issues/538
+            foreach (T item in collection)
             {
                 Enqueue(item);
             }
@@ -146,7 +147,7 @@ namespace System.Collections.Concurrent
 
             // Otherwise, fall back to the slower path that first copies the contents
             // to an array, and then uses that array's non-generic CopyTo to do the copy.
-            ToArray().CopyTo(array!, index); // TODO-NULLABLE: https://github.com/dotnet/csharplang/issues/538
+            ToArray().CopyTo(array, index);
         }
 
         /// <summary>
@@ -163,7 +164,7 @@ namespace System.Collections.Concurrent
         /// cref="ICollection"/>. This property is not supported.
         /// </summary>
         /// <exception cref="NotSupportedException">The SyncRoot property is not supported.</exception>
-        object ICollection.SyncRoot { get { ThrowHelper.ThrowNotSupportedException(ExceptionResource.ConcurrentCollection_SyncRoot_NotSupported); return default!; } } // TODO-NULLABLE: https://github.com/dotnet/csharplang/issues/538
+        object ICollection.SyncRoot { get { ThrowHelper.ThrowNotSupportedException(ExceptionResource.ConcurrentCollection_SyncRoot_NotSupported); return default; } }
 
         /// <summary>Returns an enumerator that iterates through a collection.</summary>
         /// <returns>An <see cref="IEnumerator"/> that can be used to iterate through the collection.</returns>
@@ -210,17 +211,11 @@ namespace System.Collections.Concurrent
         /// that another thread will modify the collection after <see cref="IsEmpty"/> returns, thus invalidating
         /// the result.
         /// </remarks>
-        public bool IsEmpty
-        {
-            get
-            {
-                // IsEmpty == !TryPeek. We use a "resultUsed:false" peek in order to avoid marking
-                // segments as preserved for observation, making IsEmpty a cheaper way than either
-                // TryPeek(out T) or Count == 0 to check whether any elements are in the queue.
-                T ignoredResult;
-                return !TryPeek(out ignoredResult, resultUsed: false);
-            }
-        }
+        public bool IsEmpty =>
+            // IsEmpty == !TryPeek. We use a "resultUsed:false" peek in order to avoid marking
+            // segments as preserved for observation, making IsEmpty a cheaper way than either
+            // TryPeek(out T) or Count == 0 to check whether any elements are in the queue.
+            !TryPeek(out _, resultUsed: false);
 
         /// <summary>Copies the elements stored in the <see cref="ConcurrentQueue{T}"/> to a new array.</summary>
         /// <returns>A new array containing a snapshot of elements copied from the <see cref="ConcurrentQueue{T}"/>.</returns>
@@ -264,7 +259,7 @@ namespace System.Collections.Concurrent
         {
             get
             {
-                var spinner = new SpinWait();
+                SpinWait spinner = default;
                 while (true)
                 {
                     // Capture the head and tail, as well as the head's head and tail.
@@ -461,7 +456,7 @@ namespace System.Collections.Concurrent
 
             // Get the number of items to be enumerated
             long count = GetCount(head, headHead, tail, tailTail);
-            if (index > array!.Length - count) // TODO-NULLABLE: https://github.com/dotnet/csharplang/issues/538
+            if (index > array.Length - count)
             {
                 ThrowHelper.ThrowArgumentException(ExceptionResource.Arg_ArrayPlusOffTooSmall);
             }
@@ -483,7 +478,7 @@ namespace System.Collections.Concurrent
         /// cref="ConcurrentQueue{T}"/>.</returns>
         /// <remarks>
         /// The enumeration represents a moment-in-time snapshot of the contents
-        /// of the queue.  It does not reflect any updates to the collection after 
+        /// of the queue.  It does not reflect any updates to the collection after
         /// <see cref="GetEnumerator"/> was called.  The enumerator is safe to use
         /// concurrently with reads from and writes to the queue.
         /// </remarks>
@@ -530,7 +525,7 @@ namespace System.Collections.Concurrent
         }
 
         /// <summary>Gets the item stored in the <paramref name="i"/>th entry in <paramref name="segment"/>.</summary>
-        private T GetItemWhenAvailable(ConcurrentQueueSegment<T> segment, int i)
+        private static T GetItemWhenAvailable(ConcurrentQueueSegment<T> segment, int i)
         {
             Debug.Assert(segment._preservedForObservation);
 
@@ -541,7 +536,7 @@ namespace System.Collections.Concurrent
             // an enqueuer to finish storing it.  Spin until it's there.
             if ((segment._slots[i].SequenceNumber & segment._slotsMask) != expectedSequenceNumberAndMask)
             {
-                var spinner = new SpinWait();
+                SpinWait spinner = default;
                 while ((Volatile.Read(ref segment._slots[i].SequenceNumber) & segment._slotsMask) != expectedSequenceNumberAndMask)
                 {
                     spinner.SpinOnce();
@@ -678,12 +673,12 @@ namespace System.Collections.Concurrent
         /// true if an element was removed and returned from the beginning of the
         /// <see cref="ConcurrentQueue{T}"/> successfully; otherwise, false.
         /// </returns>
-        public bool TryDequeue(out T result) => // TODO-GENERIC-NULLABLE
+        public bool TryDequeue([MaybeNullWhen(false)] out T result) =>
             _head.TryDequeue(out result) || // fast-path that operates just on the head segment
             TryDequeueSlow(out result); // slow path that needs to fix up segments
 
         /// <summary>Tries to dequeue an item, removing empty segments as needed.</summary>
-        private bool TryDequeueSlow(out T item)
+        private bool TryDequeueSlow([MaybeNullWhen(false)] out T item)
         {
             while (true)
             {
@@ -701,7 +696,7 @@ namespace System.Collections.Concurrent
                 // check and this check, another item could have arrived).
                 if (head._nextSegment == null)
                 {
-                    item = default!; // TODO-NULLABLE-GENERIC
+                    item = default!;
                     return false;
                 }
 
@@ -742,13 +737,13 @@ namespace System.Collections.Concurrent
         /// For determining whether the collection contains any items, use of the <see cref="IsEmpty"/>
         /// property is recommended rather than peeking.
         /// </remarks>
-        public bool TryPeek(out T result) => TryPeek(out result, resultUsed: true); // TODO-GENERIC-NULLABLE
+        public bool TryPeek([MaybeNullWhen(false)] out T result) => TryPeek(out result, resultUsed: true);
 
         /// <summary>Attempts to retrieve the value for the first element in the queue.</summary>
         /// <param name="result">The value of the first element, if found.</param>
         /// <param name="resultUsed">true if the result is needed; otherwise false if only the true/false outcome is needed.</param>
         /// <returns>true if an element was found; otherwise, false.</returns>
-        private bool TryPeek(out T result, bool resultUsed)
+        private bool TryPeek([MaybeNullWhen(false)] out T result, bool resultUsed)
         {
             // Starting with the head segment, look through all of the segments
             // for the first one we can find that's not empty.
@@ -795,7 +790,7 @@ namespace System.Collections.Concurrent
                 // and we'll traverse to that segment.
             }
 
-            result = default!; // TODO-NULLABLE-GENERIC
+            result = default!;
             return false;
         }
 

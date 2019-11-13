@@ -54,10 +54,7 @@ namespace System
             _str = null;
         }
 
-        object? IEnumerator.Current // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/23268
-        {
-            get { return Current; }
-        }
+        object? IEnumerator.Current => Current;
 
         public char Current
         {

@@ -48,8 +48,8 @@ namespace System.Runtime.Serialization
             _data = info;
             _types = types;
 
-            //The MoveNext semantic is much easier if we enforce that [0..m_numItems] are valid entries
-            //in the enumerator, hence we subtract 1.
+            // The MoveNext semantic is much easier if we enforce that [0..m_numItems] are valid entries
+            // in the enumerator, hence we subtract 1.
             _numItems = numItems - 1;
             _currItem = -1;
             _current = false;
@@ -70,13 +70,13 @@ namespace System.Runtime.Serialization
             return _current;
         }
 
-        object? IEnumerator.Current => Current; // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/23268
+        object? IEnumerator.Current => Current;
 
         public SerializationEntry Current
         {
             get
             {
-                if (_current == false)
+                if (!_current)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_EnumOpCantHappen);
                 }
@@ -94,7 +94,7 @@ namespace System.Runtime.Serialization
         {
             get
             {
-                if (_current == false)
+                if (!_current)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_EnumOpCantHappen);
                 }
@@ -105,7 +105,7 @@ namespace System.Runtime.Serialization
         {
             get
             {
-                if (_current == false)
+                if (!_current)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_EnumOpCantHappen);
                 }
@@ -116,7 +116,7 @@ namespace System.Runtime.Serialization
         {
             get
             {
-                if (_current == false)
+                if (!_current)
                 {
                     throw new InvalidOperationException(SR.InvalidOperation_EnumOpCantHappen);
                 }

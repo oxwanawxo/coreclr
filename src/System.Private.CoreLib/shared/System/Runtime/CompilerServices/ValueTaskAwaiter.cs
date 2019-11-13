@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Sources;
 
-#if !netstandard
+#if !NETSTANDARD2_0
 using Internal.Runtime.CompilerServices;
 #endif
 
@@ -43,7 +43,6 @@ namespace System.Runtime.CompilerServices
         }
 
         /// <summary>Gets the result of the ValueTask.</summary>
-        [StackTraceHidden]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void GetResult() => _value.ThrowIfCompletedUnsuccessfully();
 
@@ -126,7 +125,6 @@ namespace System.Runtime.CompilerServices
         }
 
         /// <summary>Gets the result of the ValueTask.</summary>
-        [StackTraceHidden]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public TResult GetResult() => _value.Result;
 

@@ -43,7 +43,7 @@ namespace System.Runtime.InteropServices
                     return null;
                 }
 
-                if (_once == false)
+                if (!_once)
                 {
                     PreProcessSignature();
                     _once = true;
@@ -55,7 +55,7 @@ namespace System.Runtime.InteropServices
                     {
                         if (_cachedTargetTypes[i] != null)
                         {
-                            args[i] = Enum.ToObject(_cachedTargetTypes[i]!, args[i]); // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34644
+                            args[i] = Enum.ToObject(_cachedTargetTypes[i]!, args[i]); // TODO-NULLABLE: Indexer nullability tracked (https://github.com/dotnet/roslyn/issues/34644)
                         }
                     }
                 }
@@ -100,7 +100,7 @@ namespace System.Runtime.InteropServices
         /// Since multicast delegate's built-in chaining supports only chaining instances of the same type,
         /// we need to complement this design by using an explicit linked list data structure.
         /// </summary>
-        private List<DelegateWrapper> _delegateWrappers = new List<DelegateWrapper>();
+        private readonly List<DelegateWrapper> _delegateWrappers = new List<DelegateWrapper>();
 
         private readonly int _dispid;
         private ComEventsMethod? _next;
@@ -173,7 +173,7 @@ namespace System.Runtime.InteropServices
                 {
                     if (wrapper.Delegate.GetType() == d.GetType())
                     {
-                        wrapper.Delegate = Delegate.Combine(wrapper.Delegate, d)!; // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+                        wrapper.Delegate = Delegate.Combine(wrapper.Delegate, d);
                         return;
                     }
                 }

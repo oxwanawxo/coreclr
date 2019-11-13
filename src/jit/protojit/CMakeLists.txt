@@ -21,6 +21,8 @@ add_library_clr(protojit
    ${JIT_ARCH_SOURCES}
 )
 
+target_precompile_header(TARGET protojit HEADER jitpch.h ADDITIONAL_INCLUDE_DIRECTORIES ${JIT_SOURCE_DIR})
+
 add_dependencies(protojit jit_exports)
 
 set_property(TARGET protojit APPEND_STRING PROPERTY LINK_FLAGS ${JIT_EXPORTS_LINKER_OPTION})
@@ -60,4 +62,4 @@ target_link_libraries(protojit
 )
 
 # add the install targets
-install_clr(protojit)
+install_clr(TARGETS protojit)

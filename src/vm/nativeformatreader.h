@@ -15,7 +15,7 @@
 #if defined(_AMD64_) || defined(_X86_)
 #include "emmintrin.h"
 #define USE_INTEL_INTRINSICS_FOR_CUCKOO_FILTER
-#elif defined(_ARM_) || defined(_ARM64_) 
+#elif defined(_ARM_) || defined(_ARM64_)
 
 #ifndef FEATURE_PAL // The Mac and Linux build environments are not setup for NEON simd.
 #define USE_ARM_INTRINSICS_FOR_CUCKOO_FILTER
@@ -42,7 +42,9 @@
 namespace NativeFormat
 {
     class NativeReader;
-    typedef DPTR(NativeReader) PTR_NativeReader;
+    class NativeHashtable;
+    typedef DPTR(NativeReader)      PTR_NativeReader;
+    typedef DPTR(NativeHashtable)   PTR_NativeHashtable;
 
     class NativeReader
     {
@@ -116,7 +118,7 @@ namespace NativeFormat
             {
                 if (offset + 1 >= _size)
                     ThrowBadImageFormatException();
-                *pValue = (val >> 2) | 
+                *pValue = (val >> 2) |
                       (((uint)*(_base + offset + 1)) << 6);
                 offset += 2;
             }
@@ -268,12 +270,14 @@ namespace NativeFormat
             : _pReader(PTR_NULL), _offset(0)
         {
         }
-        
+
         NativeParser(PTR_NativeReader pReader, uint offset)
         {
             _pReader = pReader;
             _offset = offset;
         }
+
+        bool IsNull() { return _pReader == NULL; }
 
         NativeReader * GetNativeReader() { return _pReader; }
 
@@ -333,7 +337,7 @@ namespace NativeFormat
             return NativeParser(_pReader, GetRelativeOffset());
         }
     };
-    
+
     class NativeArray
     {
         PTR_NativeReader _pReader;
@@ -461,7 +465,7 @@ namespace NativeFormat
         NativeHashtable() : _pReader(PTR_NULL), _baseOffset(0), _bucketMask(0), _entryIndexSize(0)
         {
         }
-        
+
         NativeHashtable(NativeParser& parser)
         {
             uint header = parser.GetUInt8();
@@ -482,8 +486,62 @@ namespace NativeFormat
 
         bool IsNull() { return _pReader == NULL; }
 
+        class AllEntriesEnumerator
+        {
+            PTR_NativeHashtable _table;
+            NativeParser        _parser;
+            uint                _currentBucket;
+            uint                _endOffset;
+
+        public:
+            AllEntriesEnumerator() :
+                _table(dac_cast<PTR_NativeHashtable>(nullptr)),
+                _parser(),
+                _currentBucket(0),
+                _endOffset(0)
+            {
+
+            }
+
+            AllEntriesEnumerator(PTR_NativeHashtable table)
+            {
+                _table = table;
+                _currentBucket = 0;
+                if (_table != NULL)
+                {
+                    _parser = _table->GetParserForBucket(_currentBucket, &_endOffset);
+                }
+            }
+
+            NativeParser GetNext()
+            {
+                if (_table == NULL)
+                {
+                    return NativeParser();
+                }
+
+                for (; ; )
+                {
+                    if (_parser.GetOffset() < _endOffset)
+                    {
+                        // Skip hashcode to get to the offset
+                        _parser.GetUInt8();
+                        return _parser.GetParserFromRelativeOffset();
+                    }
+
+                    if (_currentBucket >= _table->_bucketMask)
+                    {
+                        return NativeParser();
+                    }
+
+                    _currentBucket++;
+                    _parser = _table->GetParserForBucket(_currentBucket, &_endOffset);
+                }
+            }
+        };
+
         //
-        // The enumerator does not conform to the regular C# enumerator pattern to avoid paying 
+        // The enumerator does not conform to the regular C# enumerator pattern to avoid paying
         // its performance penalty (allocation, multiple calls per iteration)
         //
         class Enumerator
@@ -526,7 +584,7 @@ namespace NativeFormat
             }
         };
 
-        // The recommended code pattern to perform lookup is: 
+        // The recommended code pattern to perform lookup is:
         //
         //  NativeHashtable::Enumerator lookup = hashtable.Lookup(dwHashCode);
         //  NativeParser entryParser;
@@ -553,12 +611,12 @@ namespace NativeFormat
         PTR_BYTE _base;
         UInt32 _size;
         LONG _disableFilter;
-        
+
         bool IsPowerOfTwo(UInt32 number)
         {
             return (number & (number - 1)) == 0;
         }
-  
+
     public:
         static UInt32 ComputeFingerprintHash(UInt16 fingerprint)
         {

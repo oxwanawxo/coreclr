@@ -1,15 +1,16 @@
 {
   "tools": {
-    "dotnet": "2.1.504"
+    "dotnet": "3.0.100"
   },
   "native-tools": {
-    "cmake": "3.11.1",
+    "cmake": "3.14.2",
     "python": "2.7.15"
   },
   "msbuild-sdks": {
-    "Microsoft.DotNet.Arcade.Sdk": "1.0.0-beta.19229.8",
-    "Microsoft.DotNet.Helix.Sdk": "2.0.0-beta.19257.7",
+    "Microsoft.DotNet.Arcade.Sdk": "5.0.0-beta.19558.11",
+    "Microsoft.DotNet.Helix.Sdk": "5.0.0-beta.19558.11",
     "Microsoft.Build.NoTargets": "1.0.53",
-    "Microsoft.Build.Traversal": "2.0.2"
+    "Microsoft.Build.Traversal": "2.0.2",
+    "Microsoft.NET.Sdk.IL": "5.0.0-alpha1.19413.7"
   }
 }

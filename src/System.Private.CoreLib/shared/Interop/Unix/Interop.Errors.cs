@@ -16,7 +16,7 @@ internal static partial class Interop
         // which obtains the raw errno that varies between unixes. The strong typing as an enum is meant to
         // prevent confusing the two. Casting to or from int is suspect. Use GetLastErrorInfo() if you need to
         // correlate these to the underlying platform values or obtain the corresponding error message.
-        // 
+        //
 
         SUCCESS          = 0,
 
@@ -145,15 +145,13 @@ internal static partial class Interop
             return Interop.Sys.StrError(RawErrno);
         }
 
-#pragma warning disable CS8609 // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/23268
         public override string ToString()
-#pragma warning restore CS8609
         {
             return $"RawErrno: {RawErrno} Error: {Error} GetErrorMessage: {GetErrorMessage()}"; // No localization required; text is member names used for debugging purposes
         }
     }
 
-    internal partial class Sys
+    internal static partial class Sys
     {
         internal static Error GetLastError()
         {

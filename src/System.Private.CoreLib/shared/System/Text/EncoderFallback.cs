@@ -4,6 +4,7 @@
 
 using System.Buffers;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 
 namespace System.Text
@@ -22,7 +23,7 @@ namespace System.Text
                 if (s_replacementFallback == null)
                     Interlocked.CompareExchange<EncoderFallback?>(ref s_replacementFallback, new EncoderReplacementFallback(), null);
 
-                return s_replacementFallback!; // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+                return s_replacementFallback;
             }
         }
 
@@ -34,7 +35,7 @@ namespace System.Text
                 if (s_exceptionFallback == null)
                     Interlocked.CompareExchange<EncoderFallback?>(ref s_exceptionFallback, new EncoderExceptionFallback(), null);
 
-                return s_exceptionFallback!; // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+                return s_exceptionFallback;
             }
         }
 
@@ -317,7 +318,7 @@ namespace System.Text
         // Note that this could also change the contents of this.encoder, which is the same
         // object that the caller is using, so the caller could mess up the encoder for us
         // if they aren't careful.
-        internal unsafe virtual bool InternalFallback(char ch, ref char* chars)
+        internal virtual unsafe bool InternalFallback(char ch, ref char* chars)
         {
             // Shouldn't have null charStart
             Debug.Assert(charStart != null,
@@ -375,13 +376,9 @@ namespace System.Text
             return bFallingBack;
         }
 
-        // private helper methods
-        internal void ThrowLastCharRecursive(int charRecursive)
-        {
+        [DoesNotReturn]
+        internal static void ThrowLastCharRecursive(int charRecursive) =>
             // Throw it, using our complete character
-            throw new ArgumentException(
-                SR.Format(SR.Argument_RecursiveFallback,
-                    charRecursive), "chars");
-        }
+            throw new ArgumentException(SR.Format(SR.Argument_RecursiveFallback, charRecursive), "chars");
     }
 }

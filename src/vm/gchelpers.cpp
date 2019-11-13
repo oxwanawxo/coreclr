@@ -3,7 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 /*
- * GCHELPERS.CPP 
+ * GCHELPERS.CPP
  *
  * GC Allocation and Write Barrier Helpers
  *
@@ -298,8 +298,8 @@ inline Object* AllocAlign8(size_t size, GC_ALLOC_FLAGS flags)
 
 // This is one of three ways of allocating an object (see code:Alloc for more). This variation is used in the
 // rare circumstance when you want to allocate an object on the large object heap but the object is not big
-// enough to naturally go there.  
-// 
+// enough to naturally go there.
+//
 // One (and only?) example of where this is needed is 8 byte aligning of arrays of doubles. See
 // code:EEConfig.GetDoubleArrayToLargeObjectHeapThreshold and code:CORINFO_HELP_NEWARR_1_ALIGN8 for more.
 inline Object* AllocLHeap(size_t size, GC_ALLOC_FLAGS flags)
@@ -379,12 +379,12 @@ inline void LogAlloc(size_t size, MethodTable *pMT, Object* object)
     {
         LogSpewAlways("Allocated %5d bytes for %s_TYPE" FMT_ADDR FMT_CLASS "\n",
                       size,
-                      pMT->IsValueType() ? "VAL" : "REF", 
+                      pMT->IsValueType() ? "VAL" : "REF",
                       DBG_ADDR(object),
                       DBG_CLASS_NAME_MT(pMT));
 
-        if (LoggingOn(LF_GCALLOC, LL_INFO1000000)    || 
-            (LoggingOn(LF_GCALLOC, LL_INFO100)   && 
+        if (LoggingOn(LF_GCALLOC, LL_INFO1000000)    ||
+            (LoggingOn(LF_GCALLOC, LL_INFO100)   &&
              ToLogOrNotToLog(size, DBG_CLASS_NAME_MT(pMT))))
             {
                 void LogStackTrace();
@@ -400,8 +400,8 @@ inline void LogAlloc(size_t size, MethodTable *pMT, Object* object)
 
 inline SIZE_T MaxArrayLength(SIZE_T componentSize)
 {
-    // Impose limits on maximum array length in each dimension to allow efficient 
-    // implementation of advanced range check elimination in future. We have to allow 
+    // Impose limits on maximum array length in each dimension to allow efficient
+    // implementation of advanced range check elimination in future. We have to allow
     // higher limit for array of bytes (or one byte structs) for backward compatibility.
     // Keep in sync with Array.MaxArrayLength in BCL.
     return (componentSize == 1) ? 0X7FFFFFC7 : 0X7FEFFFFF;
@@ -412,7 +412,7 @@ OBJECTREF AllocateSzArray(TypeHandle arrayType, INT32 cElements, GC_ALLOC_FLAGS 
     CONTRACTL{
         THROWS;
         GC_TRIGGERS;
-        MODE_COOPERATIVE; // returns an objref without pinning it => cooperative        
+        MODE_COOPERATIVE; // returns an objref without pinning it => cooperative
     } CONTRACTL_END;
 
     ArrayTypeDesc* arrayDesc = arrayType.AsArray();
@@ -426,7 +426,7 @@ OBJECTREF AllocateSzArray(MethodTable* pArrayMT, INT32 cElements, GC_ALLOC_FLAGS
     CONTRACTL{
         THROWS;
         GC_TRIGGERS;
-        MODE_COOPERATIVE; // returns an objref without pinning it => cooperative        
+        MODE_COOPERATIVE; // returns an objref without pinning it => cooperative
     } CONTRACTL_END;
 
     SetTypeHandleOnThreadForAlloc(TypeHandle(pArrayMT));
@@ -435,7 +435,7 @@ OBJECTREF AllocateSzArray(MethodTable* pArrayMT, INT32 cElements, GC_ALLOC_FLAGS
     _ASSERTE(pArrayMT->GetInternalCorElementType() == ELEMENT_TYPE_SZARRAY);
 
     CorElementType elemType = pArrayMT->GetArrayElementType();
-    
+
     // Disallow the creation of void[] (an array of System.Void)
     if (elemType == ELEMENT_TYPE_VOID)
         COMPlusThrow(kArgumentException);
@@ -473,6 +473,11 @@ OBJECTREF AllocateSzArray(MethodTable* pArrayMT, INT32 cElements, GC_ALLOC_FLAGS
     }
 #endif
 
+    if (totalSize >= g_pConfig->GetGCLOHThreshold())
+    {
+        bAllocateInLargeHeap = TRUE;
+    }
+
     flags |= (pArrayMT->ContainsPointers() ? GC_ALLOC_CONTAINS_REF : GC_ALLOC_NO_FLAGS);
 
     ArrayBase* orArray = NULL;
@@ -483,7 +488,22 @@ OBJECTREF AllocateSzArray(MethodTable* pArrayMT, INT32 cElements, GC_ALLOC_FLAGS
     }
     else
     {
-        if ((DATA_ALIGNMENT < sizeof(double)) && (elemType == ELEMENT_TYPE_R8))
+#ifdef FEATURE_64BIT_ALIGNMENT
+        MethodTable* pElementMT = pArrayMT->GetArrayElementTypeHandle().GetMethodTable();
+        if (pElementMT->RequiresAlign8() && pElementMT->IsValueType())
+        {
+            // This platform requires that certain fields are 8-byte aligned (and the runtime doesn't provide
+            // this guarantee implicitly, e.g. on 32-bit platforms). Since it's the array payload, not the
+            // header that requires alignment we need to be careful. However it just so happens that all the
+            // cases we care about (single and multi-dim arrays of value types) have an even number of DWORDs
+            // in their headers so the alignment requirements for the header and the payload are the same.
+            _ASSERTE(((pArrayMT->GetBaseSize() - SIZEOF_OBJHEADER) & 7) == 0);
+            orArray = (ArrayBase*)AllocAlign8(totalSize, flags);
+        }
+        else
+#else
+        if ((DATA_ALIGNMENT < sizeof(double)) && (elemType == ELEMENT_TYPE_R8) &&
+            (totalSize < g_pConfig->GetGCLOHThreshold() - MIN_OBJECT_SIZE))
         {
             // Creation of an array of doubles, not in the large object heap.
             // We want to align the doubles to 8 byte boundaries, but the GC gives us pointers aligned
@@ -517,24 +537,10 @@ OBJECTREF AllocateSzArray(MethodTable* pArrayMT, INT32 cElements, GC_ALLOC_FLAGS
             orDummyObject->SetMethodTable(g_pObjectClass);
         }
         else
+#endif  // FEATURE_64BIT_ALIGNMENT
+
         {
-#ifdef FEATURE_64BIT_ALIGNMENT
-            MethodTable* pElementMT = pArrayMT->GetApproxArrayElementTypeHandle().GetMethodTable();
-            if (pElementMT->RequiresAlign8() && pElementMT->IsValueType())
-            {
-                // This platform requires that certain fields are 8-byte aligned (and the runtime doesn't provide
-                // this guarantee implicitly, e.g. on 32-bit platforms). Since it's the array payload, not the
-                // header that requires alignment we need to be careful. However it just so happens that all the
-                // cases we care about (single and multi-dim arrays of value types) have an even number of DWORDs
-                // in their headers so the alignment requirements for the header and the payload are the same.
-                _ASSERTE(((pArrayMT->GetBaseSize() - SIZEOF_OBJHEADER) & 7) == 0);
-                orArray = (ArrayBase*)AllocAlign8(totalSize, flags);
-            }
-            else
-#endif
-            {
-                orArray = (ArrayBase*)Alloc(totalSize, flags);
-            }
+            orArray = (ArrayBase*)Alloc(totalSize, flags);
         }
         orArray->SetArrayMethodTable(pArrayMT);
     }
@@ -544,8 +550,7 @@ OBJECTREF AllocateSzArray(MethodTable* pArrayMT, INT32 cElements, GC_ALLOC_FLAGS
 
     bool bProfilerNotifyLargeAllocation = false;
 
-    if (bAllocateInLargeHeap || 
-        (totalSize >= g_pConfig->GetGCLOHThreshold()))
+    if (bAllocateInLargeHeap)
     {
         GCHeapUtilities::GetGCHeap()->PublishObject((BYTE*)orArray);
         bProfilerNotifyLargeAllocation = TrackLargeAllocations();
@@ -561,9 +566,9 @@ OBJECTREF AllocateSzArray(MethodTable* pArrayMT, INT32 cElements, GC_ALLOC_FLAGS
     OBJECTREF objref = ObjectToOBJECTREF((Object *) orArray);
     GCPROTECT_BEGIN(objref);
 
-    orArray->GetTypeHandle(); 
+    orArray->GetTypeHandle();
 
-    GCPROTECT_END();    
+    GCPROTECT_END();
     orArray = (ArrayBase *) OBJECTREFToObject(objref);
 #endif
 
@@ -591,7 +596,7 @@ void ThrowOutOfMemoryDimensionsExceeded()
         THROWS;
     } CONTRACTL_END;
 
-#ifdef _WIN64
+#ifdef BIT64
     EX_THROW(EEMessageException, (kOutOfMemoryException, IDS_EE_ARRAY_DIMENSIONS_EXCEEDED));
 #else
     ThrowOutOfMemory();
@@ -619,8 +624,8 @@ OBJECTREF AllocateArrayEx(TypeHandle arrayType, INT32 *pArgs, DWORD dwNumArgs, G
 //
 // Handles arrays of arbitrary dimensions
 //
-// If dwNumArgs is set to greater than 1 for a SZARRAY this function will recursively 
-// allocate sub-arrays and fill them in.  
+// If dwNumArgs is set to greater than 1 for a SZARRAY this function will recursively
+// allocate sub-arrays and fill them in.
 //
 // For arrays with lower bounds, pBounds is <lower bound 1>, <count 1>, <lower bound 2>, ...
 OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, GC_ALLOC_FLAGS flags, BOOL bAllocateInLargeHeap)
@@ -647,7 +652,7 @@ OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, 
     PREFIX_ASSUME(pArrayMT != NULL);
     CorElementType kind = pArrayMT->GetInternalCorElementType();
     _ASSERTE(kind == ELEMENT_TYPE_ARRAY || kind == ELEMENT_TYPE_SZARRAY);
-    
+
     CorElementType elemType = pArrayMT->GetArrayElementType();
     // Disallow the creation of void[,] (a multi-dim  array of System.Void)
     if (elemType == ELEMENT_TYPE_VOID)
@@ -670,9 +675,9 @@ OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, 
         _ASSERTE(dwNumArgs == rank || dwNumArgs == 2*rank);
 
         // Morph a ARRAY rank 1 with 0 lower bound into an SZARRAY
-        if (rank == 1 && (dwNumArgs == 1 || pArgs[0] == 0)) 
-        {   
-            TypeHandle szArrayType = ClassLoader::LoadArrayTypeThrowing(pArrayMT->GetApproxArrayElementTypeHandle(), ELEMENT_TYPE_SZARRAY, 1);
+        if (rank == 1 && (dwNumArgs == 1 || pArgs[0] == 0))
+        {
+            TypeHandle szArrayType = ClassLoader::LoadArrayTypeThrowing(pArrayMT->GetArrayElementTypeHandle(), ELEMENT_TYPE_SZARRAY, 1);
             return AllocateSzArray(szArrayType, pArgs[dwNumArgs - 1], flags, bAllocateInLargeHeap);
         }
 
@@ -701,7 +706,7 @@ OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, 
         }
 
         cElements = safeTotalElements.Value();
-    } 
+    }
     else
     {
         int length = pArgs[0];
@@ -709,7 +714,7 @@ OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, 
             COMPlusThrow(kOverflowException);
         if ((SIZE_T)length > MaxArrayLength(componentSize))
             maxArrayDimensionLengthOverflow = true;
-        cElements = length;         
+        cElements = length;
     }
 
     // Throw this exception only after everything else was validated for backward compatibility.
@@ -731,13 +736,18 @@ OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, 
 #endif
 
 #ifdef FEATURE_DOUBLE_ALIGNMENT_HINT
-    if ((elemType == ELEMENT_TYPE_R8) && 
+    if ((elemType == ELEMENT_TYPE_R8) &&
         (cElements >= g_pConfig->GetDoubleArrayToLargeObjectHeapThreshold()))
     {
         STRESS_LOG2(LF_GC, LL_INFO10, "Allocating double MD array of size %d and length %d to large object heap\n", totalSize, cElements);
         bAllocateInLargeHeap = TRUE;
     }
 #endif
+
+    if (totalSize >= g_pConfig->GetGCLOHThreshold())
+    {
+        bAllocateInLargeHeap = TRUE;
+    }
 
     flags |= (pArrayMT->ContainsPointers() ? GC_ALLOC_CONTAINS_REF : GC_ALLOC_NO_FLAGS);
 
@@ -749,7 +759,7 @@ OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, 
     else
     {
 #ifdef FEATURE_64BIT_ALIGNMENT
-        MethodTable *pElementMT = pArrayMT->GetApproxArrayElementTypeHandle().GetMethodTable();
+        MethodTable *pElementMT = pArrayMT->GetArrayElementTypeHandle().GetMethodTable();
         if (pElementMT->RequiresAlign8() && pElementMT->IsValueType())
         {
             // This platform requires that certain fields are 8-byte aligned (and the runtime doesn't provide
@@ -773,8 +783,7 @@ OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, 
 
     bool bProfilerNotifyLargeAllocation = false;
 
-    if (bAllocateInLargeHeap || 
-        (totalSize >= g_pConfig->GetGCLOHThreshold()))
+    if (bAllocateInLargeHeap)
     {
         GCHeapUtilities::GetGCHeap()->PublishObject((BYTE*)orArray);
         bProfilerNotifyLargeAllocation = TrackLargeAllocations();
@@ -790,9 +799,9 @@ OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, 
     OBJECTREF objref = ObjectToOBJECTREF((Object *) orArray);
     GCPROTECT_BEGIN(objref);
 
-    orArray->GetTypeHandle(); 
+    orArray->GetTypeHandle();
 
-    GCPROTECT_END();    
+    GCPROTECT_END();
     orArray = (ArrayBase *) OBJECTREFToObject(objref);
 #endif
 
@@ -834,15 +843,15 @@ OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, 
             // Turn off GC stress, it is of little value here
             {
                 GCStressPolicy::InhibitHolder iholder;
-                
+
                 // Allocate dwProvidedBounds arrays
-                if (!pArrayMT->GetApproxArrayElementTypeHandle().IsArray())
+                if (!pArrayMT->GetArrayElementTypeHandle().IsArray())
                 {
                     orArray = NULL;
                 }
                 else
                 {
-                    TypeHandle subArrayType = pArrayMT->GetApproxArrayElementTypeHandle();
+                    TypeHandle subArrayType = pArrayMT->GetArrayElementTypeHandle();
                     for (UINT32 i = 0; i < cElements; i++)
                     {
                         OBJECTREF obj = AllocateArrayEx(subArrayType, &pArgs[1], dwNumArgs-1, flags, bAllocateInLargeHeap);
@@ -854,7 +863,7 @@ OBJECTREF AllocateArrayEx(MethodTable *pArrayMT, INT32 *pArgs, DWORD dwNumArgs, 
                     orArray = (ArrayBase *) OBJECTREFToObject(outerArray);
                 }
             } // GcStressPolicy::~InhibitHolder()
-            
+
             GCPROTECT_END();
         }
     }
@@ -904,17 +913,17 @@ OBJECTREF   DupArrayForCloning(BASEARRAYREF pRef)
         MODE_COOPERATIVE; // returns an objref without pinning it => cooperative
     } CONTRACTL_END;
 
-    ArrayTypeDesc arrayType(pRef->GetMethodTable(), pRef->GetArrayElementTypeHandle());
-    unsigned rank = arrayType.GetRank();
+    MethodTable *pArrayMT = pRef->GetMethodTable();
+    unsigned rank = pArrayMT->GetRank();
 
     DWORD numArgs =  rank*2;
     INT32* args = (INT32*) _alloca(sizeof(INT32)*numArgs);
 
-    if (arrayType.GetInternalCorElementType() == ELEMENT_TYPE_ARRAY)
+    if (pArrayMT->GetInternalCorElementType() == ELEMENT_TYPE_ARRAY)
     {
         const INT32* bounds = pRef->GetBoundsPtr();
         const INT32* lowerBounds = pRef->GetLowerBoundsPtr();
-        for(unsigned int i=0; i < rank; i++) 
+        for(unsigned int i=0; i < rank; i++)
         {
             args[2*i]   = lowerBounds[i];
             args[2*i+1] = bounds[i];
@@ -925,7 +934,7 @@ OBJECTREF   DupArrayForCloning(BASEARRAYREF pRef)
         numArgs = 1;
         args[0] = pRef->GetNumComponents();
     }
-    return AllocateArrayEx(TypeHandle(&arrayType), args, numArgs, GC_ALLOC_ZEROING_OPTIONAL);
+    return AllocateArrayEx(pArrayMT, args, numArgs, GC_ALLOC_ZEROING_OPTIONAL);
 }
 
 
@@ -945,13 +954,14 @@ OBJECTREF AllocateObjectArray(DWORD cElements, TypeHandle elementType, BOOL bAll
     // The object array class is loaded at startup.
     _ASSERTE(g_pPredefinedArrayTypes[ELEMENT_TYPE_OBJECT] != NULL);
 
+    TypeHandle arrayType = ClassLoader::LoadArrayTypeThrowing(elementType);
+
 #ifdef _DEBUG
-    ArrayTypeDesc arrayType(g_pPredefinedArrayTypes[ELEMENT_TYPE_OBJECT]->GetMethodTable(), elementType);
-    _ASSERTE(arrayType.GetRank() == 1);
+    _ASSERTE(arrayType.AsArray()->GetRank() == 1);
     _ASSERTE(arrayType.GetInternalCorElementType() == ELEMENT_TYPE_SZARRAY);
 #endif //_DEBUG
 
-    return AllocateSzArray(ClassLoader::LoadArrayTypeThrowing(elementType), (INT32) cElements, GC_ALLOC_NO_FLAGS, bAllocateInLargeHeap);
+    return AllocateSzArray(arrayType, (INT32) cElements, GC_ALLOC_NO_FLAGS, bAllocateInLargeHeap);
 }
 
 STRINGREF AllocateString( DWORD cchStringLength )
@@ -1008,8 +1018,8 @@ STRINGREF AllocateString( DWORD cchStringLength )
         GCPROTECT_BEGIN(objref);
         ProfilerObjectAllocatedCallback(objref, (ClassID) orObject->GetTypeHandle().AsPtr());
         GCPROTECT_END();
-        
-        orObject = (StringObject *) OBJECTREFToObject(objref); 
+
+        orObject = (StringObject *) OBJECTREFToObject(objref);
     }
 
 #ifdef FEATURE_EVENT_TRACE
@@ -1119,12 +1129,12 @@ void AllocateComClassObject(ComClassFactory* pComClsFac, OBJECTREF* ppRefClass)
     MethodTable *pMT = g_pRuntimeTypeClass;
     _ASSERTE(pMT != NULL);
     *ppRefClass= AllocateObject(pMT);
-    
+
     if (*ppRefClass != NULL)
     {
         SyncBlock* pSyncBlock = (*((REFLECTCLASSBASEREF*) ppRefClass))->GetSyncBlock();
 
-        // <TODO> This needs to support a COM version of ReflectClass.  Right now we 
+        // <TODO> This needs to support a COM version of ReflectClass.  Right now we
         //  still work as we used to <darylo> </TODO>
         MethodTable* pComMT = g_pBaseCOMObject;
         _ASSERTE(pComMT != NULL);
@@ -1133,7 +1143,7 @@ void AllocateComClassObject(ComClassFactory* pComClsFac, OBJECTREF* ppRefClass)
         (*((REFLECTCLASSBASEREF*) ppRefClass))->SetType(TypeHandle(pComMT));
 
         pSyncBlock->GetInteropInfo()->SetComClassFactory(pComClsFac);
-    }   
+    }
 }
 #endif // FEATURE_COMINTEROP_UNMANAGED_ACTIVATION
 
@@ -1176,7 +1186,7 @@ OBJECTREF AllocateObject(MethodTable *pMT
     else
 #endif // FEATURE_COMINTEROP_UNMANAGED_ACTIVATION
 #endif // FEATURE_COMINTEROP
-    {   
+    {
         DWORD baseSize = pMT->GetBaseSize();
         GC_ALLOC_FLAGS flags = ((pMT->ContainsPointers() ? GC_ALLOC_CONTAINS_REF : GC_ALLOC_NO_FLAGS) |
                                 (pMT->HasFinalizer() ? GC_ALLOC_FINALIZE : GC_ALLOC_NO_FLAGS));
@@ -1223,7 +1233,7 @@ OBJECTREF AllocateObject(MethodTable *pMT
             ProfilerObjectAllocatedCallback(objref, (ClassID) orObject->GetTypeHandle().AsPtr());
             GCPROTECT_END();
 
-            orObject = (Object *) OBJECTREFToObject(objref); 
+            orObject = (Object *) OBJECTREFToObject(objref);
         }
 
 #ifdef FEATURE_EVENT_TRACE
@@ -1307,7 +1317,7 @@ void IncCheckedBarrierCount()
 			CheckedAfterHeapFilter, CheckedAfterRefInEphemFilter, CheckedAfterAlreadyDirtyFilter);
 		printf("    [Unchecked: %lld after ephem check, %lld after already dirty check.]\n",
 			UncheckedAfterRefInEphemFilter, UncheckedAfterAlreadyDirtyFilter);
-		printf("    [Dest in ephem: checked = %lld, unchecked = %lld.]\n", 
+		printf("    [Dest in ephem: checked = %lld, unchecked = %lld.]\n",
 			CheckedDestInEphem, UncheckedDestInEphem);
         printf("    [Checked: %lld are stores to fields of ret buff, %lld via byref args,\n",
             CheckedBarrierRetBufCount, CheckedBarrierByrefArgCount);
@@ -1370,16 +1380,16 @@ extern "C" HCIMPL2_RAW(VOID, JIT_CheckedWriteBarrier, Object **dst, Object *ref)
         break;
     }
 #endif // FEATURE_COUNT_GC_WRITE_BARRIERS
-    
+
     // no HELPER_METHOD_FRAME because we are MODE_COOPERATIVE, GC_NOTRIGGER
-    
-    *dst = ref;
+
+    VolatileStore(dst, ref);
 
     // if the dst is outside of the heap (unboxed value classes) then we
     //      simply exit
     if (((BYTE*)dst < g_lowest_address) || ((BYTE*)dst >= g_highest_address))
         return;
-    
+
 #ifdef FEATURE_COUNT_GC_WRITE_BARRIERS
     CheckedAfterHeapFilter++;
 #endif
@@ -1406,9 +1416,9 @@ extern "C" HCIMPL2_RAW(VOID, JIT_CheckedWriteBarrier, Object **dst, Object *ref)
 #ifdef FEATURE_COUNT_GC_WRITE_BARRIERS
         CheckedAfterRefInEphemFilter++;
 #endif
-        // VolatileLoadWithoutBarrier() is used here to prevent fetch of g_card_table from being reordered 
-        // with g_lowest/highest_address check above. See comment in code:gc_heap::grow_brick_card_tables.
-        BYTE* pCardByte = (BYTE *)VolatileLoadWithoutBarrier(&g_card_table) + card_byte((BYTE *)dst);
+        // VolatileLoadWithoutBarrier() is used here to prevent fetch of g_card_table from being reordered
+        // with g_lowest/highest_address check above. See comment in StompWriteBarrier.
+        BYTE* pCardByte = (BYTE*)VolatileLoadWithoutBarrier(&g_card_table) + card_byte((BYTE *)dst);
         if(*pCardByte != 0xFF)
         {
 #ifdef FEATURE_COUNT_GC_WRITE_BARRIERS
@@ -1434,13 +1444,13 @@ extern "C" HCIMPL2_RAW(VOID, JIT_WriteBarrier, Object **dst, Object *ref)
     STATIC_CONTRACT_MODE_COOPERATIVE;
     STATIC_CONTRACT_THROWS;
     STATIC_CONTRACT_GC_NOTRIGGER;
-    
+
 #ifdef FEATURE_COUNT_GC_WRITE_BARRIERS
     IncUncheckedBarrierCount();
 #endif
     // no HELPER_METHOD_FRAME because we are MODE_COOPERATIVE, GC_NOTRIGGER
-    
-    *dst = ref;
+
+    VolatileStore(dst, ref);
 
     // If the store above succeeded, "dst" should be in the heap.
    assert(GCHeapUtilities::GetGCHeap()->IsHeapPointer((void*)dst));
@@ -1448,7 +1458,7 @@ extern "C" HCIMPL2_RAW(VOID, JIT_WriteBarrier, Object **dst, Object *ref)
 #ifdef WRITE_BARRIER_CHECK
     updateGCShadow(dst, ref);     // support debugging write barrier
 #endif
-    
+
 #ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
     if (GCHeapUtilities::SoftwareWriteWatchIsEnabled())
     {
@@ -1467,7 +1477,9 @@ extern "C" HCIMPL2_RAW(VOID, JIT_WriteBarrier, Object **dst, Object *ref)
 #ifdef FEATURE_COUNT_GC_WRITE_BARRIERS
         UncheckedAfterRefInEphemFilter++;
 #endif
-        BYTE* pCardByte = (BYTE *)VolatileLoadWithoutBarrier(&g_card_table) + card_byte((BYTE *)dst);
+        // VolatileLoadWithoutBarrier() is used here to prevent fetch of g_card_table from being reordered
+        // with g_lowest/highest_address check above. See comment in StompWriteBarrier.
+        BYTE* pCardByte = (BYTE*)VolatileLoadWithoutBarrier(&g_card_table) + card_byte((BYTE *)dst);
         if(*pCardByte != 0xFF)
         {
 #ifdef FEATURE_COUNT_GC_WRITE_BARRIERS
@@ -1478,7 +1490,6 @@ extern "C" HCIMPL2_RAW(VOID, JIT_WriteBarrier, Object **dst, Object *ref)
 #ifdef FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
             SetCardBundleByte((BYTE*)dst);
 #endif
-
         }
     }
 }
@@ -1497,7 +1508,8 @@ extern "C" HCIMPL2_RAW(VOID, JIT_WriteBarrierEnsureNonHeapTarget, Object **dst, 
     assert(!GCHeapUtilities::GetGCHeap()->IsHeapPointer((void*)dst));
 
     // no HELPER_METHOD_FRAME because we are MODE_COOPERATIVE, GC_NOTRIGGER
-    
+
+    // not a release store because NonHeap.
     *dst = ref;
 }
 HCIMPLEND_RAW
@@ -1516,7 +1528,7 @@ void ErectWriteBarrier(OBJECTREF *dst, OBJECTREF ref)
     //      simply exit
     if (((BYTE*)dst < g_lowest_address) || ((BYTE*)dst >= g_highest_address))
         return;
-    
+
 #ifdef WRITE_BARRIER_CHECK
     updateGCShadow((Object**) dst, OBJECTREFToObject(ref));     // support debugging write barrier
 #endif
@@ -1530,17 +1542,16 @@ void ErectWriteBarrier(OBJECTREF *dst, OBJECTREF ref)
 
     if ((BYTE*) OBJECTREFToObject(ref) >= g_ephemeral_low && (BYTE*) OBJECTREFToObject(ref) < g_ephemeral_high)
     {
-        // VolatileLoadWithoutBarrier() is used here to prevent fetch of g_card_table from being reordered 
-        // with g_lowest/highest_address check above. See comment in code:gc_heap::grow_brick_card_tables.
-        BYTE* pCardByte = (BYTE *)VolatileLoadWithoutBarrier(&g_card_table) + card_byte((BYTE *)dst);
+        // VolatileLoadWithoutBarrier() is used here to prevent fetch of g_card_table from being reordered
+        // with g_lowest/highest_address check above. See comment in StompWriteBarrier.
+        BYTE* pCardByte = (BYTE*)VolatileLoadWithoutBarrier(&g_card_table) + card_byte((BYTE *)dst);
         if (*pCardByte != 0xFF)
         {
             *pCardByte = 0xFF;
-            
+
 #ifdef FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
             SetCardBundleByte((BYTE*)dst);
 #endif
-
         }
     }
 }
@@ -1557,7 +1568,7 @@ void ErectWriteBarrierForMT(MethodTable **dst, MethodTable *ref)
 #ifdef WRITE_BARRIER_CHECK
     updateGCShadow((Object **)dst, (Object *)ref);     // support debugging write barrier, updateGCShadow only cares that these are pointers
 #endif
-    
+
     if (ref->Collectible())
     {
 #ifdef FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP
@@ -1571,8 +1582,9 @@ void ErectWriteBarrierForMT(MethodTable **dst, MethodTable *ref)
         BYTE *refObject = *(BYTE **)((MethodTable*)ref)->GetLoaderAllocatorObjectHandle();
         if((BYTE*) refObject >= g_ephemeral_low && (BYTE*) refObject < g_ephemeral_high)
         {
-            // See comment above
-            BYTE* pCardByte = (BYTE *)VolatileLoadWithoutBarrier(&g_card_table) + card_byte((BYTE *)dst);
+            // VolatileLoadWithoutBarrier() is used here to prevent fetch of g_card_table from being reordered
+            // with g_lowest/highest_address check above. See comment in StompWriteBarrier.
+            BYTE* pCardByte = (BYTE*)VolatileLoadWithoutBarrier(&g_card_table) + card_byte((BYTE *)dst);
             if( !((*pCardByte) & card_bit((BYTE *)dst)) )
             {
                 *pCardByte = 0xFF;
@@ -1580,7 +1592,6 @@ void ErectWriteBarrierForMT(MethodTable **dst, MethodTable *ref)
 #ifdef FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
                 SetCardBundleByte((BYTE*)dst);
 #endif
-
             }
         }
     }

@@ -31,12 +31,9 @@ set __IlasmRoundTrip=
 set __CollectDumps=
 set __DoCrossgen=
 set __CrossgenAltJit=
-set __CoreFXTests=
-set __CoreFXTestsRunAllAvailable=
-set __SkipGenerateLayout=
 set __BuildXUnitWrappers=
 set __PrintLastResultsOnly=
-set __RunInUnloadableContext=
+set RunInUnloadableContext=
 
 :Arg_Loop
 if "%1" == "" goto ArgsDone
@@ -73,16 +70,13 @@ if /i "%1" == "jitminopts"                              (set COMPlus_JITMinOpts=
 if /i "%1" == "jitforcerelocs"                          (set COMPlus_ForceRelocs=1&shift&goto Arg_Loop)
 if /i "%1" == "jitdisasm"                               (set __JitDisasm=1&shift&goto Arg_Loop)
 if /i "%1" == "ilasmroundtrip"                          (set __IlasmRoundTrip=1&shift&goto Arg_Loop)
-if /i "%1" == "GenerateLayoutOnly"                      (set __GenerateLayoutOnly=1&shift&goto Arg_Loop)
-if /i "%1" == "skipgeneratelayout"                      (set __SkipGenerateLayout=1&shift&goto Arg_Loop)
 if /i "%1" == "buildxunitwrappers"                      (set __BuildXunitWrappers=1&shift&goto Arg_Loop)
 if /i "%1" == "printlastresultsonly"                    (set __PrintLastResultsOnly=1&shift&goto Arg_Loop)
-if /i "%1" == "CoreFXTests"                             (set __CoreFXTests=true&shift&goto Arg_Loop)
-if /i "%1" == "CoreFXTestsAll"                          (set __CoreFXTests=true&set __CoreFXTestsRunAllAvailable=true&shift&goto Arg_Loop)
-if /i "%1" == "CoreFXTestList"                          (set __CoreFXTests=true&set __CoreFXTestList=%2&shift&shift&goto Arg_Loop)
 if /i "%1" == "runcrossgentests"                        (set RunCrossGen=true&shift&goto Arg_Loop)
+if /i "%1" == "runcrossgen2tests"                       (set RunCrossGen2=true&shift&goto Arg_Loop)
 REM This test feature is currently intentionally undocumented
 if /i "%1" == "runlargeversionbubblecrossgentests"      (set RunCrossGen=true&set CrossgenLargeVersionBubble=true&shift&goto Arg_Loop)
+if /i "%1" == "runlargeversionbubblecrossgen2tests"     (set RunCrossGen2=true&set CrossgenLargeVersionBubble=true&shift&goto Arg_Loop)
 if /i "%1" == "link"                                    (set DoLink=true&set ILLINK=%2&shift&shift&goto Arg_Loop)
 REM tieredcompilation is on by default now, but setting this environment variable is harmless and I didn't want to break any automation that might be using it just yet
 if /i "%1" == "tieredcompilation"                       (set COMPLUS_TieredCompilation=1&shift&goto Arg_Loop)
@@ -94,7 +88,7 @@ REM change it to COMPlus_GCStress when we stop using xunit harness
 if /i "%1" == "gcstresslevel"                           (set COMPlus_GCStress=%2&set __TestTimeout=1800000&shift&shift&goto Arg_Loop)
 if /i "%1" == "collectdumps"                            (set __CollectDumps=true&shift&goto Arg_Loop)
 
-if /i "%1" == "runincontext"                            (set __RunInUnloadableContext=1&shift&goto Arg_Loop)
+if /i "%1" == "runincontext"                            (set RunInUnloadableContext=1&shift&goto Arg_Loop)
 
 if /i not "%1" == "msbuildargs" goto SkipMsbuildArgs
 :: All the rest of the args will be collected and passed directly to msbuild.
@@ -113,14 +107,6 @@ shift
 :: Done with argument processing. Check argument values for validity.
 
 if defined __TestEnv (if not exist %__TestEnv% echo %__MsgPrefix%Error: Test Environment script %__TestEnv% not found && exit /b 1)
-if "%__CoreFXTests%"=="true" (if defined __GenerateLayoutOnly  echo %__MsgPrefix%Error: Don't specify both "CoreFXTests" and "GenerateLayoutOnly" && exit /b 1)
-
-if defined __CoreFXTestList (
-    if not exist "%__CoreFXTestList%" (
-        echo %__MsgPrefix%Error: Couldn't find CoreFX Test List "%__CoreFXTestList%".
-        exit /b 1
-    )
-)
 
 :: Set the remaining variables based upon the determined configuration
 set __MSBuildBuildArch=%__BuildArch%
@@ -131,16 +117,8 @@ set "__TestWorkingDir=%__RootBinDir%\tests\%__BuildOS%.%__BuildArch%.%__BuildTyp
 :: Default global test environment variables
 :: REVIEW: are these ever expected to be defined on entry to this script? Why? By whom?
 :: REVIEW: XunitTestReportDirBase is not used in this script. Who needs to have it set?
-if not defined XunitTestBinBase       set  XunitTestBinBase=%__TestWorkingDir%
+if not defined XunitTestBinBase       set  XunitTestBinBase=%__TestWorkingDir%\
 if not defined XunitTestReportDirBase set  XunitTestReportDirBase=%XunitTestBinBase%\Reports\
-
-REM At this point in the script there will be a divergence in how the tests are run.
-REM For official builds we will continue to run tests using the un-unified scripting
-REM which relies on msbuild and calls runtest.proj directly. For all other scenarios
-REM runtest.py will handle setup and will then call runtest.proj
-
-if "%__CoreFXTests%"=="true" goto SetupMSBuildAndCallRuntestProj
-if defined __GenerateLayoutOnly goto SetupMSBuildAndCallRuntestProj
 
 REM We are not running in the official build scenario, call runtest.py
 
@@ -174,20 +152,16 @@ if defined __Sequential (
     set __RuntestPyArgs=%__RuntestPyArgs% --sequential
 )
 
-if not defined __SkipGenerateLayout (
-    set __RuntestPyArgs=%__RuntestPyArgs% --generate_layout
-)
-
-if defined __GenerateLayoutOnly (
-    set __RuntestPyArgs=%__RuntestPyArgs% --generate_layout_only
-)
-
 if defined __BuildXUnitWrappers (
     set __RuntestPyArgs=%__RuntestPyArgs% --build_xunit_test_wrappers
 )
 
 if defined RunCrossGen (
     set __RuntestPyArgs=%__RuntestPyArgs% --run_crossgen_tests
+)
+
+if defined RunCrossGen2 (
+    set __RuntestPyArgs=%__RuntestPyArgs% --run_crossgen2_tests
 )
 
 if defined __DoCrossgen (
@@ -206,7 +180,7 @@ if defined __AltJitArch (
     set __RuntestPyArgs=%__RuntestPyArgs% -altjit_arch %__AltJitArch%
 )
 
-if defined __RunInUnloadableContext (
+if defined RunInUnloadableContext (
     set __RuntestPyArgs=%__RuntestPyArgs% --run_in_context
 )
 
@@ -247,13 +221,11 @@ set __TestRunXmlLog=%__LogsDir%\TestRun_%__BuildOS%__%__BuildArch%__%__BuildType
 
 REM Prepare the Test Drop
 
-if not defined __GenerateLayoutOnly (
-    echo %__MsgPrefix%Removing 'ni' files and 'lock' folders from %__TestWorkingDir%
-    REM Cleans any NI from the last run
-    powershell -NoProfile "Get-ChildItem -path %__TestWorkingDir% -Include '*.ni.*' -Recurse -Force | Remove-Item -force"
-    REM Cleans up any lock folder used for synchronization from last run
-    powershell -NoProfile "Get-ChildItem -path %__TestWorkingDir% -Include 'lock' -Recurse -Force |  where {$_.Attributes -eq 'Directory'}| Remove-Item -force -Recurse"
-)
+echo %__MsgPrefix%Removing 'ni' files and 'lock' folders from %__TestWorkingDir%
+REM Cleans any NI from the last run
+powershell -NoProfile "Get-ChildItem -path %__TestWorkingDir% -Include '*.ni.*' -Recurse -Force | Remove-Item -force"
+REM Cleans up any lock folder used for synchronization from last run
+powershell -NoProfile "Get-ChildItem -path %__TestWorkingDir% -Include 'lock' -Recurse -Force |  where {$_.Attributes -eq 'Directory'}| Remove-Item -force -Recurse"
 
 if defined CORE_ROOT goto SkipCoreRootSetup
 
@@ -270,8 +242,6 @@ if not exist %CORE_ROOT%\coreclr.dll (
     echo %__MsgPrefix%Error: Ensure you have done a successful build of the Product and %CORE_ROOT% contains runtime binaries.
     exit /b 1
 )
-
-if "%__CoreFXTests%"=="true" goto RunCoreFXTests
 
 REM =========================================================================================
 REM ===
@@ -291,11 +261,6 @@ if defined __DoCrossgen (
 
 REM Delete the unecessary mscorlib.ni file.
 if exist %CORE_ROOT%\mscorlib.ni.dll del %CORE_ROOT%\mscorlib.ni.dll
-
-if defined __GenerateLayoutOnly (
-    echo %__MsgPrefix%Done generating layout.
-    exit /b 0
-)
 
 ::Check if the test Binaries are built
 if not exist %XunitTestBinBase% (
@@ -324,7 +289,7 @@ echo %__MsgPrefix%CORE_ROOT that will be used is: %CORE_ROOT%
 echo %__MsgPrefix%Starting test run at %TIME%
 
 set __BuildLogRootName=TestRunResults
-call :msbuild "%__ProjectFilesDir%\runtest.proj" /p:Runtests=true /clp:showcommandline
+call :msbuild "%__ProjectFilesDir%\src\runtest.proj" /p:Runtests=true /clp:showcommandline
 set __errorlevel=%errorlevel%
 
 if "%__CollectDumps%"=="true" (
@@ -334,64 +299,6 @@ if "%__CollectDumps%"=="true" (
 if %__errorlevel% GEQ 1 (
     echo %__MsgPrefix%Test Run failed. Refer to the following:
     echo     Html report: %__TestRunHtmlLog%
-    exit /b 1
-)
-
-goto TestsDone
-
-REM =========================================================================================
-REM ===
-REM === Run CoreFX tests
-REM ===
-REM =========================================================================================
-
-:RunCoreFXTests
-
-set _CoreFXTestHost=%XunitTestBinBase%\testhost
-
-set _RootCoreFXTestPath=%__TestWorkingDir%\CoreFX
-set _CoreFXTestUtilitiesOutputPath=%_RootCoreFXTestPath%\CoreFXTestUtilities
-set _CoreFXTestBinariesPath=%_RootCoreFXTestPath%\tests_downloaded
-set _CoreFXLogsDir=%__LogsDir%\CoreFX\%__BuildOS%.%__BuildArch%.%__BuildType%
-if not exist "%_CoreFXLogsDir%"  (mkdir "%_CoreFXLogsDir%")
-
-set _CoreFXTestSetupUtilityName=CoreFX.TestUtils.TestFileSetup
-set _CoreFXTestSetupUtility=%__ProjectFilesDir%\src\Common\CoreFX\TestFileSetup\%_CoreFXTestSetupUtilityName%.csproj
-
-call :ResolveDependencies
-if errorlevel 1 exit /b 1
-
-if defined __GenerateTestHostOnly (
-    exit /b 0
-)
-
-if not exist %_CoreFXTestHost%\dotnet.exe (
-    echo %__MsgPrefix%CoreFX test host not found, please run runtest.cmd again
-    exit /b 1
-)
-
-set /p _CoreFXTestRemoteURL=< "%__ProjectFilesDir%\CoreFX\CoreFXTestListURL.txt"
-if not defined __CoreFXTestList ( set __CoreFXTestList=%__ProjectFilesDir%\CoreFX\CoreFX.issues.json )
-
-set _CoreFXTestExecutable=xunit.console.netcore.exe
-set _CoreFXTestExecutableArgs= --notrait category=nonnetcoreapptests --notrait category=nonwindowstests  --notrait category=failing --notrait category=IgnoreForCI --notrait category=OuterLoop --notrait Benchmark=true
-
-REM Set the log file name to something Jenkins can understand
-set _CoreFX_TestLogFileName=testResults.xml
-set _CoreFX_TestRunScriptName=CoreCLR_RunTest.cmd
-if "%__CoreFXTestsRunAllAvailable%" == "true" ( 
-    set _CoreFX_RunCommand=--runAllTests
-) else ( 
-    set _CoreFX_RunCommand=--runSpecifiedTests
-)
-
-echo %__MsgPrefix%Downloading and Running CoreFX Test Binaries
-set NEXTCMD=call "%DotNetCli%" "%_CoreFXTestUtilitiesOutputPath%\%_CoreFXTestSetupUtilityName%.dll" --clean --outputDirectory "%_CoreFXTestBinariesPath%" --testListJsonPath "%__CoreFXTestList%" --testUrl "!_CoreFXTestRemoteURL!" %_CoreFX_RunCommand% --dotnetPath "%_CoreFXTestHost%\dotnet.exe" --executable %_CoreFXTestExecutable% --log %_CoreFXLogsDir% %_CoreFXTestExecutableArgs%
-echo !NEXTCMD!
-!NEXTCMD!
-if errorlevel 1 (
-    echo %__MsgPrefix%CoreFX tests finished with failures. Refer to the following:  
-    echo     %_CoreFXLogsDir%
     exit /b 1
 )
 
@@ -576,50 +483,12 @@ REM ============================================================================
 :ResolveDependencies
 
 set __BuildLogRootName=Tests_GenerateRuntimeLayout
-call :msbuild "%__ProjectFilesDir%\runtest.proj" /p:GenerateRuntimeLayout=true 
+call :msbuild "%__ProjectFilesDir%\src\runtest.proj" /p:GenerateRuntimeLayout=true 
 if errorlevel 1 (
     echo %__MsgPrefix%Test Dependency Resolution Failed
     exit /b 1
 )
 echo %__MsgPrefix%Created the runtime layout with all dependencies in %CORE_ROOT%
-
-if "%__CoreFXTests%"=="true" goto ResolveCoreFXDependencies
-
-exit /b 0
-
-REM =========================================================================================
-REM ===
-REM === Generate the "testhost" directory for running CoreFX tests; download dependencies.
-REM ===
-REM =========================================================================================
-
-:ResolveCoreFXDependencies
-
-echo %__MsgPrefix%Building CoreFX Test Host
-
-set __BuildLogRootName=Tests_GenerateTestHost
-call :msbuild "%__ProjectFilesDir%\runtest.proj" /p:GenerateTestHost=true 
-if errorlevel 1 (
-    echo %__MsgPrefix%Test Host Dependency Resolution Failed
-    exit /b 1
-)
-echo %__MsgPrefix%Created the Test Host layout with all dependencies in %_CoreFXTestHost%
-
-REM Publish and call the CoreFX test helper projects - should this be integrated into runtest.proj?
-REM Build Helper project
-set NEXTCMD=call :msbuild /t:Restore "%_CoreFXTestSetupUtility%"
-echo !NEXTCMD!
-!NEXTCMD!
-if errorlevel 1 (
-    exit /b 1
-)
-
-set NEXTCMD=call :msbuild "/p:Configuration=%CoreRT_BuildType%" "/p:OSGroup=%CoreRT_BuildOS%" "/p:Platform=%CoreRT_BuildArch%" "/p:OutputPath=%_CoreFXTestUtilitiesOutputPath%" "%_CoreFXTestSetupUtility%"
-echo !NEXTCMD!
-!NEXTCMD!
-if errorlevel 1 (
-    exit /b 1
-)
 
 exit /b 0
 
@@ -644,15 +513,10 @@ echo ^<build_architecture^>      - Specifies build architecture: x64, x86, arm, 
 echo ^<build_type^>              - Specifies build type: Debug, Release, or Checked ^(default: Debug^).
 echo VSVersion ^<vs_version^>    - VS2017 or VS2019 ^(default: VS2019^).
 echo TestEnv ^<test_env_script^> - Run a custom script before every test to set custom test environment settings.
-echo GenerateLayoutOnly        - If specified will not run the tests and will only create the Runtime Dependency Layout
-echo skipgeneratelayout        - Do not generate the core root. Used for cross target testing.
 echo sequential                - Run tests sequentially (no parallelism).
 echo crossgen                  - Precompile ^(crossgen^) the managed assemblies in CORE_ROOT before running the tests.
 echo crossgenaltjit ^<altjit^>   - Precompile ^(crossgen^) the managed assemblies in CORE_ROOT before running the tests, using the given altjit.
 echo link ^<ILlink^>             - Runs the tests after linking via the IL linker ^<ILlink^>.
-echo CoreFXTests               - Runs CoreFX tests
-echo CoreFXTestsAll            - Runs all CoreFX tests ^(no exclusions^)
-echo CoreFXTestList ^<file^>     - Specify a file containing a list of CoreFX tests to run, and runs them.
 echo RunCrossgenTests          - Runs ReadytoRun tests
 echo jitstress ^<n^>             - Runs the tests with COMPlus_JitStress=n
 echo jitstressregs ^<n^>         - Runs the tests with COMPlus_JitStressRegs=n
@@ -681,6 +545,5 @@ echo Note that arguments are not case-sensitive.
 echo.
 echo Examples:
 echo   %0 x86 checked
-echo   %0 x64 checked GenerateLayoutOnly
 echo   %0 x64 release
 exit /b 1

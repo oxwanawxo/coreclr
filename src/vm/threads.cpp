@@ -1,12 +1,12 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
-// 
+//
 // THREADS.CPP
-// 
+//
 
-// 
-// 
+//
+//
 
 
 #include "common.h"
@@ -89,7 +89,7 @@ UINT64 Thread::s_monitorLockContentionCountOverflow = 0;
 CrstStatic g_DeadlockAwareCrst;
 
 
-#if defined(_DEBUG) 
+#if defined(_DEBUG)
 BOOL MatchThreadHandleToOsId ( HANDLE h, DWORD osId )
 {
 #ifndef FEATURE_PAL
@@ -104,7 +104,7 @@ BOOL MatchThreadHandleToOsId ( HANDLE h, DWORD osId )
     return TRUE;
 #endif // !FEATURE_PAL
 }
-#endif // _DEBUG 
+#endif // _DEBUG
 
 
 #ifdef _DEBUG_IMPL
@@ -136,7 +136,7 @@ template<> void GCAssert<FALSE>::BeginGCAssert()
 // #define     NEW_TLS     1
 
 #ifdef _DEBUG
-void  Thread::SetFrame(Frame *pFrame) 
+void  Thread::SetFrame(Frame *pFrame)
 {
     CONTRACTL {
         NOTHROW;
@@ -165,10 +165,6 @@ void  Thread::SetFrame(Frame *pFrame)
         pWalk = m_pFrame;
         while (fExist && pWalk != pFrame && pWalk != (Frame*)-1)
         {
-            if (pWalk->GetVTablePtr() == ContextTransitionFrame::GetMethodFrameVPtr())
-            {
-                _ASSERTE (((ContextTransitionFrame *)pWalk)->GetReturnDomain() == m_pDomain);
-            }
             pWalk = pWalk->m_Next;
         }
     }
@@ -235,11 +231,11 @@ static StackWalkAction DetectHandleILStubsForDebugger_StackWalkCallback(CrawlFra
 
 // This is really just a heuristic to detect if we are executing in an M2U IL stub or
 // one of the marshaling methods it calls.  It doesn't deal with U2M IL stubs.
-// We loop through the frame chain looking for an uninitialized TransitionFrame.  
-// If there is one, then we are executing in an M2U IL stub or one of the methods it calls.  
+// We loop through the frame chain looking for an uninitialized TransitionFrame.
+// If there is one, then we are executing in an M2U IL stub or one of the methods it calls.
 // On the other hand, if there is an initialized TransitionFrame, then we are not.
 // Also, if there is an HMF on the stack, then we stop.  This could be the case where
-// an IL stub calls an FCALL which ends up in a managed method, and the debugger wants to 
+// an IL stub calls an FCALL which ends up in a managed method, and the debugger wants to
 // stop in those cases.  Some examples are COMException..ctor and custom marshalers.
 //
 // X86 IL stubs use InlinedCallFrame and are indistinguishable from ordinary methods with
@@ -302,9 +298,9 @@ extern "C" {
 #ifndef __GNUC__
 __declspec(thread)
 #else // !__GNUC__
-__thread 
+__thread
 #endif // !__GNUC__
-ThreadLocalInfo gCurrentThreadInfo = 
+ThreadLocalInfo gCurrentThreadInfo =
                                               {
                                                   NULL,    // m_pThread
                                                   NULL,    // m_pAppDomain
@@ -453,7 +449,7 @@ void Thread::ChooseThreadCPUGroupAffinity()
     }
     CONTRACTL_END;
 #ifndef FEATURE_PAL
-    if (!CPUGroupInfo::CanEnableGCCPUGroups() || !CPUGroupInfo::CanEnableThreadUseAllCpuGroups()) 
+    if (!CPUGroupInfo::CanEnableGCCPUGroups() || !CPUGroupInfo::CanEnableThreadUseAllCpuGroups())
          return;
 
 
@@ -484,7 +480,7 @@ void Thread::ClearThreadCPUGroupAffinity()
     }
     CONTRACTL_END;
 #ifndef FEATURE_PAL
-    if (!CPUGroupInfo::CanEnableGCCPUGroups() || !CPUGroupInfo::CanEnableThreadUseAllCpuGroups()) 
+    if (!CPUGroupInfo::CanEnableGCCPUGroups() || !CPUGroupInfo::CanEnableThreadUseAllCpuGroups())
          return;
 
 
@@ -750,8 +746,6 @@ Thread* SetupThread(BOOL fInternal)
     // We now have a Thread object visable to the RS. unmark special status.
     hCantStop.Release();
 
-    pThread->SetupThreadForHost();
-
     threadHolder.SuppressRelease();
 
     FastInterlockOr((ULONG *) &pThread->m_State, Thread::TS_FullyInitialized);
@@ -868,9 +862,9 @@ void DestroyThread(Thread *th)
     }
 
     // Clear any outstanding stale EH state that maybe still active on the thread.
-#ifdef WIN64EXCEPTIONS
+#ifdef FEATURE_EH_FUNCLETS
     ExceptionTracker::PopTrackers((void*)-1);
-#else // !WIN64EXCEPTIONS
+#else // !FEATURE_EH_FUNCLETS
 #ifdef _TARGET_X86_
     PTR_ThreadExceptionState pExState = th->GetExceptionState();
     if (pExState->IsExceptionInProgress())
@@ -881,9 +875,9 @@ void DestroyThread(Thread *th)
 #else // !_TARGET_X86_
 #error Unsupported platform
 #endif // _TARGET_X86_
-#endif // WIN64EXCEPTIONS
+#endif // FEATURE_EH_FUNCLETS
 
-    if (g_fEEShutDown == 0) 
+    if (g_fEEShutDown == 0)
     {
         th->SetThreadState(Thread::TS_ReportDead);
         th->OnThreadTerminate(FALSE);
@@ -904,9 +898,9 @@ HRESULT Thread::DetachThread(BOOL fDLLThreadDetach)
     STATIC_CONTRACT_GC_NOTRIGGER;
 
     // Clear any outstanding stale EH state that maybe still active on the thread.
-#ifdef WIN64EXCEPTIONS
+#ifdef FEATURE_EH_FUNCLETS
     ExceptionTracker::PopTrackers((void*)-1);
-#else // !WIN64EXCEPTIONS
+#else // !FEATURE_EH_FUNCLETS
 #ifdef _TARGET_X86_
     PTR_ThreadExceptionState pExState = GetExceptionState();
     if (pExState->IsExceptionInProgress())
@@ -917,7 +911,7 @@ HRESULT Thread::DetachThread(BOOL fDLLThreadDetach)
 #else // !_TARGET_X86_
 #error Unsupported platform
 #endif // _TARGET_X86_
-#endif // WIN64EXCEPTIONS
+#endif // FEATURE_EH_FUNCLETS
 
 #ifdef FEATURE_COMINTEROP
     IErrorInfo *pErrorInfo;
@@ -1011,7 +1005,7 @@ DWORD GetRuntimeId()
 }
 
 //---------------------------------------------------------------------------
-// Creates new Thread for reverse p-invoke calls.  
+// Creates new Thread for reverse p-invoke calls.
 //---------------------------------------------------------------------------
 Thread* WINAPI CreateThreadBlockThrow()
 {
@@ -1025,20 +1019,12 @@ Thread* WINAPI CreateThreadBlockThrow()
     Thread* pThread = NULL;
     BEGIN_ENTRYPOINT_THROWS;
 
-    if (!CanRunManagedCode())
-    {
-        // CLR is shutting down - someone's DllMain detach event may be calling back into managed code.
-        // It is misleading to use our COM+ exception code, since this is not a managed exception.  
-        ULONG_PTR arg = E_PROCESS_SHUTDOWN_REENTRY;
-        RaiseException(EXCEPTION_EXX, 0, 1, &arg);
-    }
-
     HRESULT hr = S_OK;
     pThread = SetupThreadNoThrow(&hr);
     if (pThread == NULL)
     {
-        // Creating Thread failed, and we need to throw an exception to report status.  
-        // It is misleading to use our COM+ exception code, since this is not a managed exception.  
+        // Creating Thread failed, and we need to throw an exception to report status.
+        // It is misleading to use our COM+ exception code, since this is not a managed exception.
         ULONG_PTR arg = hr;
         RaiseException(EXCEPTION_EXX, 0, 1, &arg);
     }
@@ -1053,6 +1039,32 @@ DWORD_PTR Thread::OBJREF_HASH = OBJREF_TABSIZE;
 
 extern "C" void STDCALL JIT_PatchedCodeStart();
 extern "C" void STDCALL JIT_PatchedCodeLast();
+
+#ifdef FEATURE_WRITEBARRIER_COPY
+
+static void* s_barrierCopy = NULL;
+
+BYTE* GetWriteBarrierCodeLocation(VOID* barrier)
+{
+    return (BYTE*)s_barrierCopy + ((BYTE*)barrier - (BYTE*)JIT_PatchedCodeStart);
+}
+
+BOOL IsIPInWriteBarrierCodeCopy(PCODE controlPc)
+{
+    return (s_barrierCopy <= (void*)controlPc && (void*)controlPc < ((BYTE*)s_barrierCopy + ((BYTE*)JIT_PatchedCodeLast - (BYTE*)JIT_PatchedCodeStart)));
+}
+
+PCODE AdjustWriteBarrierIP(PCODE controlPc)
+{
+    _ASSERTE(IsIPInWriteBarrierCodeCopy(controlPc));
+
+    // Pretend we were executing the barrier function at its original location so that the unwinder can unwind the frame
+    return (PCODE)JIT_PatchedCodeStart + (controlPc - (PCODE)s_barrierCopy);
+}
+
+#endif // FEATURE_WRITEBARRIER_COPY
+
+extern "C" void *JIT_WriteBarrier_Loc;
 
 //---------------------------------------------------------------------------
 // One-time initialization. Called during Dll initialization. So
@@ -1072,10 +1084,27 @@ void InitThreadManager()
     // If you hit this assert on retail build, there is most likely problem with BBT script.
     _ASSERTE_ALL_BUILDS("clr/src/VM/threads.cpp", (BYTE*)JIT_PatchedCodeLast - (BYTE*)JIT_PatchedCodeStart < (ptrdiff_t)GetOsPageSize());
 
-    // I am using virtual protect to cover the entire range that this code falls in.
-    // 
+#ifdef FEATURE_WRITEBARRIER_COPY
+    s_barrierCopy = ClrVirtualAlloc(NULL, g_SystemInfo.dwAllocationGranularity, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (s_barrierCopy == NULL)
+    {
+        _ASSERTE(!"ClrVirtualAlloc of GC barrier code page failed");
+        COMPlusThrowWin32();
+    }
 
-    // We could reset it to non-writeable inbetween GCs and such, but then we'd have to keep on re-writing back and forth, 
+    memcpy(s_barrierCopy, (BYTE*)JIT_PatchedCodeStart, (BYTE*)JIT_PatchedCodeLast - (BYTE*)JIT_PatchedCodeStart);
+
+    // Store the JIT_WriteBarrier copy location to a global variable so that the JIT_Stelem_Ref and its helpers
+    // can jump to it.
+    JIT_WriteBarrier_Loc = GetWriteBarrierCodeLocation((void*)JIT_WriteBarrier);
+
+    SetJitHelperFunction(CORINFO_HELP_ASSIGN_REF, GetWriteBarrierCodeLocation((void*)JIT_WriteBarrier));
+#else // FEATURE_WRITEBARRIER_COPY
+
+    // I am using virtual protect to cover the entire range that this code falls in.
+    //
+
+    // We could reset it to non-writeable inbetween GCs and such, but then we'd have to keep on re-writing back and forth,
     // so instead we'll leave it writable from here forward.
 
     DWORD oldProt;
@@ -1085,6 +1114,7 @@ void InitThreadManager()
         _ASSERTE(!"ClrVirtualProtect of code page failed");
         COMPlusThrowWin32();
     }
+#endif // FEATURE_WRITEBARRIER_COPY
 
 #ifndef FEATURE_PAL
     _ASSERTE(GetThread() == NULL);
@@ -1287,6 +1317,7 @@ Thread::Thread()
     CONTRACTL_END;
 
     m_pFrame                = FRAME_TOP;
+    m_pGCFrame              = NULL;
 
     m_fPreemptiveGCDisabled = 0;
 
@@ -1347,7 +1378,6 @@ Thread::Thread()
     m_OSThreadId = 0;
     m_Priority = INVALID_THREAD_PRIORITY;
     m_ExternalRefCount = 1;
-    m_UnmanagedRefCount = 0;
     m_State = TS_Unstarted;
     m_StateNC = TSNC_Unknown;
 
@@ -1476,8 +1506,6 @@ Thread::Thread()
     m_pHelperMethodFrameCallerList = (HelperMethodFrameCallerList*)-1;
 #endif
 
-    m_dwHostTaskRefCount = 0;
-
     m_pExceptionDuringStartup = NULL;
 
 #ifdef HAVE_GCCOVER
@@ -1499,10 +1527,10 @@ Thread::Thread()
     m_dwDisableAbortCheckCount = 0;
 #endif // _DEBUG
 
-#ifdef WIN64EXCEPTIONS
+#ifdef FEATURE_EH_FUNCLETS
     m_dwIndexClauseForCatch = 0;
     m_sfEstablisherOfActualHandlerFrame.Clear();
-#endif // WIN64EXCEPTIONS
+#endif // FEATURE_EH_FUNCLETS
 
     m_workerThreadPoolCompletionCount = 0;
     m_ioThreadPoolCompletionCount = 0;
@@ -1517,9 +1545,9 @@ Thread::Thread()
     //
     // DO NOT ADD ADDITIONAL CONSTRUCTION AFTER THIS POINT.
     // NewId() allows this Thread instance to be accessed via a Thread Id.  Do not
-    // add additional construction after this point to prevent the race condition 
+    // add additional construction after this point to prevent the race condition
     // of accessing a partially constructed Thread via Thread Id lookup.
-    // 
+    //
 
     exposedObjectHolder.SuppressRelease();
     strongHndToExposedObjectHolder.SuppressRelease();
@@ -1534,7 +1562,7 @@ Thread::Thread()
     m_fInitializeSpyRegistered = false;
     m_pLastSTACtxCookie = NULL;
 #endif // FEATURE_COMINTEROP
-    
+
     m_fGCSpecial = FALSE;
 
 #ifndef FEATURE_PAL
@@ -1686,7 +1714,7 @@ BOOL Thread::InitThread(BOOL fInternal)
         ThrowOutOfMemory();
     }
 
-    _ASSERTE(ret); // every failure case for ret should throw. 
+    _ASSERTE(ret); // every failure case for ret should throw.
     return ret;
 }
 
@@ -1775,13 +1803,13 @@ BOOL Thread::HasStarted(BOOL bRequiresTSL)
 
         fCanCleanupCOMState = TRUE;
         res = PrepareApartmentAndContext();
-        if (!res) 
+        if (!res)
         {
             ThrowOutOfMemory();
         }
-        
+
         InitThread(FALSE);
-            
+
         if (SetThread(this) == FALSE)
         {
             ThrowOutOfMemory();
@@ -1791,9 +1819,6 @@ BOOL Thread::HasStarted(BOOL bRequiresTSL)
         {
             ThrowOutOfMemory();
         }
-
-        SetupThreadForHost();
-
 
         ThreadStore::TransferStartedThread(this, bRequiresTSL);
 
@@ -1855,7 +1880,7 @@ FAILURE:
     else
     {
         FastInterlockOr((ULONG *) &m_State, TS_FullyInitialized);
-        
+
 #ifdef DEBUGGING_SUPPORTED
         //
         // If we're debugging, let the debugger know that this
@@ -1874,7 +1899,7 @@ FAILURE:
 
 #ifdef PROFILING_SUPPORTED
         // If a profiler is running, let them know about the new thread.
-        // 
+        //
         // The call to IsGCSpecial is crucial to avoid a deadlock.  See code:Thread::m_fGCSpecial for more
         // information
         if (!IsGCSpecial())
@@ -1908,13 +1933,13 @@ BOOL Thread::AllocateIOCompletionContext()
     WRAPPER_NO_CONTRACT;
     PIOCompletionContext pIOC = new (nothrow) IOCompletionContext;
 
-    if(pIOC != NULL) 
+    if(pIOC != NULL)
     {
         pIOC->lpOverlapped = NULL;
         m_pIOCompletionContext = pIOC;
         return TRUE;
-    } 
-    else 
+    }
+    else
     {
         return FALSE;
     }
@@ -1923,7 +1948,7 @@ BOOL Thread::AllocateIOCompletionContext()
 VOID Thread::FreeIOCompletionContext()
 {
     WRAPPER_NO_CONTRACT;
-    if (m_pIOCompletionContext != NULL) 
+    if (m_pIOCompletionContext != NULL)
     {
         PIOCompletionContext pIOC = (PIOCompletionContext) m_pIOCompletionContext;
         delete pIOC;
@@ -2001,7 +2026,7 @@ void UndoRevert(BOOL bReverted, HANDLE hToken)
         {
            _ASSERT("Undo Revert -> SetThreadToken failed");
            STRESS_LOG1(LF_EH, LL_INFO100, "UndoRevert/SetThreadToken failed for hToken = %d\n",hToken);
-           EEPOLICY_HANDLE_FATAL_ERROR(COR_E_SECURITY);           
+           EEPOLICY_HANDLE_FATAL_ERROR(COR_E_SECURITY);
         }
     }
     return;
@@ -2039,9 +2064,9 @@ BOOL Thread::CreateNewThread(SIZE_T stackSize, LPTHREAD_START_ROUTINE start, voi
     bRet = CreateNewOSThread(stackSize, start, args);
 #ifndef FEATURE_PAL
     UndoRevert(bReverted, token);
+#endif // !FEATURE_PAL
     if (pName != NULL)
         SetThreadName(m_ThreadHandle, pName);
-#endif // !FEATURE_PAL
 
     return bRet;
 }
@@ -2098,9 +2123,8 @@ HANDLE Thread::CreateUtilityThread(Thread::StackSizeBucket stackSizeBucket, LPTH
 
     DWORD threadId;
     HANDLE hThread = CreateThread(NULL, stackSize, start, args, flags, &threadId);
-#ifndef FEATURE_PAL
+
     SetThreadName(hThread, pName);
-#endif // !FEATURE_PAL
 
 
     if (pThreadId)
@@ -2220,7 +2244,11 @@ BOOL Thread::CreateNewOSThread(SIZE_T sizeToCommitOrReserve, LPTHREAD_START_ROUT
     }
     CONTRACTL_END;
 
+#ifdef FEATURE_PAL
+    SIZE_T  ourId = 0;
+#else
     DWORD   ourId = 0;
+#endif
     HANDLE  h = NULL;
     DWORD dwCreationFlags = CREATE_SUSPENDED;
 
@@ -2258,12 +2286,16 @@ BOOL Thread::CreateNewOSThread(SIZE_T sizeToCommitOrReserve, LPTHREAD_START_ROUT
     lpThreadArgs->lpThreadFunction = start;
     lpThreadArgs->lpArg = args;
 
-    h = ::CreateThread(NULL     /*=SECURITY_ATTRIBUTES*/,
-                       sizeToCommitOrReserve,
-                       intermediateThreadProc,
-                       lpThreadArgs,
-                       dwCreationFlags,
-                       &ourId);
+#ifdef FEATURE_PAL
+    h = ::PAL_CreateThread64(NULL     /*=SECURITY_ATTRIBUTES*/,
+#else
+    h = ::CreateThread(      NULL     /*=SECURITY_ATTRIBUTES*/,
+#endif
+                             sizeToCommitOrReserve,
+                             intermediateThreadProc,
+                             lpThreadArgs,
+                             dwCreationFlags,
+                             &ourId);
 
     if (h == NULL)
         return FALSE;
@@ -2295,9 +2327,9 @@ BOOL Thread::CreateNewOSThread(SIZE_T sizeToCommitOrReserve, LPTHREAD_START_ROUT
     return TRUE;
 }
 
-// 
+//
 // #threadDestruction
-// 
+//
 // General comments on thread destruction.
 //
 // The C++ Thread object can survive beyond the time when the Win32 thread has died.
@@ -2723,16 +2755,16 @@ void Thread::CleanupDetachedThreads()
     _ASSERTE(!ThreadStore::HoldingThreadStore());
 
     ThreadStoreLockHolder threadStoreLockHolder;
-    
+
     Thread *thread = ThreadStore::GetAllThreadList(NULL, 0, 0);
 
     STRESS_LOG0(LF_SYNC, LL_INFO1000, "T::CDT called\n");
 
     while (thread != NULL)
-    {        
+    {
         Thread *next = ThreadStore::GetAllThreadList(thread, 0, 0);
 
-        if (thread->IsDetached() && thread->m_UnmanagedRefCount == 0)
+        if (thread->IsDetached())
         {
             STRESS_LOG1(LF_SYNC, LL_INFO1000, "T::CDT - detaching thread 0x%p\n", thread);
 
@@ -2800,7 +2832,7 @@ void Thread::CleanupDetachedThreads()
             thread = next;
         }
     }
-    
+
     s_fCleanFinalizedThread = FALSE;
 }
 
@@ -2863,10 +2895,10 @@ void Thread::OnThreadTerminate(BOOL holdingLock)
 
     // #ReportDeadOnThreadTerminate
     // Caller should have put the TS_ReportDead bit on by now.
-    // We don't want any windows after the exit event but before the thread is marked dead. 
+    // We don't want any windows after the exit event but before the thread is marked dead.
     // If a debugger attached during such a window (or even took a dump at the exit event),
-    // then it may not realize the thread is dead. 
-    // So ensure we mark the thread as dead before we send the tool notifications. 
+    // then it may not realize the thread is dead.
+    // So ensure we mark the thread as dead before we send the tool notifications.
     // The TS_ReportDead bit will cause the debugger to view this as TS_Dead.
     _ASSERTE(HasThreadState(TS_ReportDead));
 
@@ -2942,7 +2974,7 @@ void Thread::OnThreadTerminate(BOOL holdingLock)
     if (IsDead())
     {
         GCX_COOP();
-        
+
         _ASSERTE(IsAtProcessExit());
         ClearContext();
         if (m_ExposedObject != NULL)
@@ -3381,7 +3413,7 @@ DWORD Thread::DoAppropriateWaitWorker(int countHandles, HANDLE *handles, BOOL wa
     BOOL alertable = (mode & WaitMode_Alertable) != 0;
     // Waits from SynchronizationContext.WaitHelper are always just WaitMode_IgnoreSyncCtx.
     // So if we defer to a sync ctx, we will lose any extra bits.  We must therefore not
-    // defer to a sync ctx if doing any non-default wait.  
+    // defer to a sync ctx if doing any non-default wait.
     // If you're doing a default wait, but want to ignore sync ctx, specify WaitMode_IgnoreSyncCtx
     // which will make mode != WaitMode_Alertable.
     BOOL ignoreSyncCtx = (mode != WaitMode_Alertable);
@@ -3395,7 +3427,8 @@ DWORD Thread::DoAppropriateWaitWorker(int countHandles, HANDLE *handles, BOOL wa
     // since fundamental parts of the system (such as the GC) rely on non alertable
     // waits not running any managed code. Also if we are past the point in shutdown were we
     // are allowed to run managed code then we can't forward the call to the sync context.
-    if (!ignoreSyncCtx && alertable && CanRunManagedCode(LoaderLockCheck::None) 
+    if (!ignoreSyncCtx
+        && alertable
         && !HasThreadStateNC(Thread::TSNC_BlockedForShutdown))
     {
         GCX_COOP();
@@ -3630,7 +3663,7 @@ DWORD Thread::DoAppropriateWaitWorker(AppropriateWaitFunc func, void *args,
     }
 
     DWORD option;
-    if (alertable) 
+    if (alertable)
     {
         option = WAIT_ALERTABLE;
 #ifdef FEATURE_COMINTEROP_APARTMENT_SUPPORT
@@ -3865,7 +3898,7 @@ DWORD Thread::DoSyncContextWait(OBJECTREF *pSyncCtxObj, int countHandles, HANDLE
 
     // Needed by TriggerGCForMDAInternal to avoid infinite recursion
     ThreadStateNCStackHolder holder(TRUE, TSNC_InsideSyncContextWait);
-    
+
     return invokeWaitMethodHelper.Call_RetI4(args);
 }
 
@@ -4340,7 +4373,7 @@ void Thread::SetLastThrownObject(OBJECTREF throwable, BOOL isUnhandled)
     CONTRACTL_END;
 
     STRESS_LOG_COND1(LF_EH, LL_INFO100, OBJECTREFToObject(throwable) != NULL, "in Thread::SetLastThrownObject: obj = %p\n", OBJECTREFToObject(throwable));
-    
+
     // you can't have a NULL unhandled exception
     _ASSERTE(!(throwable == NULL && isUnhandled));
 
@@ -4649,7 +4682,7 @@ void Thread::SetBackground(BOOL isBack, BOOL bRequiresTSL)
 }
 
 #ifdef FEATURE_COMINTEROP
-class ApartmentSpyImpl : public IUnknownCommon<IInitializeSpy>
+class ApartmentSpyImpl : public IUnknownCommon<IInitializeSpy, IID_IInitializeSpy>
 {
 
 public:
@@ -4689,7 +4722,7 @@ public:
                         // This will release RCWs and purge the WinRT factory cache on all AppDomains. It
                         // will also synchronize with the finalizer thread which ensures that the RCWs
                         // that were already in the global RCW cleanup list will be cleaned up as well.
-                        // 
+                        //
                         ReleaseRCWsInCachesNoThrow(GetCurrentCtxCookie());
                     }
                 }
@@ -4717,7 +4750,11 @@ BOOL Thread::PrepareApartmentAndContext()
     }
     CONTRACTL_END;
 
+#ifdef FEATURE_PAL
+    m_OSThreadId = ::PAL_GetCurrentOSThreadId();
+#else
     m_OSThreadId = ::GetCurrentThreadId();
+#endif
 
 #ifdef FEATURE_COMINTEROP_APARTMENT_SUPPORT
     // Be very careful in here because we haven't set up e.g. TLS yet.
@@ -4767,8 +4804,8 @@ BOOL Thread::PrepareApartmentAndContext()
 
 #ifdef FEATURE_COMINTEROP_APARTMENT_SUPPORT
 
-// TS_InSTA (0x00004000) -> AS_InSTA (0) 
-// TS_InMTA (0x00008000) -> AS_InMTA (1) 
+// TS_InSTA (0x00004000) -> AS_InSTA (0)
+// TS_InMTA (0x00008000) -> AS_InMTA (1)
 #define TS_TO_AS(ts)                                    \
     (Thread::ApartmentState)((((DWORD)ts) >> 14) - 1)   \
 
@@ -4896,8 +4933,8 @@ Thread::ApartmentState Thread::GetFinalApartment()
     as = GetApartment();
     if (as == AS_Unknown)
     {
-        // On Win2k and above, GetApartment will only return AS_Unknown if CoInitialize 
-        // hasn't been called in the process. In that case we can simply assume MTA. However we 
+        // On Win2k and above, GetApartment will only return AS_Unknown if CoInitialize
+        // hasn't been called in the process. In that case we can simply assume MTA. However we
         // cannot cache this value in the Thread because if a CoInitialize does occur, then the
         // thread state might change.
         as = AS_InMTA;
@@ -4959,7 +4996,11 @@ Thread::ApartmentState Thread::SetApartment(ApartmentState state, BOOL fFireMDAO
             {
                 // We should never be attempting to CoUninitialize another thread than
                 // the currently running thread.
+#ifdef FEATURE_PAL
+                _ASSERTE(m_OSThreadId == ::PAL_GetCurrentOSThreadId());
+#else
                 _ASSERTE(m_OSThreadId == ::GetCurrentThreadId());
+#endif
 
                 // CoUninitialize the thread and reset the STA/MTA/CoInitialized state bits.
                 ::CoUninitialize();
@@ -5009,7 +5050,11 @@ Thread::ApartmentState Thread::SetApartment(ApartmentState state, BOOL fFireMDAO
     // Don't use the TS_Unstarted state bit to check for this, it's cleared far
     // too late in the day for us. Instead check whether we're in the correct
     // thread context.
+#ifdef FEATURE_PAL
+    if (m_OSThreadId != ::PAL_GetCurrentOSThreadId())
+#else
     if (m_OSThreadId != ::GetCurrentThreadId())
+#endif
     {
         FastInterlockOr((ULONG *) &m_State, (state == AS_InSTA) ? TS_InSTA : TS_InMTA);
         return state;
@@ -5083,7 +5128,7 @@ Thread::ApartmentState Thread::SetApartment(ApartmentState state, BOOL fFireMDAO
     if (WinRTSupported() && !IsWinRTInitialized())
     {
         GCX_PREEMP();
-        
+
         BOOL isSTA = m_State & TS_InSTA;
         _ASSERTE(isSTA || (m_State & TS_InMTA));
 
@@ -5209,8 +5254,8 @@ DEBUG_NOINLINE void ThreadStore::Leave()
 void ThreadStore::LockThreadStore()
 {
     WRAPPER_NO_CONTRACT;
-    
-    // The actual implementation is in ThreadSuspend class since it is coupled 
+
+    // The actual implementation is in ThreadSuspend class since it is coupled
     // with thread suspension logic
     ThreadSuspend::LockThreadStore(ThreadSuspend::SUSPEND_OTHER);
 }
@@ -5219,7 +5264,7 @@ void ThreadStore::UnlockThreadStore()
 {
     WRAPPER_NO_CONTRACT;
 
-    // The actual implementation is in ThreadSuspend class since it is coupled 
+    // The actual implementation is in ThreadSuspend class since it is coupled
     // with thread suspension logic
     ThreadSuspend::UnlockThreadStore(FALSE, ThreadSuspend::SUSPEND_OTHER);
 }
@@ -6487,7 +6532,7 @@ HRESULT Thread::CLRSetThreadStackGuarantee(SetThreadStackGuaranteeScope fScope)
         // <TODO> Tune this as needed </TODO>
         ULONG uGuardSize = SIZEOF_DEFAULT_STACK_GUARANTEE;
         int   EXTRA_PAGES = 0;
-#if defined(_WIN64)
+#if defined(BIT64)
         // Free Build EH Stack Stats:
         // --------------------------------
         // currently the maximum stack usage we'll face while handling a SO includes:
@@ -6515,11 +6560,11 @@ HRESULT Thread::CLRSetThreadStackGuarantee(SetThreadStackGuaranteeScope fScope)
             uGuardSize += (ThreadGuardPages * GetOsPageSize());
         }
 
-#else // _WIN64
+#else // BIT64
 #ifdef _DEBUG
         uGuardSize += (1 * GetOsPageSize());    // one extra page for debug infrastructure
 #endif // _DEBUG
-#endif // _WIN64
+#endif // BIT64
 
         LOG((LF_EH, LL_INFO10000, "STACKOVERFLOW: setting thread stack guarantee to 0x%x\n", uGuardSize));
 
@@ -6565,7 +6610,7 @@ UINT_PTR Thread::GetLastNormalStackAddress(UINT_PTR StackLimit)
     // "stack guarantee".  But to do this, it has to fault on the page before that region as the app is
     // allowed to fault at the very end of that page.  So, as a result, the last normal stack address is
     // one page sooner.
-    return StackLimit + (cbStackGuarantee 
+    return StackLimit + (cbStackGuarantee
 #ifndef FEATURE_PAL
             + GetOsPageSize()
 #endif // !FEATURE_PAL
@@ -6585,7 +6630,7 @@ static void DebugLogMBIFlags(UINT uState, UINT uProtect)
     CONTRACTL_END;
 
 #ifndef FEATURE_PAL
-    
+
 #define LOG_FLAG(flags, name)  \
     if (flags & name) \
     { \
@@ -6831,7 +6876,7 @@ BOOL Thread::DetermineIfGuardPagePresent()
     }
     CONTRACTL_END;
 
-#ifndef FEATURE_PAL   
+#ifndef FEATURE_PAL
     BOOL bStackGuarded = FALSE;
     UINT_PTR uStackBase = (UINT_PTR)GetCachedStackBase();
     UINT_PTR uStackLimit = (UINT_PTR)GetCachedStackLimit();
@@ -6845,9 +6890,9 @@ BOOL Thread::DetermineIfGuardPagePresent()
     LOG((LF_EH, LL_INFO10000, "Thread::DetermineIfGuardPagePresent: stack guard page: %s\n", bStackGuarded ? "PRESENT" : "MISSING"));
 
     return bStackGuarded;
-#else // !FEATURE_PAL   
+#else // !FEATURE_PAL
     return TRUE;
-#endif // !FEATURE_PAL   
+#endif // !FEATURE_PAL
 }
 
 /*
@@ -7258,22 +7303,6 @@ void Thread::ClearContext()
 #endif //FEATURE_COMINTEROP
 }
 
-void DECLSPEC_NORETURN Thread::RaiseCrossContextException(Exception* pExOrig, ContextTransitionFrame* pFrame)
-{
-    CONTRACTL
-    {
-        THROWS;
-        WRAPPER(GC_TRIGGERS);
-    }
-    CONTRACTL_END;
-
-    // pEx is NULL means that the exception is CLRLastThrownObjectException
-    CLRLastThrownObjectException lastThrown;
-    Exception* pException = pExOrig ? pExOrig : &lastThrown;
-    COMPlusThrow(CLRException::GetThrowableFromException(pException));
-}
-
-
 BOOL Thread::HaveExtraWorkForFinalizer()
 {
     LIMITED_METHOD_CONTRACT;
@@ -7326,7 +7355,7 @@ void Thread::DoExtraWorkForFinalizer()
     {
         Thread::CleanupDetachedThreads();
     }
-    
+
     if(ExecutionManager::IsCacheCleanupRequired() && GCHeapUtilities::GetGCHeap()->GetCondemnedGeneration()>=1)
     {
         ExecutionManager::ClearCaches();
@@ -7428,7 +7457,7 @@ static void ManagedThreadBase_DispatchMiddle(ManagedThreadCallState *pCallState)
                 m_pThread = pThread;
                 m_pEntryFrame = pThread->m_pFrame;
             }
-            
+
             ~Cleanup()
             {
                 GCX_COOP();
@@ -7457,13 +7486,9 @@ static void ManagedThreadBase_DispatchMiddle(ManagedThreadCallState *pCallState)
         else
         {
             // Setting up the unwind_and_continue_handler ensures that C++ exceptions do not leak out.
-            // An example is when Thread1 in Default AppDomain creates AppDomain2, enters it, creates
-            // another thread T2 and T2 throws OOM exception (that goes unhandled). At the transition
-            // boundary, END_DOMAIN_TRANSITION will catch it and invoke RaiseCrossContextException
-            // that will rethrow the OOM as a C++ exception. 
             //
             // Without unwind_and_continue_handler below, the exception will fly up the stack to
-            // this point, where it will be rethrown and thus leak out. 
+            // this point, where it will be rethrown and thus leak out.
             INSTALL_UNWIND_AND_CONTINUE_HANDLER;
 
             EX_RETHROW;
@@ -7478,7 +7503,7 @@ static void ManagedThreadBase_DispatchMiddle(ManagedThreadCallState *pCallState)
 typedef struct Param
 {
     ManagedThreadCallState * m_pCallState;
-    Frame                  * m_pFrame;    
+    Frame                  * m_pFrame;
     Param(ManagedThreadCallState * pCallState, Frame * pFrame): m_pCallState(pCallState), m_pFrame(pFrame) {}
 } TryParam;
 */
@@ -7564,28 +7589,28 @@ static void ManagedThreadBase_DispatchOuter(ManagedThreadCallState *pCallState)
     _ASSERTE(GetThread() != NULL);
 
     Thread *pThread = GetThread();
-#ifdef WIN64EXCEPTIONS
+#ifdef FEATURE_EH_FUNCLETS
     Frame  *pFrame = pThread->m_pFrame;
-#endif // WIN64EXCEPTIONS
+#endif // FEATURE_EH_FUNCLETS
 
-    // The sole purpose of having this frame is to tell the debugger that we have a catch handler here 
-    // which may swallow managed exceptions.  The debugger needs this in order to send a 
+    // The sole purpose of having this frame is to tell the debugger that we have a catch handler here
+    // which may swallow managed exceptions.  The debugger needs this in order to send a
     // CatchHandlerFound (CHF) notification.
     FrameWithCookie<DebuggerU2MCatchHandlerFrame> catchFrame;
 
     TryParam param(pCallState);
     param.pFrame = &catchFrame;
-    
+
     struct TryArgs
     {
         TryParam *pTryParam;
         Thread *pThread;
 
-        BOOL *pfHadException; 
+        BOOL *pfHadException;
 
-#ifdef WIN64EXCEPTIONS
+#ifdef FEATURE_EH_FUNCLETS
         Frame *pFrame;
-#endif // WIN64EXCEPTIONS
+#endif // FEATURE_EH_FUNCLETS
     }args;
 
     args.pTryParam = &param;
@@ -7594,9 +7619,9 @@ static void ManagedThreadBase_DispatchOuter(ManagedThreadCallState *pCallState)
     BOOL fHadException = TRUE;
     args.pfHadException = &fHadException;
 
-#ifdef WIN64EXCEPTIONS
+#ifdef FEATURE_EH_FUNCLETS
     args.pFrame = pFrame;
-#endif // WIN64EXCEPTIONS
+#endif // FEATURE_EH_FUNCLETS
 
     PAL_TRY(TryArgs *, pArgs, &args)
     {
@@ -7611,12 +7636,12 @@ static void ManagedThreadBase_DispatchOuter(ManagedThreadCallState *pCallState)
             //
             // If eCLRDeterminedPolicy, we only swallow for TA, RTA, and ADU exception.
             // For eHostDeterminedPolicy, we will swallow all the managed exception.
-    #ifdef WIN64EXCEPTIONS
+    #ifdef FEATURE_EH_FUNCLETS
             // this must be done after the second pass has run, it does not
             // reference anything on the stack, so it is safe to run in an
             // SEH __except clause as well as a C++ catch clause.
             ExceptionTracker::PopTrackers(pArgs->pFrame);
-    #endif // WIN64EXCEPTIONS
+    #endif // FEATURE_EH_FUNCLETS
 
             // Fortunately, ThreadAbortExceptions are always
             if (pArgs->pThread->IsAbortRequested())
@@ -7709,7 +7734,7 @@ void ManagedThreadBase::FinalizerBase(ADCallBackFcnType pTarget)
 //
 //  Synopsis:   Get the address of the field relative to the current thread.
 //              If an address has not been assigned yet then create one.
-// 
+//
 //+----------------------------------------------------------------------------
 
 LPVOID Thread::GetStaticFieldAddress(FieldDesc *pFD)
@@ -7751,7 +7776,7 @@ LPVOID Thread::GetStaticFieldAddress(FieldDesc *pFD)
     LPVOID result = (LPVOID)((PTR_BYTE)base + (DWORD)offset);
 
     // For value classes, the handle points at an OBJECTREF
-    // which holds the boxed value class, so derefernce and unbox.  
+    // which holds the boxed value class, so derefernce and unbox.
     if (pFD->GetFieldType() == ELEMENT_TYPE_VALUETYPE)
     {
         OBJECTREF obj = ObjectToOBJECTREF(*(Object**) result);
@@ -7770,7 +7795,7 @@ LPVOID Thread::GetStaticFieldAddress(FieldDesc *pFD)
 //  Synopsis:   Get the address of the field relative to the thread.
 //              If an address has not been assigned, return NULL.
 //              No creating is allowed.
-// 
+//
 //+----------------------------------------------------------------------------
 
 TADDR Thread::GetStaticFieldAddrNoCreate(FieldDesc *pFD)
@@ -7799,7 +7824,7 @@ TADDR Thread::GetStaticFieldAddrNoCreate(FieldDesc *pFD)
     {
         base = pMT->GetNonGCThreadStaticsBasePointer(dac_cast<PTR_Thread>(this));
     }
-    
+
     if (base == NULL)
         return NULL;
 
@@ -7809,7 +7834,7 @@ TADDR Thread::GetStaticFieldAddrNoCreate(FieldDesc *pFD)
     TADDR result = dac_cast<TADDR>(base) + (DWORD)offset;
 
     // For value classes, the handle points at an OBJECTREF
-    // which holds the boxed value class, so derefernce and unbox.  
+    // which holds the boxed value class, so derefernce and unbox.
     if (pFD->IsByValue())
     {
         _ASSERTE(result != NULL);
@@ -7880,7 +7905,7 @@ Frame * Thread::NotifyFrameChainOfExceptionUnwind(Frame* pStartFrame, LPVOID pvL
 //  Synopsis:   Delete the static data for each appdomain that this thread
 //              visited.
 //
-// 
+//
 //+----------------------------------------------------------------------------
 
 void Thread::DeleteThreadStaticData()
@@ -7918,8 +7943,6 @@ OBJECTREF Thread::GetCulture(BOOL bUICulture)
     }
     CONTRACTL_END;
 
-    FieldDesc *         pFD;
-
     // This is the case when we're building mscorlib and haven't yet created
     // the system assembly.
     if (SystemDomain::System()->SystemAssembly()==NULL || g_fForbidEnterEE) {
@@ -7927,22 +7950,9 @@ OBJECTREF Thread::GetCulture(BOOL bUICulture)
     }
 
     OBJECTREF pCurrentCulture;
-    if (bUICulture) {
-        // Call the Getter for the CurrentUICulture.  This will cause it to populate the field.
-        MethodDescCallSite propGet(METHOD__CULTURE_INFO__GET_CURRENT_UI_CULTURE);
-        ARG_SLOT retVal = propGet.Call_RetArgSlot(NULL);
-        pCurrentCulture = ArgSlotToObj(retVal);
-    } else {
-        //This is  faster than calling the property, because this is what the call does anyway.
-        pFD = MscorlibBinder::GetField(FIELD__CULTURE_INFO__CURRENT_CULTURE);
-        _ASSERTE(pFD);
-
-        pFD->CheckRunClassInitThrowing();
-
-        pCurrentCulture = pFD->GetStaticOBJECTREF();
-        _ASSERTE(pCurrentCulture!=NULL);
-    }
-
+    MethodDescCallSite propGet(bUICulture ? METHOD__CULTURE_INFO__GET_CURRENT_UI_CULTURE : METHOD__CULTURE_INFO__GET_CURRENT_CULTURE);
+    ARG_SLOT retVal = propGet.Call_RetArgSlot(NULL);
+    pCurrentCulture = ArgSlotToObj(retVal);
     return pCurrentCulture;
 }
 
@@ -7966,25 +7976,6 @@ void Thread::SetCulture(OBJECTREF *CultureObj, BOOL bUICulture)
 
     // Make the actual call.
     propSet.Call_RetArgSlot(pNewArgs);
-}
-
-void Thread::SetHasPromotedBytes ()
-{
-    CONTRACTL {
-        NOTHROW;
-        GC_NOTRIGGER;
-    }
-    CONTRACTL_END;
-
-    m_fPromoted = TRUE;
-
-    _ASSERTE(GCHeapUtilities::IsGCInProgress()  && IsGCThread ());
-
-    if (!m_fPreemptiveGCDisabled)
-    {
-        if (FRAME_TOP == GetFrame())
-            m_fPromoted = FALSE;
-    }
 }
 
 BOOL ThreadStore::HoldingThreadStore(Thread *pThread)
@@ -8101,12 +8092,12 @@ INT32 Thread::ResetManagedThreadObjectInCoopMode(INT32 nPriority)
 
 BOOL Thread::IsRealThreadPoolResetNeeded()
 {
-    CONTRACTL 
+    CONTRACTL
     {
         NOTHROW;
         GC_NOTRIGGER;
         MODE_COOPERATIVE;
-    } 
+    }
     CONTRACTL_END;
 
     if(!IsBackground())
@@ -8119,7 +8110,7 @@ BOOL Thread::IsRealThreadPoolResetNeeded()
         INT32 nPriority = pObject->GetPriority();
 
         if(nPriority != ThreadNative::PRIORITY_NORMAL)
-            return TRUE; 
+            return TRUE;
     }
 
     return FALSE;
@@ -8129,7 +8120,7 @@ void Thread::InternalReset(BOOL fNotFinalizerThread, BOOL fThreadObjectResetNeed
 {
     CONTRACTL {
         NOTHROW;
-        if(!fNotFinalizerThread || fThreadObjectResetNeeded) {GC_TRIGGERS;} else {GC_NOTRIGGER;}        
+        if(!fNotFinalizerThread || fThreadObjectResetNeeded) {GC_TRIGGERS;} else {GC_NOTRIGGER;}
     }
     CONTRACTL_END;
 
@@ -8153,7 +8144,7 @@ void Thread::InternalReset(BOOL fNotFinalizerThread, BOOL fThreadObjectResetNeed
         UnmarkThreadForAbort(TAR_ALL);
     }
 
-    if (fResetAbort && IsAborted()) 
+    if (fResetAbort && IsAborted())
         ClearAborted();
 
     if (IsThreadPoolThread() && fThreadObjectResetNeeded)
@@ -8173,151 +8164,6 @@ void Thread::InternalReset(BOOL fNotFinalizerThread, BOOL fThreadObjectResetNeed
         }
     }
 }
-
-HRESULT Thread::Abort ()
-{
-    CONTRACTL
-    {
-        NOTHROW;
-        if (GetThread()) {GC_TRIGGERS;} else {DISABLED(GC_NOTRIGGER);}
-    }
-    CONTRACTL_END;
-
-    EX_TRY
-    {
-        UserAbort(TAR_Thread, EEPolicy::TA_Safe, INFINITE, Thread::UAC_Host);
-    }
-    EX_CATCH
-    {
-    }
-    EX_END_CATCH(SwallowAllExceptions);
-
-    return S_OK;
-}
-
-HRESULT Thread::RudeAbort()
-{
-    CONTRACTL
-    {
-        NOTHROW;
-        if (GetThread()) {GC_TRIGGERS;} else {DISABLED(GC_NOTRIGGER);}
-    }
-    CONTRACTL_END;
-
-    EX_TRY
-    {
-        UserAbort(TAR_Thread, EEPolicy::TA_Rude, INFINITE, Thread::UAC_Host);
-    }
-    EX_CATCH
-    {
-    }
-    EX_END_CATCH(SwallowAllExceptions);
-
-    return S_OK;
-}
-
-HRESULT Thread::NeedsPriorityScheduling(BOOL *pbNeedsPriorityScheduling)
-{
-    CONTRACTL {
-        NOTHROW;
-        GC_NOTRIGGER;
-    }
-    CONTRACTL_END;
-
-    *pbNeedsPriorityScheduling = (m_fPreemptiveGCDisabled ||
-                                  (g_fEEStarted && this == FinalizerThread::GetFinalizerThread()));
-    return S_OK;
-}
-
-
-HRESULT Thread::LocksHeld(SIZE_T *pLockCount)
-{
-    LIMITED_METHOD_CONTRACT;
-
-    *pLockCount = m_dwLockCount;
-    return S_OK;
-}
-
-HRESULT Thread::BeginPreventAsyncAbort()
-{
-    WRAPPER_NO_CONTRACT;
-
-#ifdef _DEBUG
-    int count =
-#endif
-        FastInterlockIncrement((LONG*)&m_PreventAbort);
-
-#ifdef _DEBUG
-    ASSERT(count > 0);
-
-    FastInterlockIncrement((LONG*)&m_dwDisableAbortCheckCount);
-#endif
-
-    return S_OK;
-}
-
-HRESULT Thread::EndPreventAsyncAbort()
-{
-    WRAPPER_NO_CONTRACT;
-
-#ifdef _DEBUG
-    int count =
-#endif
-        FastInterlockDecrement((LONG*)&m_PreventAbort);
-
-#ifdef _DEBUG
-    ASSERT(count >= 0);
-
-    FastInterlockDecrement((LONG*)&m_dwDisableAbortCheckCount);
-#endif
-
-    return S_OK;
-}
-
-
-ULONG Thread::AddRef()
-{
-    WRAPPER_NO_CONTRACT;
-
-    _ASSERTE(m_ExternalRefCount > 0);
-
-    _ASSERTE (m_UnmanagedRefCount != (DWORD) -1);
-    ULONG ref = FastInterlockIncrement((LONG*)&m_UnmanagedRefCount);
-
-    return ref;
-}
-
-ULONG Thread::Release()
-{
-    WRAPPER_NO_CONTRACT;
-    SUPPORTS_DAC_HOST_ONLY;
-
-    _ASSERTE (m_ExternalRefCount > 0);
-    _ASSERTE (m_UnmanagedRefCount > 0);
-    ULONG ref = FastInterlockDecrement((LONG*)&m_UnmanagedRefCount);
-    return ref;
-}
-
-HRESULT Thread::QueryInterface(REFIID riid, void **ppUnk)
-{
-    LIMITED_METHOD_CONTRACT;
-
-        return E_NOINTERFACE;
-
-}
-
-void Thread::SetupThreadForHost()
-{
-    CONTRACTL
-    {
-        THROWS;
-        GC_TRIGGERS;
-    }
-    CONTRACTL_END;
-
-    _ASSERTE (GetThread() == this);
-}
-
 
 ETaskType GetCurrentTaskType()
 {
@@ -8389,7 +8235,7 @@ DeadlockAwareLock::~DeadlockAwareLock()
         CAN_TAKE_LOCK;
     }
     CONTRACTL_END;
-    
+
     // Wait for another thread to leave its loop in DeadlockAwareLock::TryBeginEnterLock
     CrstHolder lock(&g_DeadlockAwareCrst);
 }
@@ -8591,7 +8437,7 @@ void DeadlockAwareLock::LeaveLock()
 // There is a scenario where we run managed code on such a thread, which is when the
 // DLL_THREAD_ATTACH notification of an (IJW?) module calls into managed code.  This
 // is incredibly dangerous.  If a GC is provoked, the system may have trouble performing
-// the GC because its threads aren't available yet.  
+// the GC because its threads aren't available yet.
 static DWORD SpecialEEThreads[10];
 static LONG  cnt_SpecialEEThreads = 0;
 
@@ -8655,7 +8501,7 @@ Thread::EnumMemoryRegions(CLRDataEnumMemoryFlags flags)
 {
     WRAPPER_NO_CONTRACT;
 
-    DAC_ENUM_VTHIS();
+    DAC_ENUM_DTHIS();
     if (flags != CLRDATA_ENUM_MEM_MINI && flags != CLRDATA_ENUM_MEM_TRIAGE)
     {
         if (m_pDomain.IsValid())
@@ -8746,7 +8592,7 @@ Thread::EnumMemoryRegionsWorker(CLRDataEnumMemoryFlags flags)
 
         // Before we continue, we should check to be sure we have a valid
         // stack pointer.  This is to prevent stacks that are not walked
-        // properly due to 
+        // properly due to
         //   a) stack corruption bugs
         //   b) bad stack walks
         // from continuing on indefinitely.
@@ -8789,7 +8635,7 @@ Thread::EnumMemoryRegionsWorker(CLRDataEnumMemoryFlags flags)
             break;
         }
 
-        // Enumerate the code around the call site to help debugger stack walking heuristics 
+        // Enumerate the code around the call site to help debugger stack walking heuristics
         PCODE callEnd = GetControlPC(&regDisp);
         DacEnumCodeForStackwalk(callEnd);
 
@@ -8821,18 +8667,18 @@ Thread::EnumMemoryRegionsWorker(CLRDataEnumMemoryFlags flags)
         if (pMD != NULL)
         {
             pMD->EnumMemoryRegions(flags);
-#if defined(WIN64EXCEPTIONS) && defined(FEATURE_PREJIT)
+#if defined(FEATURE_EH_FUNCLETS) && defined(FEATURE_PREJIT)
             // Enumerate unwind info
             // Note that we don't do this based on the MethodDesc because in theory there isn't a 1:1 correspondence
             // between MethodDesc and code (and so unwind info, and even debug info).  Eg., EnC creates new versions
             // of the code, but the MethodDesc always points at the latest version (which isn't necessarily
             // the one on the stack).  In practice this is unlikely to be a problem since wanting a minidump
-            // and making EnC edits are usually mutually exclusive.  
+            // and making EnC edits are usually mutually exclusive.
             if (frameIter.m_crawl.IsFrameless())
             {
                 frameIter.m_crawl.GetJitManager()->EnumMemoryRegionsForMethodUnwindInfo(flags, frameIter.m_crawl.GetCodeInfo());
             }
-#endif // defined(WIN64EXCEPTIONS) && defined(FEATURE_PREJIT)
+#endif // defined(FEATURE_EH_FUNCLETS) && defined(FEATURE_PREJIT)
         }
 
         previousSP = currentSP;

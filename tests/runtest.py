@@ -121,13 +121,11 @@ parser.add_argument("--gcsimulator", dest="gcsimulator", action="store_true", de
 parser.add_argument("--jitdisasm", dest="jitdisasm", action="store_true", default=False)
 parser.add_argument("--ilasmroundtrip", dest="ilasmroundtrip", action="store_true", default=False)
 parser.add_argument("--run_crossgen_tests", dest="run_crossgen_tests", action="store_true", default=False)
+parser.add_argument("--run_crossgen2_tests", dest="run_crossgen2_tests", action="store_true", default=False)
 parser.add_argument("--large_version_bubble", dest="large_version_bubble", action="store_true", default=False)
 parser.add_argument("--precompile_core_root", dest="precompile_core_root", action="store_true", default=False)
 parser.add_argument("--sequential", dest="sequential", action="store_true", default=False)
 
-parser.add_argument("--build_xunit_test_wrappers", dest="build_xunit_test_wrappers", action="store_true", default=False)
-parser.add_argument("--generate_layout", dest="generate_layout", action="store_true", default=False)
-parser.add_argument("--generate_layout_only", dest="generate_layout_only", action="store_true", default=False)
 parser.add_argument("--analyze_results_only", dest="analyze_results_only", action="store_true", default=False)
 parser.add_argument("--verbose", dest="verbose", action="store_true", default=False)
 parser.add_argument("--limited_core_dumps", dest="limited_core_dumps", action="store_true", default=False)
@@ -642,7 +640,7 @@ def call_msbuild(coreclr_repo_location,
 
     command =   [dotnetcli_location,
                  "msbuild",
-                 os.path.join(coreclr_repo_location, "tests", "runtest.proj"),
+                 os.path.join(coreclr_repo_location, "tests", "src", "runtest.proj"),
                  "/p:Runtests=true",
                  "/clp:showcommandline"]
 
@@ -689,87 +687,6 @@ def call_msbuild(coreclr_repo_location,
         inspect_and_delete_coredump_files(host_os, arch, test_location)
 
     return proc.returncode
-
-def running_in_ci():
-    """ Check if running in ci
-
-    Returns:
-        bool
-    """
-
-    is_ci = False
-
-    try:
-        jenkins_build_number = os.environ["BUILD_NUMBER"]
-
-        is_ci = True
-    except:
-        pass
-
-    return is_ci
-
-def copy_native_test_bin_to_core_root(host_os, path, core_root):
-    """ Recursively copy all files to core_root
-    
-    Args:
-        host_os(str)    : os
-        path(str)       : native test bin location
-        core_root(str)  : core_root location
-    """
-    assert os.path.isdir(path) or os.path.isfile(path)
-    assert os.path.isdir(core_root)
-
-    extension = "so" if host_os == "Linux" else "dylib"
-
-    if os.path.isdir(path):
-        for item in os.listdir(path):
-            copy_native_test_bin_to_core_root(host_os, os.path.join(path, item), core_root)
-    elif path.endswith(extension):
-        print("cp -p %s %s" % (path, core_root))
-        shutil.copy2(path, core_root)
-
-def correct_line_endings(host_os, test_location, root=True):
-    """ Recursively correct all .sh/.cmd files to the correct line ending
-
-    Args:
-        host_os(str)        : os
-        test_location(str)  : location of the tests
-    """
-    if root:
-        print("Correcting line endings...")
-
-    assert os.path.isdir(test_location) or os.path.isfile(test_location)
-
-    extension = "cmd" if host_os == "Windows_NT" else ".sh"
-    incorrect_line_ending = '\n' if host_os == "Windows_NT" else '\r\n'
-    correct_line_ending = os.linesep
-
-    if os.path.isdir(test_location):
-        for item in os.listdir(test_location):
-            correct_line_endings(host_os, os.path.join(test_location, item), False)
-    elif test_location.endswith(extension):
-        if sys.version_info < (3,0):
-
-            content = None
-            with open(test_location) as file_handle:
-                content = file_handle.read()
-     
-            assert content != None
-            subbed_content = content.replace(incorrect_line_ending, correct_line_ending)
-
-            if content != subbed_content:
-                with open(test_location, 'w') as file_handle:
-                    file_handle.write(subbed_content)
-
-        else:
-            # Python3 will correct line endings automatically.
- 
-            content = None
-            with open(test_location) as file_handle:
-                content = file_handle.read()
-     
-            with open(test_location, 'w') as file_handle:
-                file_handle.write(content)
 
 def setup_coredump_generation(host_os):
     """ Configures the environment so that the current process and any child
@@ -991,6 +908,7 @@ def run_tests(host_os,
               is_jitdasm=False,
               is_ilasm=False,
               is_illink=False,
+              run_crossgen2_tests=False,
               run_crossgen_tests=False,
               large_version_bubble=False,
               run_sequential=False,
@@ -1012,6 +930,7 @@ def run_tests(host_os,
         is_jitdasm(bool)            :
         is_ilasm(bool)              :
         is_illink(bool)             :
+        run_crossgen2_tests(bool)   :
         run_crossgen_tests(bool)    :
         run_sequential(bool)        :
         limited_core_dumps(bool)    :
@@ -1052,6 +971,11 @@ def run_tests(host_os,
         print("Setting RunCrossGen=true")
         os.environ["RunCrossGen"] = "true"
 
+    if run_crossgen2_tests:
+        print("Running tests R2R (Crossgen2)")
+        print("Setting RunCrossGen2=true")
+        os.environ["RunCrossGen2"] = "true"
+
     if large_version_bubble:
         print("Large Version Bubble enabled")
         os.environ["LargeVersionBubble"] = "true"
@@ -1066,7 +990,7 @@ def run_tests(host_os,
     if run_in_context:
         print("Running test in an unloadable AssemblyLoadContext")
         os.environ["CLRCustomTestLauncher"] = os.path.join(coreclr_repo_location, "tests", "scripts", "runincontext%s" % (".cmd" if host_os == "Windows_NT" else ".sh"))
-        os.environ["__RunInUnloadableContext"] = "1";
+        os.environ["RunInUnloadableContext"] = "1";
         per_test_timeout = 20*60*1000
 
     # Set __TestTimeout environment variable, which is the per-test timeout in milliseconds.
@@ -1151,13 +1075,13 @@ def setup_args(args):
         location using the build type and the arch.
     """
 
-    require_built_test_dir = not args.generate_layout_only and True
-    require_built_core_root = not args.generate_layout_only and True
+    require_built_test_dir = True
+    require_built_core_root = True
 
     coreclr_setup_args = CoreclrArguments(args, 
                                           require_built_test_dir=require_built_test_dir, 
                                           require_built_core_root=require_built_core_root, 
-                                          require_built_product_dir=args.generate_layout_only)
+                                          require_built_product_dir=False)
 
     normal_location = os.path.join(coreclr_setup_args.bin_location, "tests", "%s.%s.%s" % (coreclr_setup_args.host_os, coreclr_setup_args.arch, coreclr_setup_args.build_type))
 
@@ -1176,60 +1100,8 @@ def setup_args(args):
                                       "Unsupported configuration: %s.\nSupported configurations: %s" % (corrected_build_type, ", ".join(coreclr_setup_args.valid_build_types)))
 
     if args.test_location is not None and coreclr_setup_args.test_location != normal_location:
-        test_location = args.test_location
-
-        # Remove optional end os.path.sep
-        if test_location[-1] == os.path.sep:
-            test_location = test_location[:-1]
-
-        if normal_location.lower() != test_location.lower() and os.path.isdir(normal_location):
-            # Remove the existing directory if there is one.
-            shutil.rmtree(normal_location)
-
-            print("Non-standard test location being used.")
-            print("Overwrite the standard location with these tests.")
-            print("TODO: Change runtest.proj to allow running from non-standard test location.")
-            print("")
-
-            print("cp -r %s %s" % (coreclr_setup_args.test_location, normal_location))
-            shutil.copytree(coreclr_setup_args.test_location, normal_location)
-
-            test_location = normal_location
-
-            # unset core_root so it can be put in the default location
-            core_root = None
-
-            # Force the core_root to be setup again.
-            args.generate_layout = True
-
-            coreclr_setup_args.verify(test_location,
-                                      "test_location",
-                                      lambda arg: True,
-                                      "Error setting test location.")
-
-    coreclr_setup_args.verify(args,
-                              "build_xunit_test_wrappers",
-                              lambda arg: True,
-                              "Error setting build_xunit_test_wrappers")
-
-    coreclr_setup_args.verify(args,
-                              "generate_layout_only",
-                              lambda arg: True,
-                              "Error setting generate_layout_only")
-
-    if coreclr_setup_args.generate_layout_only:
-        # Force generate_layout
-        coreclr_setup_args.verify(args,
-                                "generate_layout",
-                                lambda arg: True,
-                                "Error setting generate_layout",
-                                modify_arg=lambda arg: True)
-    
-    else:
-        coreclr_setup_args.verify(args,
-                                "generate_layout",
-                                lambda arg: True,
-                                "Error setting generate_layout")
+        print ("Error, msbuild currently expects tests in bin/tests/...")
+        raise Exception("Error, msbuild currently expects tests in bin/tests/...")
 
     coreclr_setup_args.verify(args,
                               "test_env",
@@ -1292,6 +1164,11 @@ def setup_args(args):
                               "Error setting run_crossgen_tests")
 
     coreclr_setup_args.verify(args,
+                              "run_crossgen2_tests",
+                              lambda unused: True,
+                              "Error setting run_crossgen2_tests")
+
+    coreclr_setup_args.verify(args,
                               "precompile_core_root",
                               lambda arg: True,
                               "Error setting precompile_core_root")
@@ -1300,11 +1177,6 @@ def setup_args(args):
                               "sequential",
                               lambda arg: True,
                               "Error setting sequential")
-    
-    coreclr_setup_args.verify(args,
-                              "build_xunit_test_wrappers",
-                              lambda arg: True,
-                              "Error setting build_xunit_test_wrappers")
     
     coreclr_setup_args.verify(args,
                               "verbose",
@@ -1512,270 +1384,6 @@ def precompile_core_root(test_location,
 
     print("")
 
-def setup_core_root(host_os, 
-                    arch, 
-                    build_type, 
-                    coreclr_repo_location, 
-                    test_native_bin_location,
-                    product_location,
-                    test_location,
-                    core_root,
-                    is_corefx=False,
-                    generate_layout=True):
-    """ Setup the core root
-
-    Args:
-        host_os(str)                : os
-        arch(str)                   : architecture
-        build_type(str)             : build configuration
-        coreclr_repo_location(str)  : coreclr repo location
-        product_location(str)       : Product location
-        core_root(str)              : Location for core_root
-        is_corefx                   : Building corefx core_root
-
-    Optional Args:
-        is_corefx(Bool)             : Pass if planning on running corex
-                                    : tests
-
-    """
-    global g_verbose
-
-    assert os.path.isdir(product_location)
-
-    # Create core_root if it does not exist
-    if os.path.isdir(core_root):
-        shutil.rmtree(core_root)
-        
-    os.makedirs(core_root)
-
-    # Setup the dotnetcli location
-    dotnetcli_location = os.path.join(coreclr_repo_location, "dotnet%s" % (".cmd" if host_os == "Windows_NT" else ".sh"))
-
-    # Set global env variables.
-    os.environ["__BuildLogRootName"] = "Restore_Product"
-
-    if host_os != "Windows_NT":
-        os.environ["__DistroRid"] = "%s-%s" % ("osx" if sys.platform == "darwin" else "linux", arch)
-
-    command = [dotnetcli_location, "msbuild", "/nologo", "/verbosity:minimal", "/clp:Summary",
-               "\"/l:BinClashLogger,Tools/Microsoft.DotNet.Build.Tasks.dll;LogFile=binclash.log\""]
-
-    if host_os == "Windows_NT":
-        command += ["/nodeReuse:false"]
-
-    command += ["/p:RestoreDefaultOptimizationDataPackage=false",
-                "/p:PortableBuild=true",
-                "/p:UsePartialNGENOptimization=false",
-                "/maxcpucount",
-                os.path.join(coreclr_repo_location, "tests", "build.proj")]
-
-    logs_dir = os.path.join(coreclr_repo_location, "bin", "Logs")
-    if not os.path.isdir(logs_dir):
-        os.makedirs(logs_dir)
-
-    log_path = os.path.join(logs_dir, "Restore_Product%s_%s_%s" % (host_os, arch, build_type))
-    build_log = log_path + ".log"
-    wrn_log = log_path + ".wrn"
-    err_log = log_path + ".err"
-
-    command += ["/fileloggerparameters:\"Verbosity=normal;LogFile=%s\"" % build_log,
-                "/fileloggerparameters1:\"WarningsOnly;LogFile=%s\"" % wrn_log,
-                "/fileloggerparameters2:\"ErrorsOnly;LogFile=%s\"" % err_log]
-
-    if g_verbose:
-        command += ["/v:detailed"]
-
-    command += ["/t:BatchRestorePackages",
-                "/p:__BuildType=%s" % build_type,
-                "/p:__BuildArch=%s" % arch,
-                "/p:__BuildOS=%s" % host_os]
-
-    print("Restoring packages...")
-    print(" ".join(command))
-
-    sys.stdout.flush() # flush output before creating sub-process
-    if not g_verbose:
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    else:
-        proc = subprocess.Popen(command)
-
-    try:
-        proc.communicate()
-    except KeyboardInterrupt:
-        proc.kill()
-        sys.exit(1)
-
-    if proc.returncode != 0:
-        print("Error: package restore failed.")
-        return False
-
-    os.environ["__BuildLogRootName"] = ""
-
-    # Copy restored packages to core_root
-    # Set global env variables.
-    os.environ["__BuildLogRootName"] = "Tests_Overlay_Managed"
-
-    if host_os != "Windows_NT":
-        os.environ["__DistroRid"] = "%s-%s" % ("osx" if sys.platform == "darwin" else "linux", arch)
-        os.environ["__RuntimeId"] = os.environ["__DistroRid"]
-
-    os.environ["Core_Root"] = core_root
-    os.environ["xUnitTestBinBase"] = os.path.dirname(os.path.dirname(core_root))
-
-    command = [dotnetcli_location, "msbuild", "/nologo", "/verbosity:minimal", "/clp:Summary",
-               "\"/l:BinClashLogger,Tools/Microsoft.DotNet.Build.Tasks.dll;LogFile=binclash.log\""]
-
-    if host_os == "Windows_NT":
-        command += ["/nodeReuse:false"]
-
-    command += ["/p:RestoreDefaultOptimizationDataPackage=false",
-                "/p:PortableBuild=true",
-                "/p:UsePartialNGENOptimization=false",
-                "/maxcpucount",
-                os.path.join(coreclr_repo_location, "tests", "runtest.proj")]
-
-    logs_dir = os.path.join(coreclr_repo_location, "bin", "Logs")
-    if not os.path.isdir(logs_dir):
-        os.makedirs(logs_dir)
-
-    log_path = os.path.join(logs_dir, "Tests_Overlay_Managed%s_%s_%s" % (host_os, arch, build_type))
-    build_log = log_path + ".log"
-    wrn_log = log_path + ".wrn"
-    err_log = log_path + ".err"
-
-    command += ["/fileloggerparameters:\"Verbosity=normal;LogFile=%s\"" % build_log,
-                "/fileloggerparameters1:\"WarningsOnly;LogFile=%s\"" % wrn_log,
-                "/fileloggerparameters2:\"ErrorsOnly;LogFile=%s\"" % err_log]
-
-    if g_verbose:
-        command += ["/v:detailed"]
-
-    command += ["/t:CreateTestOverlay",
-                "/p:__BuildType=%s" % build_type,
-                "/p:__BuildArch=%s" % arch,
-                "/p:__BuildOS=%s" % host_os]
-
-    print("")
-    print("Creating Core_Root...")
-    print(" ".join(command))
-
-    sys.stdout.flush() # flush output before creating sub-process
-    if not g_verbose:
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    else:
-        proc = subprocess.Popen(command)
-
-    try:
-        proc.communicate()
-    except KeyboardInterrupt:
-        proc.kill()
-        sys.exit(1)
-
-    if proc.returncode != 0:
-        print("Error: creating Core_Root failed.")
-        return False
-
-    os.environ["__BuildLogRootName"] = ""
-    os.environ["xUnitTestBinBase"] = ""
-    os.environ["__RuntimeId"] = ""
-
-    def copy_tree(src, dest):
-        """ Simple copy from src to dest
-        """
-        assert os.path.isdir(src)
-        assert os.path.isdir(dest)
-
-        for item in os.listdir(src):
-            if ".nuget" in item:
-                pass
-            item = os.path.join(src, item)
-
-            if os.path.isfile(item):
-                shutil.copy2(item, dest)
-
-                if host_os != "Windows_NT":
-                    # Set executable bit
-                    os.chmod(os.path.join(dest, item), 0o774)
-            else:
-                new_dir = os.path.join(dest, os.path.basename(item))
-                if os.path.isdir(new_dir):
-                    shutil.rmtree(new_dir)
-                
-                shutil.copytree(item, new_dir)
-
-    # Copy the product dir to the core_root directory
-    print("")
-    print("Copying Product Bin to Core_Root:")
-    print("cp -r %s%s* %s" % (product_location, os.path.sep, core_root))
-    copy_tree(product_location, core_root)
-    print("---------------------------------------------------------------------")
-    print("")
-
-    if is_corefx:
-        corefx_utility_setup = os.path.join(coreclr_repo_location,
-                                            "src",
-                                            "Common",
-                                            "CoreFX",
-                                            "TestFileSetup",
-                                            "CoreFX.TestUtils.TestFileSetup.csproj")
-
-        os.environ["__BuildLogRootName"] = "Tests_GenerateTestHost"
-        msbuild_command = [dotnetcli_location,
-                           "msbuild",
-                           os.path.join(coreclr_repo_location, "tests", "runtest.proj"),
-                           "/p:GenerateRuntimeLayout=true"]
-
-        sys.stdout.flush() # flush output before creating sub-process
-        proc = subprocess.Popen(msbuild_command)
-        proc.communicate()
-
-        if proc.returncode != 0:
-            print("Error: generating test host failed.")
-            return False
-
-        os.environ["__BuildLogRootName"] = ""
-
-        msbuild_command = [dotnetcli_location,
-                           "msbuild",
-                           "/t:Restore",
-                           corefx_utility_setup]
-
-        sys.stdout.flush() # flush output before creating sub-process
-        proc = subprocess.Popen(msbuild_command)
-        proc.communicate()
-
-        if proc.returncode != 0:
-            print("Error: msbuild failed.")
-            return False
-
-        corefx_logpath = os.path.join(coreclr_repo_location, 
-                                      "bin", 
-                                      "tests", 
-                                      "%s.%s.%s" % (host_os, arch, build_type), 
-                                      "CoreFX",
-                                      "CoreFXTestUtilities")
-
-        msbuild_command = [dotnetcli_location,
-                           "msbuild",
-                           "/p:Configuration=%s" % build_type,
-                           "/p:OSGroup=%s" % host_os,
-                           "/p:Platform=%s" % arch,
-                           "/p:OutputPath=%s" % corefx_logpath,
-                           corefx_utility_setup]
-
-        sys.stdout.flush() # flush output before creating sub-process
-        proc = subprocess.Popen(msbuild_command)
-        proc.communicate()
-
-        if proc.returncode != 0:
-            print("Error: msbuild failed.")
-            return False
-
-    print("Core_Root setup.")
-    print("")
-
-    return True
-
 if sys.version_info.major < 3:
     def to_unicode(s):
         return unicode(s, "utf-8")
@@ -1802,114 +1410,6 @@ def delete_existing_wrappers(test_location):
 
         print("rm %s" % test_location)
         os.remove(test_location)
-
-def build_test_wrappers(host_os, 
-                        arch, 
-                        build_type, 
-                        coreclr_repo_location,
-                        test_location,
-                        altjit_arch=None):
-    """ Build the coreclr test wrappers
-
-    Args:
-        host_os(str)                : os
-        arch(str)                   : architecture
-        build_type(str)             : build configuration
-        coreclr_repo_location(str)  : coreclr repo location
-        test_location(str)          : location of the test
-
-    Notes:
-        Build the xUnit test wrappers. Note that this will have been done as a
-        part of build-test.cmd/sh. It is possible that the host has a different
-        set of dependencies from the target or the exclude list has changed
-        after building.
-
-    """
-    global g_verbose
-
-    delete_existing_wrappers(to_unicode(test_location))
-
-    # Setup the dotnetcli location
-    dotnetcli_location = os.path.join(coreclr_repo_location, "dotnet%s" % (".cmd" if host_os == "Windows_NT" else ".sh"))
-
-    # Set global env variables.
-    os.environ["__BuildLogRootName"] = "Tests_XunitWrapper"
-    os.environ["__Exclude"] = os.path.join(coreclr_repo_location, "tests", "issues.targets")
-
-    command = [dotnetcli_location,
-               "msbuild",
-               os.path.join(coreclr_repo_location, "tests", "runtest.proj"),
-               "/p:RestoreAdditionalProjectSources=https://dotnet.myget.org/F/dotnet-core/",
-               "/p:BuildWrappers=true",
-               "/p:TargetsWindows=%s" % ("true" if host_os == "Windows_NT" else "false")]
-
-    logs_dir = os.path.join(coreclr_repo_location, "bin", "Logs")
-    if not os.path.isdir(logs_dir):
-        os.makedirs(logs_dir)
-
-    log_path = os.path.join(logs_dir, "Tests_XunitWrapper%s_%s_%s" % (host_os, arch, build_type))
-    build_log = log_path + ".log"
-    wrn_log = log_path + ".wrn"
-    err_log = log_path + ".err"
-
-    command += ["/fileloggerparameters:\"Verbosity=normal;LogFile=%s\"" % build_log,
-                "/fileloggerparameters1:\"WarningsOnly;LogFile=%s\"" % wrn_log,
-                "/fileloggerparameters2:\"ErrorsOnly;LogFile=%s\"" % err_log,
-                "/consoleloggerparameters:Summary"]
-
-    command += ["/p:__BuildOS=%s" % host_os,
-                "/p:__BuildArch=%s" % arch,
-                "/p:__BuildType=%s" % build_type,
-                "/p:__LogsDir=%s" % logs_dir]
-
-    if not altjit_arch is None:
-        command += ["/p:__AltJitArch=%s" % altjit_arch]
-
-    print("Creating test wrappers...")
-    print(" ".join(command))
-
-    sys.stdout.flush() # flush output before creating sub-process
-    if not g_verbose:
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-        if not running_in_ci():
-            try:
-                expected_time_to_complete = 60*5 # 5 Minutes
-                estimated_time_running = 0
-
-                time_delta = 1
-
-                while True:
-                    time_remaining = expected_time_to_complete - estimated_time_running
-                    time_in_minutes = math.floor(time_remaining / 60)
-                    remaining_seconds = time_remaining % 60
-
-                    sys.stdout.write("\rEstimated time remaining: %d minutes %d seconds" % (time_in_minutes, remaining_seconds))
-                    sys.stdout.flush()
-
-                    time.sleep(time_delta)
-                    estimated_time_running += time_delta
-
-                    if estimated_time_running == expected_time_to_complete:
-                        break
-                    if proc.poll() is not None:
-                        break
-
-            except KeyboardInterrupt:
-                proc.kill()
-                sys.exit(1)
-    else:
-        proc = subprocess.Popen(command)
-
-    try:
-        proc.communicate()
-    except KeyboardInterrupt:
-        proc.kill()
-        sys.exit(1)
-
-    if proc.returncode != 0:
-        print("Error: creating test wrappers failed.")
-        return False
 
 def find_test_from_name(host_os, test_location, test_name):
     """ Given a test's name return the location on disk
@@ -2054,11 +1554,6 @@ def parse_test_results(host_os, arch, build_type, coreclr_repo_location, test_lo
 
             return
 
-    if host_os != "Windows_NT" and running_in_ci():
-        # Huge hack.
-        # TODO change netci to parse testRun.xml
-        shutil.copy2(test_run_location, os.path.join(os.path.dirname(test_run_location), "coreclrtests.xml"))
-
     assemblies = xml.etree.ElementTree.parse(test_run_location).getroot()
 
     tests = defaultdict(lambda: None)
@@ -2088,8 +1583,7 @@ def parse_test_results(host_os, arch, build_type, coreclr_repo_location, test_lo
 
                 if failed == "1":
                     failure_info = collection[0][0]
-
-                    test_output = failure_info[0].text
+                    test_output = failure_info.text
 
                 test_location_on_filesystem = find_test_from_name(host_os, test_location, test_name)
 
@@ -2289,23 +1783,6 @@ def do_setup(host_os,
     # Setup the tools for the repo.
     setup_tools(host_os, coreclr_repo_location)
 
-    if unprocessed_args.generate_layout:
-        success = setup_core_root(host_os, 
-                                  arch, 
-                                  build_type, 
-                                  coreclr_repo_location, 
-                                  test_native_bin_location, 
-                                  product_location,
-                                  test_location, 
-                                  core_root)
-
-        if not success:
-            print("Error: GenerateLayout failed.")
-            sys.exit(1)
-
-        if unprocessed_args.generate_layout_only:
-            sys.exit(0)
-
     if unprocessed_args.precompile_core_root:
         precompile_core_root(test_location, host_os, arch, core_root, use_jit_disasm=args.jitdisasm, altjit_name=unprocessed_args.crossgen_altjit)
   
@@ -2323,25 +1800,9 @@ def do_setup(host_os,
         is_same_arch = build_info["build_arch"] == arch
         is_same_build_type = build_info["build_type"] == build_type
 
-    # Copy all the native libs to core_root
-    if host_os != "Windows_NT"  and not (is_same_os and is_same_arch and is_same_build_type):
-        copy_native_test_bin_to_core_root(host_os, os.path.join(test_native_bin_location, "src"), core_root)
-
-        # Line ending only need to be corrected if this is a cross build.
-        correct_line_endings(host_os, test_location)
-
     # If we are inside altjit scenario, we ought to re-build Xunit test wrappers to consider
     # ExcludeList items in issues.targets for both build arch and altjit arch
     is_altjit_scenario = not args.altjit_arch is None
-
-    if unprocessed_args.build_xunit_test_wrappers:
-        build_test_wrappers(host_os, arch, build_type, coreclr_repo_location, test_location)
-    elif build_info is None:
-        build_test_wrappers(host_os, arch, build_type, coreclr_repo_location, test_location)
-    elif not (is_same_os and is_same_arch and is_same_build_type):
-        build_test_wrappers(host_os, arch, build_type, coreclr_repo_location, test_location)
-    elif is_altjit_scenario:
-        build_test_wrappers(host_os, arch, build_type, coreclr_repo_location, test_location, args.altjit_arch)
 
     return run_tests(host_os, 
                      arch,
@@ -2356,6 +1817,7 @@ def do_setup(host_os,
                      is_jitdasm=unprocessed_args.jitdisasm,
                      is_ilasm=unprocessed_args.ilasmroundtrip,
                      is_illink=unprocessed_args.il_link, 
+                     run_crossgen2_tests=unprocessed_args.run_crossgen2_tests,
                      run_crossgen_tests=unprocessed_args.run_crossgen_tests,
                      large_version_bubble=unprocessed_args.large_version_bubble,
                      run_sequential=unprocessed_args.sequential,

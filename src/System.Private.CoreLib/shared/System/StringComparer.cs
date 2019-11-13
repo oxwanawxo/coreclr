@@ -16,76 +16,35 @@ namespace System
         private static readonly CultureAwareComparer s_invariantCulture = new CultureAwareComparer(CultureInfo.InvariantCulture, CompareOptions.None);
         private static readonly CultureAwareComparer s_invariantCultureIgnoreCase = new CultureAwareComparer(CultureInfo.InvariantCulture, CompareOptions.IgnoreCase);
         private static readonly OrdinalCaseSensitiveComparer s_ordinal = new OrdinalCaseSensitiveComparer();
-        private static readonly OrdinalIgnoreCaseComparer s_ordinalIgnoreCase = new OrdinalIgnoreCaseComparer();        
+        private static readonly OrdinalIgnoreCaseComparer s_ordinalIgnoreCase = new OrdinalIgnoreCaseComparer();
 
-        public static StringComparer InvariantCulture
-        {
-            get
-            {
-                return s_invariantCulture;
-            }
-        }
+        public static StringComparer InvariantCulture => s_invariantCulture;
 
-        public static StringComparer InvariantCultureIgnoreCase
-        {
-            get
-            {
-                return s_invariantCultureIgnoreCase;
-            }
-        }
+        public static StringComparer InvariantCultureIgnoreCase => s_invariantCultureIgnoreCase;
 
-        public static StringComparer CurrentCulture
-        {
-            get
-            {
-                return new CultureAwareComparer(CultureInfo.CurrentCulture, CompareOptions.None);
-            }
-        }
+        public static StringComparer CurrentCulture =>
+            new CultureAwareComparer(CultureInfo.CurrentCulture, CompareOptions.None);
 
-        public static StringComparer CurrentCultureIgnoreCase
-        {
-            get
-            {
-                return new CultureAwareComparer(CultureInfo.CurrentCulture, CompareOptions.IgnoreCase);
-            }
-        }
+        public static StringComparer CurrentCultureIgnoreCase =>
+            new CultureAwareComparer(CultureInfo.CurrentCulture, CompareOptions.IgnoreCase);
 
-        public static StringComparer Ordinal
-        {
-            get
-            {
-                return s_ordinal;
-            }
-        }
+        public static StringComparer Ordinal => s_ordinal;
 
-        public static StringComparer OrdinalIgnoreCase
-        {
-            get
-            {
-                return s_ordinalIgnoreCase;
-            }
-        }
+        public static StringComparer OrdinalIgnoreCase => s_ordinalIgnoreCase;
 
         // Convert a StringComparison to a StringComparer
         public static StringComparer FromComparison(StringComparison comparisonType)
         {
-            switch (comparisonType)
+            return comparisonType switch
             {
-                case StringComparison.CurrentCulture:
-                    return CurrentCulture;
-                case StringComparison.CurrentCultureIgnoreCase:
-                    return CurrentCultureIgnoreCase;
-                case StringComparison.InvariantCulture:
-                    return InvariantCulture;
-                case StringComparison.InvariantCultureIgnoreCase:
-                    return InvariantCultureIgnoreCase;
-                case StringComparison.Ordinal:
-                    return Ordinal;
-                case StringComparison.OrdinalIgnoreCase:
-                    return OrdinalIgnoreCase;
-                default:
-                    throw new ArgumentException(SR.NotSupported_StringComparison, nameof(comparisonType));
-            }
+                StringComparison.CurrentCulture => CurrentCulture,
+                StringComparison.CurrentCultureIgnoreCase => CurrentCultureIgnoreCase,
+                StringComparison.InvariantCulture => InvariantCulture,
+                StringComparison.InvariantCultureIgnoreCase => InvariantCultureIgnoreCase,
+                StringComparison.Ordinal => Ordinal,
+                StringComparison.OrdinalIgnoreCase => OrdinalIgnoreCase,
+                _ => throw new ArgumentException(SR.NotSupported_StringComparison, nameof(comparisonType)),
+            };
         }
 
         public static StringComparer Create(CultureInfo culture, bool ignoreCase)
@@ -94,7 +53,7 @@ namespace System
             {
                 throw new ArgumentNullException(nameof(culture));
             }
-            
+
             return new CultureAwareComparer(culture, ignoreCase ? CompareOptions.IgnoreCase : CompareOptions.None);
         }
 
@@ -102,7 +61,7 @@ namespace System
         {
             if (culture == null)
             {
-                throw new ArgumentException(nameof(culture));
+                throw new ArgumentNullException(nameof(culture));
             }
 
             return new CultureAwareComparer(culture, options);
@@ -161,7 +120,9 @@ namespace System
 
         public abstract int Compare(string? x, string? y);
         public abstract bool Equals(string? x, string? y);
-        public abstract int GetHashCode(string? obj); // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/23268
+#pragma warning disable CS8614 // Remove warning disable when nullable attributes are respected
+        public abstract int GetHashCode(string obj);
+#pragma warning restore CS8614
     }
 
     [Serializable]
@@ -171,7 +132,7 @@ namespace System
         private const CompareOptions ValidCompareMaskOffFlags = ~(CompareOptions.IgnoreCase | CompareOptions.IgnoreSymbols | CompareOptions.IgnoreNonSpace | CompareOptions.IgnoreWidth | CompareOptions.IgnoreKanaType | CompareOptions.StringSort);
 
         private readonly CompareInfo _compareInfo; // Do not rename (binary serialization)
-        private CompareOptions _options;
+        private readonly CompareOptions _options;
 
         internal CultureAwareComparer(CultureInfo culture, CompareOptions options) : this(culture.CompareInfo, options) { }
 
@@ -191,7 +152,7 @@ namespace System
             _compareInfo = (CompareInfo)info.GetValue("_compareInfo", typeof(CompareInfo))!;
             bool ignoreCase = info.GetBoolean("_ignoreCase");
 
-            var obj = info.GetValueNoThrow("_options", typeof(CompareOptions));
+            object? obj = info.GetValueNoThrow("_options", typeof(CompareOptions));
             if (obj != null)
                 _options = (CompareOptions)obj;
 
@@ -214,7 +175,7 @@ namespace System
             return _compareInfo.Compare(x, y, _options) == 0;
         }
 
-        public override int GetHashCode(string? obj) // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/23268
+        public override int GetHashCode(string obj)
         {
             if (obj == null)
             {
@@ -247,7 +208,7 @@ namespace System
 
     [Serializable]
     [System.Runtime.CompilerServices.TypeForwardedFrom("mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089")]
-    public class OrdinalComparer : StringComparer 
+    public class OrdinalComparer : StringComparer
     {
         private readonly bool _ignoreCase; // Do not rename (binary serialization)
 
@@ -291,7 +252,7 @@ namespace System
             return x.Equals(y);
         }
 
-        public override int GetHashCode(string? obj) // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/23268
+        public override int GetHashCode(string obj)
         {
             if (obj == null)
             {
@@ -300,20 +261,20 @@ namespace System
 
             if (_ignoreCase)
             {
-                return obj!.GetHashCodeOrdinalIgnoreCase(); // TODO-NULLABLE: https://github.com/dotnet/csharplang/issues/538
+                return obj.GetHashCodeOrdinalIgnoreCase();
             }
 
-            return obj!.GetHashCode(); // TODO-NULLABLE: https://github.com/dotnet/csharplang/issues/538
+            return obj.GetHashCode();
         }
 
-        // Equals method for the comparer itself. 
+        // Equals method for the comparer itself.
         public override bool Equals(object? obj)
         {
             if (!(obj is OrdinalComparer comparer))
             {
                 return false;
             }
-            return (this._ignoreCase == comparer._ignoreCase);
+            return this._ignoreCase == comparer._ignoreCase;
         }
 
         public override int GetHashCode()
@@ -334,13 +295,13 @@ namespace System
 
         public override bool Equals(string? x, string? y) => string.Equals(x, y);
 
-        public override int GetHashCode(string? obj) // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/23268
+        public override int GetHashCode(string obj)
         {
             if (obj == null)
             {
                 ThrowHelper.ThrowArgumentNullException(ExceptionArgument.obj);
             }
-            return obj!.GetHashCode(); // TODO-NULLABLE: https://github.com/dotnet/csharplang/issues/538
+            return obj.GetHashCode();
         }
 
         public void GetObjectData(SerializationInfo info, StreamingContext context)
@@ -379,13 +340,13 @@ namespace System
             return CompareInfo.EqualsOrdinalIgnoreCase(ref x.GetRawStringData(), ref y.GetRawStringData(), x.Length);
         }
 
-        public override int GetHashCode(string? obj) // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/23268
+        public override int GetHashCode(string obj)
         {
             if (obj == null)
             {
                 ThrowHelper.ThrowArgumentNullException(ExceptionArgument.obj);
             }
-            return obj!.GetHashCodeOrdinalIgnoreCase(); // TODO-NULLABLE: https://github.com/dotnet/csharplang/issues/538
+            return obj.GetHashCodeOrdinalIgnoreCase();
         }
 
         public void GetObjectData(SerializationInfo info, StreamingContext context)

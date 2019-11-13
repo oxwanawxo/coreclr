@@ -113,7 +113,7 @@ namespace System
             }
         }
 
-        public virtual Type[] FindInterfaces(TypeFilter filter, object filterCriteria)
+        public virtual Type[] FindInterfaces(TypeFilter filter, object? filterCriteria)
         {
             if (filter == null)
                 throw new ArgumentNullException(nameof(filter));
@@ -135,12 +135,12 @@ namespace System
             for (int i = 0; i < c.Length; i++)
             {
                 if (c[i] != null)
-                    ret[cnt++] = c[i]!; // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34644
+                    ret[cnt++] = c[i]!; // TODO-NULLABLE: Indexer nullability tracked (https://github.com/dotnet/roslyn/issues/34644)
             }
             return ret;
         }
 
-        public virtual MemberInfo[] FindMembers(MemberTypes memberType, BindingFlags bindingAttr, MemberFilter? filter, object filterCriteria)
+        public virtual MemberInfo[] FindMembers(MemberTypes memberType, BindingFlags bindingAttr, MemberFilter? filter, object? filterCriteria)
         {
             // Define the work arrays
             MethodInfo?[]? m = null;
@@ -150,7 +150,7 @@ namespace System
             EventInfo?[]? e = null;
             Type?[]? t = null;
 
-            int i = 0;
+            int i;
             int cnt = 0;            // Total Matchs
 
             // Check the methods
@@ -270,7 +270,7 @@ namespace System
             {
                 for (i = 0; i < m.Length; i++)
                     if (m[i] != null)
-                        ret[cnt++] = m[i]!;  // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34644
+                        ret[cnt++] = m[i]!;  // TODO-NULLABLE: Indexer nullability tracked (https://github.com/dotnet/roslyn/issues/34644)
             }
 
             // Copy the Constructors
@@ -278,7 +278,7 @@ namespace System
             {
                 for (i = 0; i < c.Length; i++)
                     if (c[i] != null)
-                        ret[cnt++] = c[i]!;  // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34644
+                        ret[cnt++] = c[i]!;  // TODO-NULLABLE: Indexer nullability tracked (https://github.com/dotnet/roslyn/issues/34644)
             }
 
             // Copy the Fields
@@ -286,7 +286,7 @@ namespace System
             {
                 for (i = 0; i < f.Length; i++)
                     if (f[i] != null)
-                        ret[cnt++] = f[i]!;  // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34644
+                        ret[cnt++] = f[i]!;  // TODO-NULLABLE: Indexer nullability tracked (https://github.com/dotnet/roslyn/issues/34644)
             }
 
             // Copy the Properties
@@ -294,7 +294,7 @@ namespace System
             {
                 for (i = 0; i < p.Length; i++)
                     if (p[i] != null)
-                        ret[cnt++] = p[i]!; // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34644
+                        ret[cnt++] = p[i]!; // TODO-NULLABLE: Indexer nullability tracked (https://github.com/dotnet/roslyn/issues/34644)
             }
 
             // Copy the Events
@@ -302,7 +302,7 @@ namespace System
             {
                 for (i = 0; i < e.Length; i++)
                     if (e[i] != null)
-                        ret[cnt++] = e[i]!;  // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34644
+                        ret[cnt++] = e[i]!;  // TODO-NULLABLE: Indexer nullability tracked (https://github.com/dotnet/roslyn/issues/34644)
             }
 
             // Copy the Types
@@ -310,7 +310,7 @@ namespace System
             {
                 for (i = 0; i < t.Length; i++)
                     if (t[i] != null)
-                        ret[cnt++] = t[i]!;  // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/34644
+                        ret[cnt++] = t[i]!;  // TODO-NULLABLE: Indexer nullability tracked (https://github.com/dotnet/roslyn/issues/34644)
             }
 
             return ret;
@@ -339,7 +339,7 @@ namespace System
                 return true;
 
             // For backward-compatibility, we need to special case for the types
-            // whose UnderlyingSystemType are runtime implemented. 
+            // whose UnderlyingSystemType are runtime implemented.
             Type toType = this.UnderlyingSystemType;
             if (toType?.IsRuntimeImplemented() == true)
                 return toType.IsAssignableFrom(c);
@@ -500,4 +500,3 @@ namespace System
         }
     }
 }
-

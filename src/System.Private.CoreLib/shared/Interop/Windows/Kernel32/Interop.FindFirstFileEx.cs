@@ -5,13 +5,12 @@
 #nullable enable
 using Microsoft.Win32.SafeHandles;
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 
-internal partial class Interop
+internal static partial class Interop
 {
-    internal partial class Kernel32
+    internal static partial class Kernel32
     {
         /// <summary>
         /// WARNING: This method does not implicitly handle long paths. Use FindFirstFile.
@@ -21,11 +20,10 @@ internal partial class Interop
 
         internal static SafeFindHandle FindFirstFile(string fileName, ref WIN32_FIND_DATA data)
         {
-            string? fileNameWithPrefix = PathInternal.EnsureExtendedPrefixIfNeeded(fileName);
-            Debug.Assert(fileNameWithPrefix != null, "null not expected when non-null passed"); // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+            fileName = PathInternal.EnsureExtendedPrefixIfNeeded(fileName);
 
             // use FindExInfoBasic since we don't care about short name and it has better perf
-            return FindFirstFileExPrivate(fileNameWithPrefix, FINDEX_INFO_LEVELS.FindExInfoBasic, ref data, FINDEX_SEARCH_OPS.FindExSearchNameMatch, IntPtr.Zero, 0);
+            return FindFirstFileExPrivate(fileName, FINDEX_INFO_LEVELS.FindExInfoBasic, ref data, FINDEX_SEARCH_OPS.FindExSearchNameMatch, IntPtr.Zero, 0);
         }
 
         internal enum FINDEX_INFO_LEVELS : uint

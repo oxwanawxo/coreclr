@@ -77,6 +77,7 @@ int main(int argc, char **argv) {
 set(CMAKE_REQUIRED_LIBRARIES)
 
 check_include_files(sys/sysctl.h HAVE_SYS_SYSCTL_H)
+check_function_exists(sysctlbyname HAVE_SYSCTLBYNAME)
 check_include_files(gnu/lib-names.h HAVE_GNU_LIBNAMES_H)
 
 check_function_exists(kqueue HAVE_KQUEUE)
@@ -101,6 +102,7 @@ check_library_exists(${PTHREAD_LIBRARY} pthread_getattr_np "" HAVE_PTHREAD_GETAT
 check_library_exists(${PTHREAD_LIBRARY} pthread_getcpuclockid "" HAVE_PTHREAD_GETCPUCLOCKID)
 check_library_exists(${PTHREAD_LIBRARY} pthread_sigqueue "" HAVE_PTHREAD_SIGQUEUE)
 check_library_exists(${PTHREAD_LIBRARY} pthread_getaffinity_np "" HAVE_PTHREAD_GETAFFINITY_NP)
+check_library_exists(${PTHREAD_LIBRARY} pthread_attr_setaffinity_np "" HAVE_PTHREAD_ATTR_SETAFFINITY_NP)
 
 check_function_exists(sigreturn HAVE_SIGRETURN)
 check_function_exists(_thread_sys_sigreturn HAVE__THREAD_SYS_SIGRETURN)
@@ -113,7 +115,6 @@ check_function_exists(utimes HAVE_UTIMES)
 check_function_exists(sysctl HAVE_SYSCTL)
 check_function_exists(sysinfo HAVE_SYSINFO)
 check_function_exists(sysconf HAVE_SYSCONF)
-check_function_exists(localtime_r HAVE_LOCALTIME_R)
 check_function_exists(gmtime_r HAVE_GMTIME_R)
 check_function_exists(timegm HAVE_TIMEGM)
 check_function_exists(poll HAVE_POLL)
@@ -537,9 +538,10 @@ check_cxx_source_runs("
 #include <string.h>
 #include <sys/types.h>
 #include <sys/mman.h>
+#include <algorithm>
 
 #define MEM_SIZE 1024
-
+#define TEMP_FILE_TEMPLATE \"${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/multiplemaptestXXXXXX\"
 int main(void)
 {
   char * fname;
@@ -547,10 +549,10 @@ int main(void)
   int ret;
   void * pAddr0, * pAddr1;
 
-  fname = (char *)malloc(MEM_SIZE);
+  fname = (char *)malloc(std::max((size_t)MEM_SIZE, sizeof(TEMP_FILE_TEMPLATE)));
   if (!fname)
     exit(1);
-  strcpy(fname, \"/tmp/name/multiplemaptestXXXXXX\");
+  strcpy(fname, TEMP_FILE_TEMPLATE);
 
   fd = mkstemp(fname);
   if (fd < 0)
@@ -1151,30 +1153,30 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
   // a child process that locks the mutex, the process process then waits to acquire the lock, and the child process abandons the
   // mutex by exiting the process while holding the lock. The parent process should then be released from its wait, be assigned
   // ownership of the lock, and be notified that the mutex was abandoned.
-  
+
   #include <sys/mman.h>
   #include <sys/time.h>
-  
+
   #include <errno.h>
   #include <pthread.h>
   #include <stdio.h>
   #include <unistd.h>
-  
+
   #include <new>
   using namespace std;
-  
+
   struct Shm
   {
       pthread_mutex_t syncMutex;
       pthread_cond_t syncCondition;
       pthread_mutex_t robustMutex;
       int conditionValue;
-  
+
       Shm() : conditionValue(0)
       {
       }
   } *shm;
-  
+
   int GetFailTimeoutTime(struct timespec *timeoutTimeRef)
   {
       int getTimeResult = clock_gettime(CLOCK_REALTIME, timeoutTimeRef);
@@ -1190,7 +1192,7 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
       timeoutTimeRef->tv_sec += 30;
       return 0;
   }
-  
+
   int WaitForConditionValue(int desiredConditionValue)
   {
       struct timespec timeoutTime;
@@ -1198,7 +1200,7 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
           return 1;
       if (pthread_mutex_timedlock(&shm->syncMutex, &timeoutTime) != 0)
           return 1;
-  
+
       if (shm->conditionValue != desiredConditionValue)
       {
           if (GetFailTimeoutTime(&timeoutTime) != 0)
@@ -1208,12 +1210,12 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
           if (shm->conditionValue != desiredConditionValue)
               return 1;
       }
-  
+
       if (pthread_mutex_unlock(&shm->syncMutex) != 0)
           return 1;
       return 0;
   }
-  
+
   int SetConditionValue(int newConditionValue)
   {
       struct timespec timeoutTime;
@@ -1221,18 +1223,18 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
           return 1;
       if (pthread_mutex_timedlock(&shm->syncMutex, &timeoutTime) != 0)
           return 1;
-  
+
       shm->conditionValue = newConditionValue;
       if (pthread_cond_signal(&shm->syncCondition) != 0)
           return 1;
-  
+
       if (pthread_mutex_unlock(&shm->syncMutex) != 0)
           return 1;
       return 0;
   }
-  
+
   void DoTest_Child();
-  
+
   int DoTest()
   {
       // Map some shared memory
@@ -1240,7 +1242,7 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
       if (shmBuffer == MAP_FAILED)
           return 1;
       shm = new(shmBuffer) Shm;
-  
+
       // Create sync mutex
       pthread_mutexattr_t syncMutexAttributes;
       if (pthread_mutexattr_init(&syncMutexAttributes) != 0)
@@ -1251,7 +1253,7 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
           return 1;
       if (pthread_mutexattr_destroy(&syncMutexAttributes) != 0)
           return 1;
-  
+
       // Create sync condition
       pthread_condattr_t syncConditionAttributes;
       if (pthread_condattr_init(&syncConditionAttributes) != 0)
@@ -1262,7 +1264,7 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
           return 1;
       if (pthread_condattr_destroy(&syncConditionAttributes) != 0)
           return 1;
-  
+
       // Create the robust mutex that will be tested
       pthread_mutexattr_t robustMutexAttributes;
       if (pthread_mutexattr_init(&robustMutexAttributes) != 0)
@@ -1275,7 +1277,7 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
           return 1;
       if (pthread_mutexattr_destroy(&robustMutexAttributes) != 0)
           return 1;
-  
+
       // Start child test process
       int error = fork();
       if (error == -1)
@@ -1285,10 +1287,10 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
           DoTest_Child();
           return -1;
       }
-  
+
       // Wait for child to take a lock
       WaitForConditionValue(1);
-  
+
       // Wait to try to take a lock. Meanwhile, child abandons the robust mutex.
       struct timespec timeoutTime;
       if (GetFailTimeoutTime(&timeoutTime) != 0)
@@ -1298,14 +1300,14 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
           return 1;
       if (pthread_mutex_consistent(&shm->robustMutex) != 0)
           return 1;
-  
+
       if (pthread_mutex_unlock(&shm->robustMutex) != 0)
           return 1;
       if (pthread_mutex_destroy(&shm->robustMutex) != 0)
           return 1;
       return 0;
   }
-  
+
   void DoTest_Child()
   {
       // Lock the robust mutex
@@ -1314,17 +1316,17 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
           return;
       if (pthread_mutex_timedlock(&shm->robustMutex, &timeoutTime) != 0)
           return;
-  
+
       // Notify parent that robust mutex is locked
       if (SetConditionValue(1) != 0)
           return;
-  
+
       // Wait a short period to let the parent block on waiting for a lock
       sleep(1);
-  
+
       // Abandon the mutex by exiting the process while holding the lock. Parent's wait should be released by EOWNERDEAD.
   }
-  
+
   int main()
   {
       int result = DoTest();
@@ -1334,7 +1336,6 @@ if(NOT CLR_CMAKE_PLATFORM_ARCH_ARM AND NOT CLR_CMAKE_PLATFORM_ARCH_ARM64)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL Darwin)
-  set(HAVE_COREFOUNDATION 1)
   set(HAVE__NSGETENVIRON 1)
   set(DEADLOCK_WHEN_THREAD_IS_SUSPENDED_WHILE_BLOCKED_ON_MUTEX 1)
   set(PAL_PTRACE "ptrace((cmd), (pid), (caddr_t)(addr), (data))")

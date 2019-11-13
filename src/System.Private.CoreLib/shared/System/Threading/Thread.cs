@@ -4,15 +4,13 @@
 
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.ConstrainedExecution;
 using System.Security.Principal;
 
 namespace System.Threading
 {
-#if PROJECTN
-    [Internal.Runtime.CompilerServices.RelocatedType("System.Threading.Thread")]
-#endif
     public sealed partial class Thread : CriticalFinalizerObject
     {
         private static AsyncLocal<IPrincipal?>? s_asyncLocalPrincipal;
@@ -151,7 +149,7 @@ namespace System.Threading
                     }
                     Interlocked.CompareExchange(ref s_asyncLocalPrincipal, new AsyncLocal<IPrincipal?>(), null);
                 }
-                s_asyncLocalPrincipal!.Value = value; // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+                s_asyncLocalPrincipal.Value = value;
             }
         }
 
@@ -193,13 +191,13 @@ namespace System.Threading
             throw new PlatformNotSupportedException(SR.PlatformNotSupported_ThreadAbort);
         }
 
-        [ObsoleteAttribute("Thread.Suspend has been deprecated.  Please use other classes in System.Threading, such as Monitor, Mutex, Event, and Semaphore, to synchronize Threads or protect resources.  https://go.microsoft.com/fwlink/?linkid=14202", false)]
+        [Obsolete("Thread.Suspend has been deprecated.  Please use other classes in System.Threading, such as Monitor, Mutex, Event, and Semaphore, to synchronize Threads or protect resources.  https://go.microsoft.com/fwlink/?linkid=14202", false)]
         public void Suspend()
         {
             throw new PlatformNotSupportedException(SR.PlatformNotSupported_ThreadSuspend);
         }
 
-        [ObsoleteAttribute("Thread.Resume has been deprecated.  Please use other classes in System.Threading, such as Monitor, Mutex, Event, and Semaphore, to synchronize Threads or protect resources.  https://go.microsoft.com/fwlink/?linkid=14202", false)]
+        [Obsolete("Thread.Resume has been deprecated.  Please use other classes in System.Threading, such as Monitor, Mutex, Event, and Semaphore, to synchronize Threads or protect resources.  https://go.microsoft.com/fwlink/?linkid=14202", false)]
         public void Resume()
         {
             throw new PlatformNotSupportedException(SR.PlatformNotSupported_ThreadSuspend);
@@ -222,14 +220,8 @@ namespace System.Threading
         [Obsolete("The ApartmentState property has been deprecated.  Use GetApartmentState, SetApartmentState or TrySetApartmentState instead.", false)]
         public ApartmentState ApartmentState
         {
-            get
-            {
-                return GetApartmentState();
-            }
-            set
-            {
-                TrySetApartmentState(value);
-            }
+            get => GetApartmentState();
+            set => TrySetApartmentState(value);
         }
 
         public void SetApartmentState(ApartmentState state)
@@ -282,7 +274,8 @@ namespace System.Threading
         public static int VolatileRead(ref int address) => Volatile.Read(ref address);
         public static long VolatileRead(ref long address) => Volatile.Read(ref address);
         public static IntPtr VolatileRead(ref IntPtr address) => Volatile.Read(ref address);
-        public static object? VolatileRead(ref object? address) => Volatile.Read(ref address); // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+        [return: NotNullIfNotNull("address")]
+        public static object? VolatileRead(ref object? address) => Volatile.Read(ref address);
         [CLSCompliant(false)]
         public static sbyte VolatileRead(ref sbyte address) => Volatile.Read(ref address);
         public static float VolatileRead(ref float address) => Volatile.Read(ref address);
@@ -300,7 +293,7 @@ namespace System.Threading
         public static void VolatileWrite(ref int address, int value) => Volatile.Write(ref address, value);
         public static void VolatileWrite(ref long address, long value) => Volatile.Write(ref address, value);
         public static void VolatileWrite(ref IntPtr address, IntPtr value) => Volatile.Write(ref address, value);
-        public static void VolatileWrite(ref object? address, object? value) => Volatile.Write(ref address, value);
+        public static void VolatileWrite([NotNullIfNotNull("value")] ref object? address, object? value) => Volatile.Write(ref address, value);
         [CLSCompliant(false)]
         public static void VolatileWrite(ref sbyte address, sbyte value) => Volatile.Write(ref address, value);
         public static void VolatileWrite(ref float address, float value) => Volatile.Write(ref address, value);
@@ -353,7 +346,7 @@ namespace System.Threading
                 Dictionary<string, LocalDataStoreSlot> nameToSlotMap = EnsureNameToSlotMap();
                 lock (nameToSlotMap)
                 {
-                    LocalDataStoreSlot slot;
+                    LocalDataStoreSlot? slot;
                     if (!nameToSlotMap.TryGetValue(name, out slot))
                     {
                         slot = AllocateSlot();

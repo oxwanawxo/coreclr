@@ -6,15 +6,16 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Security;
 
 using Internal.Win32.SafeHandles;
 
 //
-// A minimal version of RegistryKey that supports just what CoreLib needs. 
+// A minimal version of RegistryKey that supports just what CoreLib needs.
 //
-// Internal.Win32 namespace avoids confusion with the public standalone Microsoft.Win32.Registry implementation 
+// Internal.Win32 namespace avoids confusion with the public standalone Microsoft.Win32.Registry implementation
 // that lives in corefx.
 //
 namespace Internal.Win32
@@ -28,7 +29,7 @@ namespace Internal.Win32
         private const int MaxKeyLength = 255;
         private const int MaxValueLength = 16383;
 
-        private SafeRegistryHandle _hkey;
+        private readonly SafeRegistryHandle _hkey;
 
         private RegistryKey(SafeRegistryHandle hkey)
         {
@@ -48,7 +49,7 @@ namespace Internal.Win32
             int errorCode = Interop.Advapi32.RegDeleteValue(_hkey, name);
 
             //
-            // From windows 2003 server, if the name is too long we will get error code ERROR_FILENAME_EXCED_RANGE  
+            // From windows 2003 server, if the name is too long we will get error code ERROR_FILENAME_EXCED_RANGE
             // This still means the name doesn't exist. We need to be consistent with previous OS.
             //
             if (errorCode == Interop.Errors.ERROR_FILE_NOT_FOUND ||
@@ -83,12 +84,12 @@ namespace Internal.Win32
         public RegistryKey? OpenSubKey(string name, bool writable)
         {
             // Make sure that the name does not contain double slahes
-            Debug.Assert(name.IndexOf("\\\\") == -1);
+            Debug.Assert(!name.Contains(@"\\"));
 
             int ret = Interop.Advapi32.RegOpenKeyEx(_hkey,
                 name,
                 0,
-                writable ? 
+                writable ?
                     Interop.Advapi32.RegistryOperations.KEY_READ | Interop.Advapi32.RegistryOperations.KEY_WRITE :
                     Interop.Advapi32.RegistryOperations.KEY_READ,
                 out SafeRegistryHandle result);
@@ -219,7 +220,8 @@ namespace Internal.Win32
             return GetValue(name, null);
         }
 
-        public object? GetValue(string name, object? defaultValue) // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+        [return: NotNullIfNotNull("defaultValue")]
+        public object? GetValue(string name, object? defaultValue)
         {
             object? data = defaultValue;
             int type = 0;
@@ -230,8 +232,8 @@ namespace Internal.Win32
             if (ret != 0)
             {
                 // For stuff like ERROR_FILE_NOT_FOUND, we want to return null (data).
-                // Some OS's returned ERROR_MORE_DATA even in success cases, so we 
-                // want to continue on through the function. 
+                // Some OS's returned ERROR_MORE_DATA even in success cases, so we
+                // want to continue on through the function.
                 if (ret != Interop.Errors.ERROR_MORE_DATA)
                     return data;
             }
@@ -303,13 +305,13 @@ namespace Internal.Win32
                         char[] blob = new char[datasize / 2];
 
                         ret = Interop.Advapi32.RegQueryValueEx(_hkey, name, null, ref type, blob, ref datasize);
-                        if (blob.Length > 0 && blob[blob.Length - 1] == (char)0)
+                        if (blob.Length > 0 && blob[^1] == (char)0)
                         {
                             data = new string(blob, 0, blob.Length - 1);
                         }
                         else
                         {
-                            // in the very unlikely case the data is missing null termination, 
+                            // in the very unlikely case the data is missing null termination,
                             // pass in the whole char[] to prevent truncating a character
                             data = new string(blob);
                         }
@@ -334,13 +336,13 @@ namespace Internal.Win32
 
                         ret = Interop.Advapi32.RegQueryValueEx(_hkey, name, null, ref type, blob, ref datasize);
 
-                        if (blob.Length > 0 && blob[blob.Length - 1] == (char)0)
+                        if (blob.Length > 0 && blob[^1] == (char)0)
                         {
                             data = new string(blob, 0, blob.Length - 1);
                         }
                         else
                         {
-                            // in the very unlikely case the data is missing null termination, 
+                            // in the very unlikely case the data is missing null termination,
                             // pass in the whole char[] to prevent truncating a character
                             data = new string(blob);
                         }
@@ -367,9 +369,9 @@ namespace Internal.Win32
                         ret = Interop.Advapi32.RegQueryValueEx(_hkey, name, null, ref type, blob, ref datasize);
 
                         // make sure the string is null terminated before processing the data
-                        if (blob.Length > 0 && blob[blob.Length - 1] != (char)0)
+                        if (blob.Length > 0 && blob[^1] != (char)0)
                         {
-                            Array.Resize(ref blob!, blob.Length + 1); // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+                            Array.Resize(ref blob, blob.Length + 1);
                         }
 
                         string[] strings = Array.Empty<string>();
@@ -414,13 +416,13 @@ namespace Internal.Win32
                             {
                                 if (strings.Length == stringsCount)
                                 {
-                                    Array.Resize(ref strings!, stringsCount > 0 ? stringsCount * 2 : 4); // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+                                    Array.Resize(ref strings, stringsCount > 0 ? stringsCount * 2 : 4);
                                 }
-                                strings![stringsCount++] = toAdd; // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+                                strings[stringsCount++] = toAdd;
                             }
                         }
 
-                        Array.Resize(ref strings!, stringsCount); // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/26761
+                        Array.Resize(ref strings, stringsCount);
                         data = strings;
                     }
                     break;
@@ -455,7 +457,7 @@ namespace Internal.Win32
             }
         }
 
-        internal void Win32Error(int errorCode, string? str)
+        internal static void Win32Error(int errorCode, string? str)
         {
             switch (errorCode)
             {

@@ -34,7 +34,7 @@ CHECK PEDecoder::CheckFormat() const
         {
             CHECK(CheckCorHeader());
 
-            if (IsILOnly() && !HasReadyToRunHeader())
+            if (IsILOnly())
                 CHECK(CheckILOnly());
 
             if (HasNativeHeader())
@@ -325,7 +325,7 @@ CHECK PEDecoder::CheckNTHeaders() const
         // 0x200, and the header remapping resulted in new headers size of 0x208). To compensate
         // for this issue (it would be quite difficult to fix in the remapping code; see Dev11 430008)
         // we assume that when the image is mapped that the needed validation has already been done.
-        // 
+        //
 
         if (!IsMapped())
         {
@@ -1406,6 +1406,12 @@ CHECK PEDecoder::CheckILOnly() const
 
     CHECK(CheckCorHeader());
 
+    if (HasReadyToRunHeader())
+    {
+        // Pretend R2R images are IL-only
+        const_cast<PEDecoder *>(this)->m_flags |= FLAG_IL_ONLY_CHECKED;
+        CHECK_OK;
+    }
 
     // Allow only verifiable directories.
 
@@ -1505,7 +1511,7 @@ CHECK PEDecoder::CheckILOnlyImportDlls() const
 
     // The only allowed DLL Imports are MscorEE.dll:_CorExeMain,_CorDllMain
 
-#ifdef _WIN64
+#ifdef BIT64
     // On win64, when the image is LoadLibrary'd, we whack the import and IAT directories. We have to relax
     // the verification for mapped images. Ideally, we would only do it for a post-LoadLibrary image.
     if (IsMapped() && !HasDirectoryEntry(IMAGE_DIRECTORY_ENTRY_IMPORT))
@@ -1796,7 +1802,7 @@ bool ReadResourceDirectoryHeader(const PEDecoder *pDecoder, DWORD rvaOfResourceS
     *ppResourceDirectory = (IMAGE_RESOURCE_DIRECTORY *)pDecoder->GetRvaData(rva);
 
     // Check to see if entire resource directory is accessible
-    if (!pDecoder->CheckRva(rva + sizeof(IMAGE_RESOURCE_DIRECTORY), 
+    if (!pDecoder->CheckRva(rva + sizeof(IMAGE_RESOURCE_DIRECTORY),
                        (sizeof(IMAGE_RESOURCE_DIRECTORY_ENTRY) * (*ppResourceDirectory)->NumberOfNamedEntries) +
                        (sizeof(IMAGE_RESOURCE_DIRECTORY_ENTRY) * (*ppResourceDirectory)->NumberOfIdEntries)))
     {
@@ -1836,7 +1842,7 @@ bool ReadNameFromResourceDirectoryEntry(const PEDecoder *pDecoder, DWORD rvaOfRe
         DWORD name = pDirectoryEntries[iEntry].Name;
         if (!IS_INTRESOURCE(name))
             return false;
-        
+
         *pNameUInt = name;
     }
 
@@ -1874,7 +1880,7 @@ DWORD ReadResourceDirectory(const PEDecoder *pDecoder, DWORD rvaOfResourceSectio
             DWORD entryName = pDirectoryEntries[iEntry].Name;
             if (!(entryName & IMAGE_RESOURCE_NAME_IS_STRING))
                 continue;
-            
+
             DWORD entryNameRva = (entryName & ~IMAGE_RESOURCE_NAME_IS_STRING) + rvaOfResourceSection;
 
             if (!pDecoder->CheckRva(entryNameRva, sizeof(WORD)))
@@ -1886,7 +1892,7 @@ DWORD ReadResourceDirectory(const PEDecoder *pDecoder, DWORD rvaOfResourceSectio
 
             if (!pDecoder->CheckRva(entryNameRva, (COUNT_T)(sizeof(WORD) * (1 + entryNameLen))))
                 return 0;
-            
+
             if (memcmp((WCHAR*)pDecoder->GetRvaData(entryNameRva + sizeof(WORD)), name, entryNameLen * sizeof(WCHAR)) == 0)
                 foundEntry = TRUE;
         }
@@ -1946,7 +1952,7 @@ void * PEDecoder::GetWin32Resource(LPCWSTR lpName, LPCWSTR lpType, COUNT_T *pSiz
 
     if (!isDirectory)
         return NULL;
-    
+
     if (nameTableRva == 0)
         return NULL;
 
@@ -2043,7 +2049,7 @@ bool DoesResourceNameMatch(LPCWSTR nameA, LPCWSTR nameB)
     }
     else
     {
-        // name is a string. 
+        // name is a string.
 
         // Check for name enumerated is an id. If so, it doesn't match, skip to next.
         if (IS_INTRESOURCE(nameB))
@@ -2838,8 +2844,8 @@ PTR_CVOID PEDecoder::GetNativeManifestMetadata(COUNT_T *pSize) const
         GC_NOTRIGGER;
     }
     CONTRACT_END;
-    
-    IMAGE_DATA_DIRECTORY *pDir;
+
+    IMAGE_DATA_DIRECTORY *pDir = NULL;
 #ifdef FEATURE_PREJIT
     if (!HasReadyToRunHeader())
     {
@@ -2858,8 +2864,22 @@ PTR_CVOID PEDecoder::GetNativeManifestMetadata(COUNT_T *pSize) const
 
             READYTORUN_SECTION * pSection = pSections + i;
             if (pSection->Type == READYTORUN_SECTION_MANIFEST_METADATA)
+            {
                 // Set pDir to the address of the manifest metadata section
                 pDir = &pSection->Section;
+                break;
+            }
+        }
+
+        // ReadyToRun file without large version bubble support doesn't have the READYTORUN_SECTION_MANIFEST_METADATA
+        if (pDir == NULL)
+        {
+            if (pSize != NULL)
+            {
+                *pSize = 0;
+            }
+
+            RETURN NULL;
         }
     }
 

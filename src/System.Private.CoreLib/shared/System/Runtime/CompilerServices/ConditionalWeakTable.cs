@@ -5,13 +5,14 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using Internal.Runtime.CompilerServices;
 
 namespace System.Runtime.CompilerServices
 {
     public sealed class ConditionalWeakTable<TKey, TValue> : IEnumerable<KeyValuePair<TKey, TValue>>
-        where TKey : class?
+        where TKey : class
         where TValue : class?
     {
         // Lifetimes of keys and values:
@@ -51,7 +52,7 @@ namespace System.Runtime.CompilerServices
         /// The key may get garbaged collected during the TryGetValue operation. If so, TryGetValue
         /// may at its discretion, return "false" and set "value" to the default (as if the key was not present.)
         /// </remarks>
-        public bool TryGetValue(TKey key, out TValue value)
+        public bool TryGetValue(TKey key, [MaybeNullWhen(false)] out TValue value)
         {
             if (key is null)
             {
@@ -195,7 +196,7 @@ namespace System.Runtime.CompilerServices
         private TValue GetValueLocked(TKey key, CreateValueCallback createValueCallback)
         {
             // If we got here, the key was not in the table. Invoke the callback (outside the lock)
-            // to generate the new value for the key. 
+            // to generate the new value for the key.
             TValue newValue = createValueCallback(key);
 
             lock (_lock)
@@ -265,9 +266,9 @@ namespace System.Runtime.CompilerServices
             // there is any outstanding enumerator, no compaction is performed.
 
             private ConditionalWeakTable<TKey, TValue>? _table; // parent table, set to null when disposed
-            private readonly int _maxIndexInclusive;           // last index in the container that should be enumerated
-            private int _currentIndex = -1;                    // the current index into the container
-            private KeyValuePair<TKey, TValue> _current;       // the current entry set by MoveNext and returned from Current
+            private readonly int _maxIndexInclusive;            // last index in the container that should be enumerated
+            private int _currentIndex;                          // the current index into the container
+            private KeyValuePair<TKey, TValue> _current;        // the current entry set by MoveNext and returned from Current
 
             public Enumerator(ConditionalWeakTable<TKey, TValue> table)
             {
@@ -336,7 +337,7 @@ namespace System.Runtime.CompilerServices
                             while (_currentIndex < _maxIndexInclusive)
                             {
                                 _currentIndex++;
-                                if (c.TryGetEntry(_currentIndex, out TKey key, out TValue value))
+                                if (c.TryGetEntry(_currentIndex, out TKey? key, out TValue value))
                                 {
                                     _current = new KeyValuePair<TKey, TValue>(key, value);
                                     return true;
@@ -362,7 +363,7 @@ namespace System.Runtime.CompilerServices
                 }
             }
 
-            object? IEnumerator.Current => Current; // TODO-NULLABLE: https://github.com/dotnet/roslyn/issues/23268
+            object? IEnumerator.Current => Current;
 
             public void Reset() { }
         }
@@ -396,17 +397,17 @@ namespace System.Runtime.CompilerServices
         //    - Used with live key (linked into a bucket list where _buckets[hashCode & (_buckets.Length - 1)] points to first entry)
         //         depHnd.IsAllocated == true, depHnd.GetPrimary() != null
         //         hashCode == RuntimeHelpers.GetHashCode(depHnd.GetPrimary()) & int.MaxValue
-        //         next links to next Entry in bucket. 
-        //                          
+        //         next links to next Entry in bucket.
+        //
         //    - Used with dead key (linked into a bucket list where _buckets[hashCode & (_buckets.Length - 1)] points to first entry)
         //         depHnd.IsAllocated == true, depHnd.GetPrimary() is null
-        //         hashCode == <notcare> 
-        //         next links to next Entry in bucket. 
+        //         hashCode == <notcare>
+        //         next links to next Entry in bucket.
         //
         //    - Has been removed from the table (by a call to Remove)
         //         depHnd.IsAllocated == true, depHnd.GetPrimary() == <notcare>
-        //         hashCode == -1 
-        //         next links to next Entry in bucket. 
+        //         hashCode == -1
+        //         next links to next Entry in bucket.
         //
         // The only difference between "used with live key" and "used with dead key" is that
         // depHnd.GetPrimary() returns null. The transition from "used with live key" to "used with dead key"
@@ -444,13 +445,13 @@ namespace System.Runtime.CompilerServices
                 Debug.Assert(parent != null);
                 Debug.Assert(IsPowerOfTwo(InitialCapacity));
 
-                int size = InitialCapacity;
-                _buckets = new int[size];
+                const int Size = InitialCapacity;
+                _buckets = new int[Size];
                 for (int i = 0; i < _buckets.Length; i++)
                 {
                     _buckets[i] = -1;
                 }
-                _entries = new Entry[size];
+                _entries = new Entry[Size];
 
                 // Only store the parent after all of the allocations have happened successfully.
                 // Otherwise, as part of growing or clearing the container, we could end up allocating
@@ -502,7 +503,7 @@ namespace System.Runtime.CompilerServices
             }
 
             /// <summary>Worker for finding a key/value pair. Must hold _lock.</summary>
-            internal bool TryGetValueWorker(TKey key, out TValue value)
+            internal bool TryGetValueWorker(TKey key, [MaybeNullWhen(false)] out TValue value)
             {
                 Debug.Assert(key != null); // Key already validated as non-null
 
@@ -536,7 +537,7 @@ namespace System.Runtime.CompilerServices
             }
 
             /// <summary>Gets the entry at the specified entry index.</summary>
-            internal bool TryGetEntry(int index, out TKey key, out TValue value)
+            internal bool TryGetEntry(int index, [NotNullWhen(true)] out TKey? key, [MaybeNullWhen(false)] out TValue value)
             {
                 if (index < _entries.Length)
                 {
@@ -551,8 +552,8 @@ namespace System.Runtime.CompilerServices
                     }
                 }
 
-                key = default!; // TODO-NULLABLE-GENERIC
-                value = default!; // TODO-NULLABLE-GENERIC
+                key = default;
+                value = default!;
                 return false;
             }
 

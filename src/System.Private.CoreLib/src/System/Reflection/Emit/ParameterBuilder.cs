@@ -14,7 +14,7 @@ namespace System.Reflection.Emit
             TypeBuilder.SetConstantValue(
                 _methodBuilder.GetModuleBuilder(),
                 _token.Token,
-                _position == 0 ? _methodBuilder.ReturnType! : _methodBuilder.m_parameterTypes![_position - 1],
+                _position == 0 ? _methodBuilder.ReturnType : _methodBuilder.m_parameterTypes![_position - 1],
                 defaultValue);
         }
 
@@ -60,7 +60,7 @@ namespace System.Reflection.Emit
             _attributes = attributes;
             ModuleBuilder module = _methodBuilder.GetModuleBuilder();
             _token = new ParameterToken(TypeBuilder.SetParamInfo(
-                        JitHelpers.GetQCallModuleOnStack(ref module),
+                        new QCallModule(ref module),
                         _methodBuilder.GetToken().Token,
                         sequence,
                         attributes,
